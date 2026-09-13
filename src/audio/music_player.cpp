@@ -42,50 +42,66 @@ static void music_audio_task(void *pvParameters)
         // 1. Kiểm tra nếu có lệnh yêu cầu phát bài mới từ Core 1
         if (cmd_request_play)
         {
-            if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+            if (audio_request_ownership(AUDIO_OWNER_MUSIC))
             {
-                cmd_request_play = false;
-                Serial.printf("[MUSIC_AUDIO] Core 0 nhận lệnh mở tệp: %s\n", pending_filepath);
-                
-                // Mở loa ngoài qua chân PA (Active LOW trên DIYMORE)
-                pinMode(AUDIO_PA_PIN, OUTPUT);
-                digitalWrite(AUDIO_PA_PIN, 0);
-
-                // Áp dụng mức âm lượng (0 - 21 trong thư viện ESP32-audioI2S)
-                uint8_t scaled_vol = (player_state.volume * 21) / 100;
-                audio.setVolume(scaled_vol);
-
-                // Nạp file từ thẻ nhớ SD
-                if (SD.exists(pending_filepath))
+                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
                 {
-                    audio.connecttoFS(SD, pending_filepath);
-                    player_state.is_playing = true;
-                    player_state.is_paused = false;
+                    cmd_request_play = false;
+                    Serial.printf("[MUSIC_AUDIO] Core 0 nhận lệnh mở tệp: %s\n", pending_filepath);
+                    
+                    // Mở loa ngoài qua chân PA (Active LOW trên DIYMORE)
+                    pinMode(AUDIO_PA_PIN, OUTPUT);
+                    digitalWrite(AUDIO_PA_PIN, 0);
+
+                    // Áp dụng mức âm lượng (0 - 21 trong thư viện ESP32-audioI2S)
+                    uint8_t scaled_vol = (player_state.volume * 21) / 100;
+                    audio.setVolume(scaled_vol);
+
+                    // Nạp file từ thẻ nhớ SD
+                    if (SD.exists(pending_filepath))
+                    {
+                        audio.connecttoFS(SD, pending_filepath);
+                        player_state.is_playing = true;
+                        player_state.is_paused = false;
+                    }
+                    else
+                    {
+                        Serial.printf("[MUSIC_AUDIO] ⚠️ Không tìm thấy tệp %s, phát giả lập thời gian\n", pending_filepath);
+                        player_state.is_playing = true;
+                        player_state.is_paused = false;
+                    }
+                    xSemaphoreGive(audio_mutex);
                 }
-                else
-                {
-                    Serial.printf("[MUSIC_AUDIO] ⚠️ Không tìm thấy tệp %s, phát giả lập thời gian\n", pending_filepath);
-                    player_state.is_playing = true;
-                    player_state.is_paused = false;
-                }
-                xSemaphoreGive(audio_mutex);
+            }
+            else
+            {
+                // Hệ thống khác đang bận, thử lại sau 50ms
+                vTaskDelay(pdMS_TO_TICKS(50));
             }
         }
 
         // 2. Vòng lặp giải mã stream I2S liên tục khi đang phát nhạc
         if (player_state.is_playing && !player_state.is_paused)
         {
-            audio.loop();
+            if (audio_get_current_owner() == AUDIO_OWNER_MUSIC)
+            {
+                audio.loop();
 
-            // Cập nhật vị trí và thời lượng
-            uint32_t cur = audio.getAudioCurrentTime();
-            uint32_t dur = audio.getAudioFileDuration();
-            
-            if (cur > 0) player_state.current_time_sec = cur;
-            if (dur > 0) player_state.total_duration_sec = dur;
+                // Cập nhật vị trí và thời lượng
+                uint32_t cur = audio.getAudioCurrentTime();
+                uint32_t dur = audio.getAudioFileDuration();
+                
+                if (cur > 0) player_state.current_time_sec = cur;
+                if (dur > 0) player_state.total_duration_sec = dur;
 
-            // Nhường nhẹ CPU nếu bộ đệm DMA I2S đã đầy
-            taskYIELD();
+                // Nhường nhẹ CPU để không làm đói các task khác trên Core 0
+                vTaskDelay(pdMS_TO_TICKS(2));
+            }
+            else
+            {
+                // Tạm thời bị nhường quyền cho system tone hoặc AI voice
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
         }
         else
         {
@@ -114,7 +130,7 @@ bool music_player_init(void)
     // 2. Quét thẻ nhớ MicroSD để tìm bài hát
     music_player_scan_sd();
 
-    // 3. Khởi tạo FreeRTOS Task trên Core 0
+    // 3. Khởi tạo FreeRTOS Task trên Core 0 (Priority 3: Audio Realtime)
     if (audio_task_handle == NULL)
     {
         BaseType_t ret = xTaskCreatePinnedToCore(
@@ -122,7 +138,7 @@ bool music_player_init(void)
             "MusicAudioTask",
             8192,                   // Stack size 8KB
             NULL,
-            configMAX_PRIORITIES - 1,// Ưu tiên cao nhất cho âm thanh
+            3,                      // Priority 3: Audio Realtime (tránh CPU starvation)
             &audio_task_handle,
             0                       // Chạy trên CORE 0
         );
@@ -305,19 +321,23 @@ void music_player_pause(void)
         audio.pauseResume();
         player_state.is_paused = true;
         xSemaphoreGive(audio_mutex);
+        audio_release_ownership(AUDIO_OWNER_MUSIC);
         Serial.println("[MUSIC_PLAYER] ⏸ Tạm dừng phát nhạc");
     }
 }
 
 void music_player_resume(void)
 {
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    if (audio_request_ownership(AUDIO_OWNER_MUSIC))
     {
-        audio.pauseResume();
-        player_state.is_paused = false;
-        player_state.is_playing = true;
-        xSemaphoreGive(audio_mutex);
-        Serial.println("[MUSIC_PLAYER] ▶ Tiếp tục phát nhạc");
+        if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            audio.pauseResume();
+            player_state.is_paused = false;
+            player_state.is_playing = true;
+            xSemaphoreGive(audio_mutex);
+            Serial.println("[MUSIC_PLAYER] ▶ Tiếp tục phát nhạc");
+        }
     }
 }
 
@@ -330,6 +350,7 @@ void music_player_stop(void)
         player_state.is_paused = false;
         player_state.current_time_sec = 0;
         xSemaphoreGive(audio_mutex);
+        audio_release_ownership(AUDIO_OWNER_MUSIC);
         Serial.println("[MUSIC_PLAYER] ⏹ Dừng phát nhạc");
     }
 }

@@ -8,6 +8,18 @@
 #include <Arduino.h>
 #include <vector>
 
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+#ifndef DEFAULT_WIFI_SSID
+#define DEFAULT_WIFI_SSID ""
+#endif
+
+#ifndef DEFAULT_WIFI_PASS
+#define DEFAULT_WIFI_PASS ""
+#endif
+
 enum WiFiState {
     WIFI_STATE_DISCONNECTED,
     WIFI_STATE_SCANNING,

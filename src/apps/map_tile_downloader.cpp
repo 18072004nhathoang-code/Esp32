@@ -12,9 +12,20 @@
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <TJpg_Decoder.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 
 // Kích thước bộ đệm thô (128 KB trong PSRAM cho tệp JPEG tải về)
 #define JPEG_MAX_RAW_SIZE (128 * 1024)
+
+// Cấu trúc yêu cầu tải ảnh bản đồ an toàn đa luồng
+struct MapTileRequest
+{
+    double lat;
+    double lon;
+    int zoom;
+    char maptype[16];
+};
 
 // Bộ đệm ảnh trong 8MB Octal PSRAM
 static uint8_t *jpeg_raw_buffer = nullptr;
@@ -25,16 +36,10 @@ static volatile TileDownloadStatus current_status = TILE_IDLE;
 static volatile TileSource current_source = TILE_SOURCE_NONE;
 static volatile bool has_new_tile = false;
 static TaskHandle_t download_task_handle = nullptr;
+static QueueHandle_t map_request_queue = nullptr;
 
 // Khóa API đang hoạt động
 static char active_api_key[128] = GOOGLE_MAPS_STATIC_API_KEY;
-
-// Tọa độ và tham số yêu cầu tải
-static double req_lat = 21.0285;
-static double req_lon = 105.8542;
-static int req_zoom = 15;
-static char req_maptype[16] = "roadmap";
-static volatile bool download_requested = false;
 
 /* Callback của thư viện TJpgDec: Nhận khối điểm ảnh MCU (RGB565) và ghi vào decoded_tile_buffer */
 static bool tjpg_output_callback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
@@ -59,18 +64,20 @@ static bool tjpg_output_callback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
 /* Tác vụ nền chạy trên Core 0: Độc lập với Core 1 để tránh hoàn toàn hiện tượng giật/treo màn hình */
 static void map_download_task(void *pvParameters)
 {
+    MapTileRequest req;
+
     while (1)
     {
-        if (download_requested)
+        // Chờ nhận yêu cầu từ hàng đợi (chống race condition khi người dùng pan/zoom liên tục)
+        if (map_request_queue && xQueueReceive(map_request_queue, &req, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            download_requested = false;
             current_status = TILE_DOWNLOADING;
 
-            double target_lat = req_lat;
-            double target_lon = req_lon;
-            int target_zoom = req_zoom;
+            double target_lat = req.lat;
+            double target_lon = req.lon;
+            int target_zoom = req.zoom;
             char target_type[16];
-            strncpy(target_type, req_maptype, sizeof(target_type) - 1);
+            strncpy(target_type, req.maptype, sizeof(target_type) - 1);
             target_type[sizeof(target_type) - 1] = '\0';
 
             // =========================================================================
@@ -131,11 +138,16 @@ static void map_download_task(void *pvParameters)
                     (strcmp(target_type, "satellite") == 0 ? "satellite" : "mapnik"));
             }
 
-            Serial.printf("[MAP_TASK] 🌐 Đang gửi yêu cầu tải ảnh: %s\n", url_buf);
+            // Bảo mật: Không in khóa API plaintext ra log Serial
+            Serial.printf("[MAP_TASK] 🌐 Tải bản đồ (Lat: %.4f, Lon: %.4f, Zoom: %d, Type: %s)\n",
+                          target_lat, target_lon, target_zoom, target_type);
 
             HTTPClient http;
             WiFiClientSecure client;
-            client.setInsecure();  // Bỏ qua xác thực chứng chỉ nặng nề để tăng tốc tối đa trên ESP32
+            // GHI CHÚ BẢO MẬT: client.setInsecure() được sử dụng vì vi điều khiển ESP32-S3
+            // bị giới hạn tài nguyên RAM/Flash, không thể nhúng toàn bộ chứng chỉ Root CA Bundle x509.
+            // Chấp nhận bỏ qua xác thực chứng chỉ TLS cho demo tải bản đồ tĩnh công khai.
+            client.setInsecure();
             http.setTimeout(5000); // Giới hạn 5 giây timeout chống nghẽn tác vụ
 
             if (http.begin(client, url_buf))
@@ -162,7 +174,7 @@ static void map_download_task(void *pvParameters)
                             }
 
                             size_t avail = stream->available();
-                            if (avail)
+                            if (avail > 0)
                             {
                                 int read_size = avail;
                                 if (bytes_read + read_size > JPEG_MAX_RAW_SIZE)
@@ -170,10 +182,22 @@ static void map_download_task(void *pvParameters)
                                     read_size = JPEG_MAX_RAW_SIZE - bytes_read;
                                 }
                                 int r = stream->readBytes(&jpeg_raw_buffer[bytes_read], read_size);
-                                bytes_read += r;
+                                if (r > 0)
+                                {
+                                    bytes_read += r;
+                                    if (total_len > 0)
+                                    {
+                                        total_len -= r;
+                                        if (total_len <= 0) break; // Đã nhận đủ dung lượng file
+                                    }
+                                }
                                 if (bytes_read >= JPEG_MAX_RAW_SIZE) break;
                             }
-                            vTaskDelay(pdMS_TO_TICKS(5));
+                            else if (total_len == -1 && !http.connected())
+                            {
+                                break; // Stream chunked hoàn tất khi socket đóng
+                            }
+                            vTaskDelay(pdMS_TO_TICKS(2));
                         }
 
                         if (bytes_read > 200)
@@ -252,7 +276,19 @@ void map_tile_downloader_init(void)
         }
     }
 
-    // 3. Khởi tạo Task FreeRTOS chạy ngầm trên Core 0
+    if (!jpeg_raw_buffer || !decoded_tile_buffer)
+    {
+        Serial.println("[MAP_TASK] ❌ Lỗi cấp phát bộ đệm PSRAM cho bản đồ!");
+        return;
+    }
+
+    // 3. Khởi tạo hàng đợi FreeRTOS (Queue size 1 với overwrite)
+    if (map_request_queue == nullptr)
+    {
+        map_request_queue = xQueueCreate(1, sizeof(MapTileRequest));
+    }
+
+    // 4. Khởi tạo Task FreeRTOS chạy ngầm trên Core 0 (Priority 2: Background network)
     if (download_task_handle == nullptr)
     {
         xTaskCreatePinnedToCore(
@@ -260,24 +296,26 @@ void map_tile_downloader_init(void)
             "Map_Static_Task",
             8192,
             nullptr,
-            2,
+            2, // Priority 2
             &download_task_handle,
-            0 // Pin Core 0 (Cách ly hoàn toàn khỏi LVGL Core 1)
+            0  // Pin Core 0 (Cách ly hoàn toàn khỏi LVGL Core 1)
         );
     }
 }
 
 void map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype)
 {
-    req_lat = lat;
-    req_lon = lon;
-    req_zoom = zoom;
-    if (maptype && strlen(maptype) > 0)
+    MapTileRequest req;
+    req.lat = lat;
+    req.lon = lon;
+    req.zoom = zoom;
+    strncpy(req.maptype, (maptype && strlen(maptype) > 0) ? maptype : "roadmap", sizeof(req.maptype) - 1);
+    req.maptype[sizeof(req.maptype) - 1] = '\0';
+
+    if (map_request_queue)
     {
-        strncpy(req_maptype, maptype, sizeof(req_maptype) - 1);
-        req_maptype[sizeof(req_maptype) - 1] = '\0';
+        xQueueOverwrite(map_request_queue, &req);
     }
-    download_requested = true;
 }
 
 bool map_tile_downloader_has_new_data(void)

@@ -13,6 +13,10 @@
 #define MAP_TILE_WIDTH  480
 #define MAP_TILE_HEIGHT 320
 
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
 // Cấu hình Google Maps Static API Key
 // Người dùng có thể truyền trực tiếp hoặc để trống để sử dụng Maps Demo Key / OpenStreetMap Fallback
 #ifndef GOOGLE_MAPS_STATIC_API_KEY

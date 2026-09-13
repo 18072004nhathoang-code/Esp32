@@ -35,7 +35,7 @@
     #define TOUCH_TYPE_CAPACITIVE   // Cảm ứng điện dung FT6336U / GT911
     #define TOUCH_SDA       8       // Chân I2C SDA
     #define TOUCH_SCL       9       // Chân I2C SCL
-    #define TOUCH_INT       4       // Chân ngắt
+    #define TOUCH_INT       -1      // Chế độ polling qua I2C (tránh xung đột với LCD_DC GPIO 4)
     #define TOUCH_RST       3       // Chân reset
 
 #elif defined(BOARD_SUNTON_S3_28R)
@@ -99,8 +99,21 @@
     #define TOUCH_TYPE_CAPACITIVE
     #define TOUCH_SDA       8
     #define TOUCH_SCL       9
-    #define TOUCH_INT       4
+    #define TOUCH_INT       -1
     #define TOUCH_RST       3
+#endif
+
+// ==============================================================================
+// 2.1. COMPILE-TIME PIN CONFLICT VALIDATION
+// ==============================================================================
+#if defined(TOUCH_INT) && (TOUCH_INT >= 0) && (TOUCH_INT == LCD_DC)
+    #error "Pin conflict: TOUCH_INT and LCD_DC cannot use the same GPIO!"
+#endif
+#if defined(TOUCH_SDA) && (TOUCH_SDA >= 0) && (TOUCH_SDA == LCD_DC)
+    #error "Pin conflict: TOUCH_SDA and LCD_DC cannot use the same GPIO!"
+#endif
+#if defined(LCD_CS) && defined(LCD_DC) && (LCD_CS == LCD_DC)
+    #error "Pin conflict: LCD_CS and LCD_DC cannot use the same GPIO!"
 #endif
 
 // ==============================================================================
@@ -123,6 +136,11 @@ class LGFX : public lgfx::LGFX_Device
 #endif
 
 public:
+    void waitDMA(void)
+    {
+        _bus_instance.wait();
+    }
+
     LGFX(void)
     {
         {

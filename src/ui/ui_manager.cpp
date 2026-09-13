@@ -15,6 +15,7 @@
 #include "../audio/music_player.h"
 #include "../ai/ai_voice_service.h"
 #include "../os/wifi_manager.h"
+#include "../camera/camera_service.h"
 
 // Biến giao diện chính
 static lv_obj_t *status_bar = nullptr;
@@ -69,6 +70,7 @@ static void open_map_app(void);
 static void open_audio_app(void);
 static void open_music_app(void);
 static void open_ai_voice_app(void);
+static void open_camera_app(void);
 static void close_current_app(void);
 
 /* Callback khi bấm nút đóng cửa sổ app */
@@ -92,6 +94,7 @@ static void app_icon_event_cb(lv_event_t *e)
         case 7: open_audio_app(); break;
         case 8: open_music_app(); break;
         case 9: open_ai_voice_app(); break;
+        case 10: open_camera_app(); break;
         default: break;
     }
 }
@@ -259,6 +262,9 @@ static void create_desktop(void)
     create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), 6, 15, 284);
     create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi Gemini",  lv_color_hex(0x00F2FE), 9, 170, 284);
     create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), 4, 325, 284);
+
+    // Hàng 4 (y = 418)
+    create_app_squircle(desktop_view, LV_SYMBOL_IMAGE,    "Camera",        "DVP / RTSP",      lv_color_hex(0xFF006E), 10, 15, 418);
 }
 
 /* 4. KHUNG CỬA SỔ ỨNG DỤNG PRO MAX (MODAL WINDOW 480x294) */
@@ -492,7 +498,11 @@ static void open_wifi_app(void)
 
 void ui_open_wifi_app(void)
 {
-    open_wifi_app();
+    if (lvgl_port_lock(500))
+    {
+        open_wifi_app();
+        lvgl_port_unlock();
+    }
 }
 
 /* =========================================================================
@@ -662,7 +672,11 @@ static void open_music_app(void)
 
 void ui_open_music_app(void)
 {
-    open_music_app();
+    if (lvgl_port_lock(500))
+    {
+        open_music_app();
+        lvgl_port_unlock();
+    }
 }
 
 /* =========================================================================
@@ -680,7 +694,74 @@ static void open_ai_voice_app(void)
 
 void ui_open_ai_voice_app(void)
 {
-    open_ai_voice_app();
+    if (lvgl_port_lock(500))
+    {
+        open_ai_voice_app();
+        lvgl_port_unlock();
+    }
+}
+
+/* =========================================================================
+ * 13. ỨNG DỤNG CAMERA / RTSP STREAMER PRO MAX
+ * ========================================================================= */
+static void open_camera_app(void)
+{
+    ensure_app_window();
+    lv_label_set_text(app_title_lbl, "Camera & RTSP Streamer");
+    lv_obj_clean(app_content_container);
+    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_pad_all(app_content_container, 10, 0);
+
+    lv_obj_t *card = lv_obj_create(app_content_container);
+    lv_obj_set_size(card, 460, 246);
+    lv_obj_center(card);
+    lv_obj_set_style_radius(card, 12, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x161B26), 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(0xFF006E), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+
+    lv_obj_t *title = lv_label_create(card);
+    lv_label_set_text(title, LV_SYMBOL_IMAGE " Camera Sensor Subsystem");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFF006E), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+
+    lv_obj_t *desc = lv_label_create(card);
+    bool cam_avail = camera_service_is_available();
+    if (cam_avail)
+    {
+        lv_label_set_text_fmt(desc,
+            "Trạng thái: Đã kết nối sensor [%s]\n"
+            "Chế độ sẵn sàng: DVP 8-bit DMA / RTSP Video Server\n"
+            "Độ phân giải hỗ trợ: QVGA (320x240) • HVGA (480x320) • VGA\n"
+            "Bộ đệm Frame Buffer: Cấp phát trên 8MB Octal PSRAM\n"
+            "Hỗ trợ chuẩn: ONVIF Profile S / RTSP H.264 / MJPEG",
+            camera_service_get_model_name());
+    }
+    else
+    {
+        lv_label_set_text(desc,
+            "⚠️ Camera Module Not Detected (Chưa cắm phần cứng)\n\n"
+            "Hệ điều hành đã tích hợp sẵn Driver & Abstraction Layer:\n"
+            "• Chuẩn kết nối hỗ trợ: DVP 8-bit song song (OV2640 / OV5640)\n"
+            "• Lưu ý phần cứng: Chân DVP camera cần kiểm tra xung đột với\n"
+            "  bus SPI LCD ST7796 và khe cắm thẻ nhớ MicroSD.\n"
+            "• Sẵn sàng cho: Live Preview LVGL, RTSP Streamer & ONVIF NVTs.\n\n"
+            "Trạng thái Subsystem: Idle / Ready for Hardware Initialization");
+    }
+    lv_obj_set_style_text_color(desc, lv_color_hex(0xCBD5E0), 0);
+    lv_obj_set_style_text_font(desc, &lv_font_montserrat_12, 0);
+    lv_obj_align(desc, LV_ALIGN_CENTER, 0, 16);
+}
+
+void ui_open_camera_app(void)
+{
+    if (lvgl_port_lock(500))
+    {
+        open_camera_app();
+        lvgl_port_unlock();
+    }
 }
 
 /* =========================================================================
@@ -688,9 +769,13 @@ void ui_open_ai_voice_app(void)
  * ========================================================================= */
 void ui_init(void)
 {
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0A0D14), 0);
-    create_status_bar();
-    create_desktop();
+    if (lvgl_port_lock(1000))
+    {
+        lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x0A0D14), 0);
+        create_status_bar();
+        create_desktop();
+        lvgl_port_unlock();
+    }
 }
 
 /* =========================================================================
@@ -698,6 +783,10 @@ void ui_init(void)
  * ========================================================================= */
 void ui_update_periodic(const SystemStats &stats)
 {
+    if (!lvgl_port_lock(200))
+    {
+        return; // Bỏ qua nhịp này nếu luồng giao diện đang bận vẽ frame
+    }
     // 1. Cập nhật đồng hồ Status Bar
     if (lbl_clock)
     {
@@ -757,8 +846,8 @@ void ui_update_periodic(const SystemStats &stats)
 
     if (lbl_temp_chip)
     {
-        lv_label_set_text_fmt(lbl_temp_chip, "🔥 Temp: %.1f °C", stats.chip_temperature);
-        if (stats.chip_temperature > 55.0f)
+        lv_label_set_text_fmt(lbl_temp_chip, "🔥 Temp: %.1f °C", stats.core_temp_c);
+        if (stats.core_temp_c > 55.0f)
             lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(0xFF3B30), 0);
         else
             lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(0x00E676), 0);
@@ -766,13 +855,12 @@ void ui_update_periodic(const SystemStats &stats)
 
     if (lbl_psram_chip)
     {
-        lv_label_set_text_fmt(lbl_psram_chip, "💾 PSRAM: %.1f/8 MB", (float)stats.psram_used_bytes / (1024.0f * 1024.0f));
+        lv_label_set_text_fmt(lbl_psram_chip, "💾 PSRAM: %.1f/8 MB", (float)stats.used_psram / (1024.0f * 1024.0f));
     }
 
     if (lbl_uptime_chip)
     {
-        uint32_t s = stats.uptime_sec;
-        lv_label_set_text_fmt(lbl_uptime_chip, "⏱ Up: %02u:%02u:%02u", s / 3600, (s % 3600) / 60, s % 60);
+        lv_label_set_text_fmt(lbl_uptime_chip, "⏱ Up: %s", stats.uptime_str);
     }
 
     // 5. Cập nhật icon Loa trên Status Bar
@@ -802,4 +890,6 @@ void ui_update_periodic(const SystemStats &stats)
 
     // 10. Cập nhật trạng thái AI Voice Assistant và animation sóng âm
     ai_voice_app_update();
+
+    lvgl_port_unlock();
 }

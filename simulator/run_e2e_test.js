@@ -2,10 +2,32 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const CHROME_PATH = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-const HTML_PATH = "file:///D:/Esp32/simulator/index.html";
+function findChrome() {
+    if (process.env.CHROME_BIN && fs.existsSync(process.env.CHROME_BIN)) {
+        return process.env.CHROME_BIN;
+    }
+    const candidates = [
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+        process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Google\\Chrome\\Application\\chrome.exe") : null,
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/chromium",
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    ].filter(Boolean);
+
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
+const CHROME_PATH = findChrome();
+const HTML_FILE = path.join(__dirname, 'index.html');
+const HTML_PATH = 'file:///' + HTML_FILE.replace(/\\/g, '/');
 const OUT_DIR = path.join(__dirname, 'screenshots');
-const ARTIFACT_DIR = "C:\\Users\\NNH\\.gemini\\antigravity\\brain\\60d72f0b-7a11-4eb6-8844-4b04e68f9892";
+const ARTIFACT_DIR = process.env.ANTIGRAVITY_ARTIFACT_DIR || null;
 
 if (!fs.existsSync(OUT_DIR)) {
     fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -15,10 +37,22 @@ function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
+function assert(condition, message) {
+    if (!condition) {
+        console.error(`❌ [ASSERTION FAILED]: ${message}`);
+        throw new Error(message);
+    }
+}
+
 async function main() {
     console.log("==================================================================");
     console.log("  TEST SUITE: DIYMORE ESP32-S3 3.5\" IPS DISPLAY (480x320)");
     console.log("==================================================================\n");
+
+    if (!CHROME_PATH) {
+        console.error("❌ [ERROR] Không tìm thấy Chrome trên hệ thống! Vui lòng cài Chrome hoặc đặt CHROME_BIN.");
+        process.exit(1);
+    }
 
     const chrome = spawn(CHROME_PATH, [
         '--headless=new',
@@ -85,7 +119,7 @@ async function main() {
         const filePath = path.join(OUT_DIR, filename);
         fs.writeFileSync(filePath, buf);
         try {
-            if (fs.existsSync(ARTIFACT_DIR)) {
+            if (ARTIFACT_DIR && fs.existsSync(ARTIFACT_DIR)) {
                 fs.writeFileSync(path.join(ARTIFACT_DIR, filename), buf);
             }
         } catch (e) {}
@@ -94,8 +128,10 @@ async function main() {
 
     // 1. Desktop & Status Bar PRO MAX
     console.log("\n--- BƯỚC 1: KIỂM THỬ GIAO DIỆN DESKTOP PRO MAX & STATUS BAR ---");
-    let uptime = await evalCode("document.getElementById('clockText').innerText");
-    let ram = await evalCode("document.getElementById('ramPill').innerText");
+    let uptime = await evalCode("document.getElementById('clockText')?.innerText");
+    let ram = await evalCode("document.getElementById('ramPill')?.innerText");
+    assert(uptime != null, "Top Bar clockText element must exist");
+    assert(ram != null, "Top Bar ramPill element must exist");
     console.log(`✔ [PASS] Top Bar PRO MAX: Uptime [${uptime}], RAM Pill [${ram}], Logo ● S3 PRO MAX`);
     await captureScreenshot("01_desktop_promax.png");
 
@@ -103,7 +139,8 @@ async function main() {
     console.log("\n--- BƯỚC 2: KIỂM THỬ GOOGLE MAPS PRO MAX (STATIC API & MICROSD CACHE) ---");
     await evalCode("openApp('maps')");
     await sleep(600);
-    let hudCity = await evalCode("document.getElementById('hudCityText').innerText");
+    let hudCity = await evalCode("document.getElementById('hudCityText')?.innerText");
+    assert(hudCity != null, "Maps HUD hudCityText element must exist");
     let cacheStat = await evalCode("document.getElementById('hudNetText').innerText");
     console.log(`✔ [PASS] Mở Maps Pro Max: ${hudCity} | Trạng thái: [${cacheStat}]`);
     await captureScreenshot("02_maps_promax.png");

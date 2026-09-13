@@ -4,13 +4,39 @@
  */
 
 #include "sd_map_cache.h"
+#include "../display/lvgl_port.h"
 
 static bool sd_initialized = false;
 static SPIClass sd_spi(FSPI); // Hoặc HSPI/VSPI tùy theo cấu hình bus phần cứng
+static SemaphoreHandle_t sd_bus_mutex = nullptr;
+
+static bool sd_acquire_bus(uint32_t timeout_ms = 1000)
+{
+    if (!sd_bus_mutex)
+    {
+        sd_bus_mutex = xSemaphoreCreateMutex();
+    }
+    if (xSemaphoreTake(sd_bus_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)
+    {
+        // Chờ hoàn tất mọi tác vụ DMA/SPI của màn hình LovyanGFX trên bus dùng chung
+        gfx.waitDMA();
+        return true;
+    }
+    return false;
+}
+
+static void sd_release_bus(void)
+{
+    if (sd_bus_mutex)
+    {
+        xSemaphoreGive(sd_bus_mutex);
+    }
+}
 
 bool sd_map_cache_init(void)
 {
     if (sd_initialized) return true;
+    if (!sd_acquire_bus()) return false;
 
     Serial.println("[SD_CACHE] Đang khởi tạo thẻ nhớ MicroSD FAT32...");
 
@@ -26,6 +52,7 @@ bool sd_map_cache_init(void)
             Serial.println("[SD_CACHE] ⚠️ Không tìm thấy thẻ nhớ MicroSD hoặc khởi tạo thất bại!");
             Serial.println("[SD_CACHE] -> Hệ thống sẽ hoạt động ở chế độ trực tiếp qua mạng (Direct Streaming).");
             sd_initialized = false;
+            sd_release_bus();
             return false;
         }
     }
@@ -35,6 +62,7 @@ bool sd_map_cache_init(void)
     {
         Serial.println("[SD_CACHE] ⚠️ Không có thẻ nhớ trong khe cắm!");
         sd_initialized = false;
+        sd_release_bus();
         return false;
     }
 
@@ -52,6 +80,7 @@ bool sd_map_cache_init(void)
     }
 
     sd_initialized = true;
+    sd_release_bus();
     return true;
 }
 
@@ -70,11 +99,14 @@ void sd_map_cache_get_filename(char *out_path, size_t max_len, double lat, doubl
 bool sd_map_cache_exists(double lat, double lon, int zoom, const char *maptype)
 {
     if (!sd_initialized) return false;
+    if (!sd_acquire_bus(200)) return false;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
 
     bool exists = SD.exists(filepath);
+    sd_release_bus();
+
     if (exists)
     {
         Serial.printf("[SD_CACHE] 🎯 CACHE HIT: Đã tìm thấy tệp %s\n", filepath);
@@ -89,6 +121,7 @@ bool sd_map_cache_exists(double lat, double lon, int zoom, const char *maptype)
 int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uint8_t *out_buf, size_t max_size)
 {
     if (!sd_initialized || !out_buf || max_size == 0) return -1;
+    if (!sd_acquire_bus(500)) return -1;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
@@ -97,6 +130,7 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
     if (!file)
     {
         Serial.printf("[SD_CACHE] ❌ Không thể mở tệp đọc: %s\n", filepath);
+        sd_release_bus();
         return -1;
     }
 
@@ -105,11 +139,13 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
     {
         Serial.printf("[SD_CACHE] ❌ Dung lượng tệp không hợp lệ: %u bytes (Max: %u)\n", (unsigned int)fileSize, (unsigned int)max_size);
         file.close();
+        sd_release_bus();
         return -1;
     }
 
     size_t bytesRead = file.read(out_buf, fileSize);
     file.close();
+    sd_release_bus();
 
     Serial.printf("[SD_CACHE] 📖 Đọc thành công %u bytes từ %s\n", (unsigned int)bytesRead, filepath);
     return (int)bytesRead;
@@ -118,6 +154,7 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
 bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, const uint8_t *in_buf, size_t size)
 {
     if (!sd_initialized || !in_buf || size == 0) return false;
+    if (!sd_acquire_bus(500)) return false;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
@@ -126,12 +163,14 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
     if (!file)
     {
         Serial.printf("[SD_CACHE] ❌ Không thể mở tệp ghi: %s\n", filepath);
+        sd_release_bus();
         return false;
     }
 
     size_t bytesWritten = file.write(in_buf, size);
     file.flush();
     file.close();
+    sd_release_bus();
 
     if (bytesWritten == size)
     {
@@ -148,5 +187,8 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
 uint64_t sd_map_cache_get_free_mb(void)
 {
     if (!sd_initialized) return 0;
-    return (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+    if (!sd_acquire_bus(200)) return 0;
+    uint64_t free_mb = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
+    sd_release_bus();
+    return free_mb;
 }

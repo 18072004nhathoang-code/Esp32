@@ -11,9 +11,12 @@
 
 // Trạng thái nguồn của thiết bị
 enum PowerState {
-    POWER_STATE_ACTIVE = 0,  // Đang hoạt động: Đèn nền 100%, render LVGL đầy đủ
-    POWER_STATE_DIMMED,      // Chế độ mờ (sau 60s): Đèn nền giảm 20% để tiết kiệm điện
-    POWER_STATE_SLEEP        // Chế độ ngủ (sau 120s): Đèn nền tắt (0%), tạm dừng render LVGL
+    POWER_STATE_ACTIVE = 0,       // Đang hoạt động: Đèn nền 100%, render LVGL đầy đủ
+    POWER_STATE_DIMMED,           // Chế độ mờ (sau 60s): Đèn nền giảm 20% để tiết kiệm điện
+    POWER_STATE_DISPLAY_SLEEP,    // Chế độ ngủ màn hình (sau 120s): Đèn nền tắt (0%), tạm dừng render LVGL
+                                  // CHÚ Ý: Đây là Display Sleep (chỉ tắt hiển thị). Vi điều khiển ESP32-S3
+                                  // vẫn hoạt động và các task FreeRTOS (WiFi, Audio, Background) vẫn chạy bình thường.
+    POWER_STATE_SLEEP = POWER_STATE_DISPLAY_SLEEP // Bí danh tương thích ngược
 };
 
 // Cấu hình thời gian mặc định (giây)

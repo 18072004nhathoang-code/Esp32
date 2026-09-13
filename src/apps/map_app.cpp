@@ -386,7 +386,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(hud_type_btn, 10, 8);
     lv_obj_set_style_radius(hud_type_btn, 14, 0);
     lv_obj_set_style_bg_color(hud_type_btn, lv_color_hex(0x0A0E17), 0);
-    lv_obj_set_style_bg_opa(hud_type_btn, LV_OPA_85, 0);
+    lv_obj_set_style_bg_opa(hud_type_btn, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_type_btn, lv_color_hex(0x00F2FE), 0);
     lv_obj_set_style_border_width(hud_type_btn, 1, 0);
     lv_obj_set_style_pad_all(hud_type_btn, 0, 0);
@@ -404,7 +404,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(hud_city_pill, 132, 8);
     lv_obj_set_style_radius(hud_city_pill, 14, 0);
     lv_obj_set_style_bg_color(hud_city_pill, lv_color_hex(0x0A0E17), 0);
-    lv_obj_set_style_bg_opa(hud_city_pill, LV_OPA_85, 0);
+    lv_obj_set_style_bg_opa(hud_city_pill, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_city_pill, lv_color_hex(0x2D3748), 0);
     lv_obj_set_style_border_width(hud_city_pill, 1, 0);
     lv_obj_set_style_pad_all(hud_city_pill, 0, 0);
@@ -422,7 +422,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(btn_zin, 386, 8);
     lv_obj_set_style_radius(btn_zin, 8, 0);
     lv_obj_set_style_bg_color(btn_zin, lv_color_hex(0x161B26), 0);
-    lv_obj_set_style_bg_opa(btn_zin, LV_OPA_85, 0);
+    lv_obj_set_style_bg_opa(btn_zin, LV_OPA_80, 0);
     lv_obj_set_style_border_color(btn_zin, lv_color_hex(0x00F2FE), 0);
     lv_obj_set_style_border_width(btn_zin, 1, 0);
     lv_obj_add_event_cb(btn_zin, btn_zoom_in_cb, LV_EVENT_CLICKED, nullptr);
@@ -436,7 +436,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(btn_zout, 426, 8);
     lv_obj_set_style_radius(btn_zout, 8, 0);
     lv_obj_set_style_bg_color(btn_zout, lv_color_hex(0x161B26), 0);
-    lv_obj_set_style_bg_opa(btn_zout, LV_OPA_85, 0);
+    lv_obj_set_style_bg_opa(btn_zout, LV_OPA_80, 0);
     lv_obj_set_style_border_color(btn_zout, lv_color_hex(0x00F2FE), 0);
     lv_obj_set_style_border_width(btn_zout, 1, 0);
     lv_obj_add_event_cb(btn_zout, btn_zoom_out_cb, LV_EVENT_CLICKED, nullptr);
@@ -452,7 +452,7 @@ void map_app_open(lv_obj_t *parent)
         lv_obj_set_pos(btn, x, y);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x121824), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_85, 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_80, 0);
         lv_obj_set_style_border_color(btn, lv_color_hex(0x2D3748), 0);
         lv_obj_set_style_border_width(btn, 1, 0);
         lv_obj_add_event_cb(btn, btn_pan_cb, LV_EVENT_CLICKED, (void *)dir);
@@ -474,7 +474,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(hud_source_pill, 10, 228);
     lv_obj_set_style_radius(hud_source_pill, 13, 0);
     lv_obj_set_style_bg_color(hud_source_pill, lv_color_hex(0x0A0E17), 0);
-    lv_obj_set_style_bg_opa(hud_source_pill, LV_OPA_85, 0);
+    lv_obj_set_style_bg_opa(hud_source_pill, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_source_pill, lv_color_hex(0x00E676), 0);
     lv_obj_set_style_border_width(hud_source_pill, 1, 0);
     lv_obj_set_style_pad_all(hud_source_pill, 0, 0);

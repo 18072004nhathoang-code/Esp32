@@ -77,10 +77,10 @@ void power_manager_update(void)
     else if ((current_power_state == POWER_STATE_DIMMED || current_power_state == POWER_STATE_ACTIVE) && 
              inactive_ms >= (timeout_sleep_sec * 1000))
     {
-        current_power_state = POWER_STATE_SLEEP;
+        current_power_state = POWER_STATE_DISPLAY_SLEEP;
         lvgl_port_set_brightness(POWER_BRIGHTNESS_SLEEP_DEFAULT);
         rendering_paused = true;
-        Serial.printf("[POWER] 💤 Không hoạt động > %u giây: Chế độ Sleep (Tắt đèn nền 0%% & Tạm dừng render LVGL)\n", timeout_sleep_sec);
+        Serial.printf("[POWER] 💤 Không hoạt động > %u giây: Chế độ Display Sleep (Tắt đèn nền 0%% & Tạm dừng render LVGL)\n", timeout_sleep_sec);
     }
 }
 

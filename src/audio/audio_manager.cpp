@@ -35,6 +35,73 @@ static size_t waveform_head = 0;
 static TaskHandle_t audio_task_handle = nullptr;
 static SemaphoreHandle_t audio_mutex = nullptr;
 
+// Máy trạng thái phân quyền I2S phần cứng
+static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
+static SemaphoreHandle_t audio_owner_mutex = nullptr;
+
+bool audio_request_ownership(AudioOwner requester)
+{
+    if (audio_owner_mutex == nullptr)
+    {
+        audio_owner_mutex = xSemaphoreCreateMutex();
+    }
+    if (xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        return false;
+    }
+
+    if (current_audio_owner == AUDIO_OWNER_NONE || current_audio_owner == requester)
+    {
+        current_audio_owner = requester;
+        xSemaphoreGive(audio_owner_mutex);
+        return true;
+    }
+
+    // Hiệu ứng hệ thống ngắn được phép ưu tiên
+    if (requester == AUDIO_OWNER_SYSTEM)
+    {
+        current_audio_owner = requester;
+        xSemaphoreGive(audio_owner_mutex);
+        return true;
+    }
+
+    // Thu âm microphone hoặc AI voice cần I2S độc quyền
+    if (requester == AUDIO_OWNER_RECORDER || requester == AUDIO_OWNER_AI_VOICE)
+    {
+        current_audio_owner = requester;
+        xSemaphoreGive(audio_owner_mutex);
+        return true;
+    }
+
+    // Nếu MUSIC yêu cầu khi hệ thống đang ghi âm/AI -> từ chối
+    if (requester == AUDIO_OWNER_MUSIC && (current_audio_owner == AUDIO_OWNER_RECORDER || current_audio_owner == AUDIO_OWNER_AI_VOICE))
+    {
+        xSemaphoreGive(audio_owner_mutex);
+        return false;
+    }
+
+    current_audio_owner = requester;
+    xSemaphoreGive(audio_owner_mutex);
+    return true;
+}
+
+void audio_release_ownership(AudioOwner requester)
+{
+    if (audio_owner_mutex && xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        if (current_audio_owner == requester)
+        {
+            current_audio_owner = AUDIO_OWNER_NONE;
+        }
+        xSemaphoreGive(audio_owner_mutex);
+    }
+}
+
+AudioOwner audio_get_current_owner(void)
+{
+    return current_audio_owner;
+}
+
 /* =========================================================================
  * CẤU HÌNH VÀ GHI DỮ LIỆU I2C CODEC ES8311 (NẾU CÓ)
  * ========================================================================= */
@@ -113,6 +180,13 @@ static void audio_background_task(void *pvParameters)
 
     while (1)
     {
+        // 0. Nếu I2S đang được Music Player hoặc AI Voice sử dụng độc quyền, nhường bus hoàn toàn
+        if (current_audio_owner == AUDIO_OWNER_MUSIC)
+        {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         // 1. Đọc luồng âm thanh đầu vào từ Microphone MEMS qua I2S RX
         esp_err_t err = i2s_read(I2S_NUM_0, rx_buf, sizeof(rx_buf), &bytes_read, pdMS_TO_TICKS(15));
         if (err == ESP_OK && bytes_read > 0)
@@ -199,6 +273,7 @@ static void audio_background_task(void *pvParameters)
                 // Đã phát hết đoạn ghi âm
                 playback_active = false;
                 playback_sample_idx = 0;
+                audio_release_ownership(AUDIO_OWNER_SYSTEM);
             }
         }
 
@@ -275,13 +350,13 @@ bool audio_manager_init(void)
         }
     }
 
-    // 5. Khởi tạo FreeRTOS Task chạy trên Core 0
+    // 5. Khởi tạo FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
     xTaskCreatePinnedToCore(
         audio_background_task,
         "Audio_Task",
         4096,
         NULL,
-        2, // Priority
+        3, // Priority 3: Audio Realtime
         &audio_task_handle,
         0  // Core 0 (để Core 1 chuyên cho LVGL Display)
     );
@@ -297,6 +372,7 @@ bool audio_manager_init(void)
 void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
     if (!is_initialized || freq_hz == 0 || duration_ms == 0) return;
+    if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return;
 
     size_t total_samples = (AUDIO_SAMPLE_RATE * duration_ms) / 1000;
     const size_t CHUNK_SIZE = 128;
@@ -335,6 +411,8 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
         i2s_write(I2S_NUM_0, buffer, count * 2 * sizeof(int16_t), &bytes_written, portMAX_DELAY);
         samples_generated += count;
     }
+
+    audio_release_ownership(AUDIO_OWNER_SYSTEM);
 }
 
 void audio_play_sound_effect(SoundEffect fx)
@@ -374,6 +452,7 @@ void audio_play_sound_effect(SoundEffect fx)
 bool audio_start_recording(uint32_t max_duration_sec)
 {
     if (!psram_record_buf) return false;
+    if (!audio_request_ownership(AUDIO_OWNER_RECORDER)) return false;
 
     audio_stop_playback();
     record_sample_capacity = AUDIO_SAMPLE_RATE * max_duration_sec;
@@ -390,6 +469,7 @@ bool audio_start_recording(uint32_t max_duration_sec)
 void audio_stop_recording(void)
 {
     recording_active = false;
+    audio_release_ownership(AUDIO_OWNER_RECORDER);
     Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
                   recorded_samples_count, (float)recorded_samples_count / AUDIO_SAMPLE_RATE);
 }
@@ -402,6 +482,7 @@ bool audio_is_recording(void)
 bool audio_start_playback(void)
 {
     if (!psram_record_buf || recorded_samples_count == 0) return false;
+    if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return false;
 
     audio_stop_recording();
     playback_sample_idx = 0;
@@ -414,6 +495,7 @@ void audio_stop_playback(void)
 {
     playback_active = false;
     playback_sample_idx = 0;
+    audio_release_ownership(AUDIO_OWNER_SYSTEM);
 }
 
 bool audio_is_playing(void)

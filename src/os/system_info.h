@@ -14,10 +14,12 @@ struct SystemStats {
     uint8_t  heap_usage_percent;
     uint32_t free_psram;
     uint32_t total_psram;
+    uint32_t used_psram;
     uint8_t  psram_usage_percent;
     float    core_temp_c;
     uint32_t flash_size_mb;
-    char     uptime_str[16];
+    uint64_t uptime_sec;
+    char     uptime_str[24];
 };
 
 /**

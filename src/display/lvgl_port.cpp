@@ -35,6 +35,7 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     gfx.startWrite();
     gfx.setAddrWindow(area->x1, area->y1, w, h);
     gfx.writePixelsDMA((uint16_t *)color_p, w * h);
+    gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi kết thúc transaction
     gfx.endWrite();
 
     // Báo cho LVGL biết frame đã hoàn thành để vẽ frame tiếp theo

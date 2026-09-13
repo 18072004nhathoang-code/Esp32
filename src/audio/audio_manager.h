@@ -33,6 +33,34 @@ enum SoundEffect
     FX_XIAOZHI_WAKE
 };
 
+// Cơ chế phân quyền phần cứng I2S (I2S_NUM_0)
+enum AudioOwner
+{
+    AUDIO_OWNER_NONE = 0,
+    AUDIO_OWNER_SYSTEM,     // System tones, sound effects, audio lab
+    AUDIO_OWNER_RECORDER,   // Mic input, AI voice input
+    AUDIO_OWNER_MUSIC,      // ESP32-audioI2S playback
+    AUDIO_OWNER_AI_VOICE    // AI voice speech synthesis playback
+};
+
+/**
+ * @brief Yêu cầu quyền sở hữu phần cứng I2S
+ * @param requester Phân hệ yêu cầu
+ * @return true nếu được cấp quyền
+ */
+bool audio_request_ownership(AudioOwner requester);
+
+/**
+ * @brief Giải phóng quyền sở hữu phần cứng I2S
+ * @param requester Phân hệ giải phóng
+ */
+void audio_release_ownership(AudioOwner requester);
+
+/**
+ * @brief Lấy chủ sở hữu phần cứng I2S hiện tại
+ */
+AudioOwner audio_get_current_owner(void);
+
 /**
  * @brief Khởi tạo Driver I2S Duplex và cấu hình Codec ES8311 / PA Loa
  * Chạy tác vụ xử lý âm thanh ngầm trên Core 0 (đảm bảo không gián đoạn đồ họa LVGL trên Core 1)

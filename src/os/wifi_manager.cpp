@@ -26,6 +26,9 @@ static char target_ssid[33] = {0};
 static char target_pass[65] = {0};
 static bool connect_requested = false;
 static uint32_t connect_start_time = 0;
+static bool should_save_credentials = false;
+static uint32_t reconnect_backoff_ms = 2000;
+static uint32_t last_disconnect_time = 0;
 
 static void lock_wifi()
 {
@@ -83,16 +86,23 @@ static void wifi_service_task(void *pvParameters)
             {
                 lock_wifi();
                 current_state = WIFI_STATE_CONNECTED;
+                reconnect_backoff_ms = 2000; // Reset backoff timer
                 log_i("Kết nối WiFi thành công! IP: %s, RSSI: %d dBm", 
                       WiFi.localIP().toString().c_str(), WiFi.RSSI());
-                // Lưu vĩnh viễn vào NVS Flash
-                wifi_manager_save_credentials(target_ssid, target_pass);
+
+                // Chỉ lưu vào NVS Flash khi người dùng chủ động cấu hình credential mới
+                if (should_save_credentials)
+                {
+                    should_save_credentials = false;
+                    wifi_manager_save_credentials(target_ssid, target_pass);
+                }
                 unlock_wifi();
             }
             else if (millis() - connect_start_time > WIFI_CONNECT_TIMEOUT_MS)
             {
                 lock_wifi();
                 current_state = WIFI_STATE_FAILED;
+                last_disconnect_time = millis();
                 log_w("Kết nối WiFi thất bại: Hết thời gian chờ (Timeout)!");
                 unlock_wifi();
             }
@@ -103,7 +113,23 @@ static void wifi_service_task(void *pvParameters)
             {
                 lock_wifi();
                 current_state = WIFI_STATE_DISCONNECTED;
-                log_w("Mất kết nối WiFi!");
+                last_disconnect_time = millis();
+                log_w("Mất kết nối WiFi! Sẽ thử kết nối lại sau %u ms...", reconnect_backoff_ms);
+                unlock_wifi();
+            }
+        }
+        else if (current_state == WIFI_STATE_DISCONNECTED || current_state == WIFI_STATE_FAILED)
+        {
+            // Tự động kết nối lại (Auto-reconnect) với Exponential Backoff (2s -> 4s -> 8s -> ... -> max 60s)
+            if (strlen(target_ssid) > 0 && (millis() - last_disconnect_time >= reconnect_backoff_ms))
+            {
+                log_i("Tự động kết nối lại WiFi '%s' (Backoff: %u ms)...", target_ssid, reconnect_backoff_ms);
+                reconnect_backoff_ms = (reconnect_backoff_ms * 2 > 60000) ? 60000 : (reconnect_backoff_ms * 2);
+                last_disconnect_time = millis();
+
+                lock_wifi();
+                should_save_credentials = false; // Không spam ghi NVS khi reconnect
+                connect_requested = true;
                 unlock_wifi();
             }
         }
@@ -203,6 +229,7 @@ bool wifi_manager_connect(const char *ssid, const char *pass)
 
     connect_requested = true;
     current_state = WIFI_STATE_CONNECTING;
+    should_save_credentials = true; // Đánh dấu lưu NVS khi người dùng chủ động cấu hình
     unlock_wifi();
 
     return true;
