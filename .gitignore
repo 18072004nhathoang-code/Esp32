@@ -1,0 +1,22 @@
+# PlatformIO
+.pio
+.pioenvs
+.piolibdeps
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Build and Binary files
+*.bin
+*.elf
+*.hex
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini

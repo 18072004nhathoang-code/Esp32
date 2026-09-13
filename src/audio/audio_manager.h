@@ -1,0 +1,104 @@
+/**
+ * @file audio_manager.h
+ * @brief Phân hệ điều khiển âm thanh I2S Duplex (Microphone MEMS & Loa ngoài FM8002E/ES8311)
+ * Thiết kế chuẩn cho bo mạch DIYMORE ESP32-S3 3.5" IPS (XiaoZhi AI Native)
+ */
+
+#pragma once
+
+#include <Arduino.h>
+
+// Định nghĩa chân phần cứng chuẩn DIYMORE / XiaoZhi AI ES3C35P
+#define AUDIO_I2S_BCLK      18  // Bit Clock
+#define AUDIO_I2S_WS        21  // Word Select / LRCK
+#define AUDIO_I2S_DOUT      15  // Data Out (Loa Speaker qua IC khuếch đại)
+#define AUDIO_I2S_DIN       16  // Data In (Microphone MEMS thu âm)
+#define AUDIO_I2S_MCLK      17  // Master Clock cho Codec ES8311
+#define AUDIO_PA_PIN        1   // Power Amplifier Enable (Active LOW: 0 = Mở loa, 1 = Tắt loa)
+#define AUDIO_I2C_SDA       38  // I2C SDA điều khiển ES8311
+#define AUDIO_I2C_SCL       39  // I2C SCL điều khiển ES8311
+#define AUDIO_ES8311_ADDR   0x18
+
+// Tần số lấy mẫu âm thanh chuẩn cho AI & Voice (16kHz, 16-bit Mono)
+#define AUDIO_SAMPLE_RATE       16000
+#define AUDIO_RECORD_MAX_SEC    10
+#define AUDIO_MAX_SAMPLES       (AUDIO_SAMPLE_RATE * AUDIO_RECORD_MAX_SEC) // 160,000 samples (320,000 bytes)
+
+enum SoundEffect
+{
+    FX_CLICK = 0,
+    FX_BEEP,
+    FX_CHIME,
+    FX_MELODY,
+    FX_XIAOZHI_WAKE
+};
+
+/**
+ * @brief Khởi tạo Driver I2S Duplex và cấu hình Codec ES8311 / PA Loa
+ * Chạy tác vụ xử lý âm thanh ngầm trên Core 0 (đảm bảo không gián đoạn đồ họa LVGL trên Core 1)
+ */
+bool audio_manager_init(void);
+
+/**
+ * @brief Điều chỉnh âm lượng phát ra loa (0 - 100%)
+ */
+void audio_set_volume(uint8_t volume_percent);
+uint8_t audio_get_volume(void);
+
+/**
+ * @brief Bật/Tắt IC khuếch đại công suất Loa (Power Amplifier)
+ */
+void audio_set_pa_enabled(bool enabled);
+bool audio_is_pa_enabled(void);
+
+/**
+ * @brief Phát một âm sắc hình sin với tần số và thời lượng xác định
+ */
+void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms);
+
+/**
+ * @brief Phát hiệu ứng âm thanh định sẵn
+ */
+void audio_play_sound_effect(SoundEffect fx);
+
+/**
+ * @brief Bắt đầu ghi âm trực tiếp từ Microphone vào bộ nhớ 8MB Octal PSRAM
+ * @param max_duration_sec Thời gian ghi âm tối đa (mặc định 10 giây)
+ */
+bool audio_start_recording(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
+void audio_stop_recording(void);
+bool audio_is_recording(void);
+
+/**
+ * @brief Bắt đầu phát lại đoạn âm thanh vừa thu âm trong PSRAM ra loa
+ */
+bool audio_start_playback(void);
+void audio_stop_playback(void);
+bool audio_is_playing(void);
+
+/**
+ * @brief Lấy thời lượng âm thanh đã ghi (ms)
+ */
+uint32_t audio_get_recorded_duration_ms(void);
+
+/**
+ * @brief Lấy tiến trình đang phát lại (ms)
+ */
+uint32_t audio_get_playback_progress_ms(void);
+
+/**
+ * @brief Lấy cường độ âm thanh thời gian thực từ Microphone (0 - 100%)
+ */
+uint8_t audio_get_mic_level(void);
+
+/**
+ * @brief Lấy chỉ số Decibel (dB) từ Microphone (-60dB đến 0dB)
+ */
+float audio_get_mic_db(void);
+
+/**
+ * @brief Lấy mẫu dạng sóng âm thanh từ Microphone để vẽ Oscilloscope / Waveform
+ * @param dest Mảng nhận dữ liệu mẫu
+ * @param count Số lượng mẫu cần lấy
+ */
+void audio_get_waveform_samples(int16_t *dest, size_t count);

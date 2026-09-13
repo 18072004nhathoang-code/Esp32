@@ -1,0 +1,20 @@
+# ====================================================================
+# ESP32-S3 Partition Table (Chuẩn 16MB Flash - N16R8)
+# Dành cho hệ điều hành Mini OS: 2 phân vùng OTA 4.5MB + Phân vùng Storage 6.8MB
+# ====================================================================
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x5000,
+otadata,  data, ota,     0xe000,   0x2000,
+app0,     app,  ota_0,   0x10000,  0x480000,
+app1,     app,  ota_1,   0x490000, 0x480000,
+spiffs,   data, spiffs,  0x910000, 0x6e0000,
+coredump, data, coredump,0xff0000, 0x10000,
+
+# --------------------------------------------------------------------
+# NẾU DÙNG BO MẠCH FLASH 8MB (N8R8), hãy comment các dòng trên và mở comment bên dưới:
+# nvs,      data, nvs,     0x9000,   0x5000,
+# otadata,  data, ota,     0xe000,   0x2000,
+# app0,     app,  ota_0,   0x10000,  0x300000,
+# app1,     app,  ota_1,   0x310000, 0x300000,
+# spiffs,   data, spiffs,  0x610000, 0x1e0000,
+# coredump, data, coredump,0x7f0000, 0x10000,
