@@ -164,36 +164,36 @@
             gap: 2px;
         }
 
-        /* Desktop Workspace PRO MAX (Lưới 3 Cột x 2 Hàng cho 3.5" IPS) */
+        /* Desktop Workspace PRO MAX (Lưới 4 Cột x 2 Hàng vừa vặn màn hình 3.5" IPS) */
         .desktop {
             flex: 1;
-            padding: 16px;
+            padding: 12px;
             overflow-y: auto;
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 14px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
             background: #0a0d14;
         }
 
         .app-squircle {
             background: #161b26;
-            border-radius: 16px;
-            height: 185px;
-            padding: 16px;
+            border-radius: 14px;
+            height: 122px;
+            padding: 12px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
             cursor: pointer;
             transition: transform 0.15s, box-shadow 0.15s, border-color 0.2s;
             border: 1px solid #2d3748;
-            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.5);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
             position: relative;
             overflow: hidden;
         }
 
         .app-squircle:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.7);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.7);
         }
 
         .app-squircle:active {
@@ -201,25 +201,31 @@
         }
 
         .app-icon-badge {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 22px;
-            margin-bottom: 8px;
+            font-size: 20px;
+            margin-bottom: 4px;
         }
 
         .app-title {
-            font-size: 18px;
+            font-size: 15px;
             font-weight: 700;
             color: #ffffff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .app-sub {
-            font-size: 12.5px;
+            font-size: 11.5px;
             color: #718096;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* App Window Layer */
@@ -786,6 +792,119 @@
             box-shadow: 0 0 24px rgba(0, 242, 254, 0.8);
         }
 
+        /* AI VOICE ASSISTANT (CHAT BUBBLES & PUSH-TO-TALK DOCK) */
+        .chat-body {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            box-sizing: border-box;
+            background: #0a0d14;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 12px 16px;
+        }
+
+        .chat-bubble {
+            max-width: 78%;
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 13.5px;
+            line-height: 1.5;
+            word-break: break-word;
+            animation: fadeInBubble 0.25s ease-out;
+        }
+
+        @keyframes fadeInBubble {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .chat-bubble.user {
+            align-self: flex-end;
+            background: #0c2b3e;
+            border: 1px solid #00F2FE;
+            color: #ffffff;
+            border-bottom-right-radius: 3px;
+            box-shadow: 0 4px 14px rgba(0, 242, 254, 0.15);
+        }
+
+        .chat-bubble.ai {
+            align-self: flex-start;
+            background: #1c162e;
+            border: 1px solid #9D4EDD;
+            color: #e2e8f0;
+            border-bottom-left-radius: 3px;
+            box-shadow: 0 4px 14px rgba(157, 78, 221, 0.15);
+        }
+
+        .chat-ai-header {
+            font-size: 11.5px;
+            font-weight: 700;
+            color: #00F2FE;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .chat-bottom-dock {
+            height: 84px;
+            background: #111622;
+            border-top: 1px solid #1f2937;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            margin-top: 4px;
+        }
+
+        .ptt-btn {
+            width: 58px;
+            height: 58px;
+            border-radius: 50%;
+            background: #1f2937;
+            border: 2px solid #00F2FE;
+            color: #00F2FE;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s;
+            user-select: none;
+            box-shadow: 0 0 12px rgba(0, 242, 254, 0.3);
+        }
+
+        .ptt-btn.active {
+            background: #00F2FE;
+            color: #0a0d14;
+            box-shadow: 0 0 25px rgba(0, 242, 254, 0.9);
+            transform: scale(1.1);
+        }
+
+        .chat-waveform {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            height: 40px;
+            width: 100px;
+        }
+
+        .wave-bar {
+            width: 5px;
+            border-radius: 3px;
+            background: #00F2FE;
+            transition: height 0.08s ease;
+        }
+
         /* SETTINGS PRO MAX */
         .settings-body {
             padding: 20px;
@@ -1008,18 +1127,27 @@
                     </div>
                 </div>
 
-                <!-- 2. DESKTOP LAUNCHER PRO MAX (LƯỚI 3 CỘT x 2 HÀNG) -->
+                <!-- 2. DESKTOP LAUNCHER PRO MAX (LƯỚI 4 CỘT x 2 HÀNG - VỪA VẶN MÀN HÌNH) -->
                 <div class="desktop" id="desktopView">
-                    <!-- Tile 1: System Monitor -->
-                    <div class="app-squircle" style="border-color:#00F2FE;" onclick="openApp('system')">
-                        <div class="app-icon-badge" style="background:rgba(0,242,254,0.15); color:#00F2FE; border:1px solid #00F2FE;">⚡</div>
+                    <!-- Tile 1: Music Player (NỔI BẬT HÀNG ĐẦU TIÊN!) -->
+                    <div class="app-squircle" style="border-color:#9D4EDD; background:linear-gradient(145deg, #1b162b, #111622);" onclick="openApp('music')">
+                        <div class="app-icon-badge" style="background:rgba(157,78,221,0.25); color:#c084fc; border:1px solid #9D4EDD;">🎵</div>
                         <div>
-                            <div class="app-title">System</div>
-                            <div class="app-sub">Dual Core 240M</div>
+                            <div class="app-title" style="color:#e9d5ff;">Music Player</div>
+                            <div class="app-sub">/music SD MP3</div>
                         </div>
                     </div>
 
-                    <!-- Tile 2: Google Maps Pro -->
+                    <!-- Tile 2: AI Voice Assistant -->
+                    <div class="app-squircle" style="border-color:#00F2FE; background:linear-gradient(145deg, #10212e, #111622);" onclick="openApp('ai_voice')">
+                        <div class="app-icon-badge" style="background:rgba(0,242,254,0.2); color:#00F2FE; border:1px solid #00F2FE;">🤖</div>
+                        <div>
+                            <div class="app-title" style="color:#a5f3fc;">AI Voice</div>
+                            <div class="app-sub">XiaoZhi Gemini</div>
+                        </div>
+                    </div>
+
+                    <!-- Tile 3: Google Maps Pro -->
                     <div class="app-squircle" style="border-color:#FF3B30;" onclick="openApp('maps')">
                         <div class="app-icon-badge" style="background:rgba(255,59,48,0.15); color:#FF3B30; border:1px solid #FF3B30;">📍</div>
                         <div>
@@ -1028,25 +1156,34 @@
                         </div>
                     </div>
 
-                    <!-- Tile 3: Voice & Audio Lab (MỚI!) -->
-                    <div class="app-squircle" style="border-color:#9D4EDD;" onclick="openApp('audio')">
-                        <div class="app-icon-badge" style="background:rgba(157,78,221,0.15); color:#9D4EDD; border:1px solid #9D4EDD;">🎙️</div>
+                    <!-- Tile 4: System Monitor -->
+                    <div class="app-squircle" style="border-color:#00e676;" onclick="openApp('system')">
+                        <div class="app-icon-badge" style="background:rgba(0,230,118,0.15); color:#00e676; border:1px solid #00e676;">⚡</div>
                         <div>
-                            <div class="app-title">Voice & Audio</div>
-                            <div class="app-sub">XiaoZhi & Mic</div>
+                            <div class="app-title">System</div>
+                            <div class="app-sub">Dual Core 240M</div>
                         </div>
                     </div>
 
-                    <!-- Tile 4: WiFi Hub -->
-                    <div class="app-squircle" style="border-color:#00E676;" onclick="openApp('wifi')">
-                        <div class="app-icon-badge" style="background:rgba(0,230,118,0.15); color:#00E676; border:1px solid #00E676;">📶</div>
+                    <!-- Tile 5: Voice & Audio Lab -->
+                    <div class="app-squircle" style="border-color:#3A86FF;" onclick="openApp('audio')">
+                        <div class="app-icon-badge" style="background:rgba(58,134,255,0.15); color:#3A86FF; border:1px solid #3A86FF;">🎙️</div>
+                        <div>
+                            <div class="app-title">Voice & Mic</div>
+                            <div class="app-sub">Oscilloscope Lab</div>
+                        </div>
+                    </div>
+
+                    <!-- Tile 6: WiFi Hub -->
+                    <div class="app-squircle" style="border-color:#00F2FE;" onclick="openApp('wifi')">
+                        <div class="app-icon-badge" style="background:rgba(0,242,254,0.15); color:#00F2FE; border:1px solid #00F2FE;">📶</div>
                         <div>
                             <div class="app-title">WiFi Hub</div>
                             <div class="app-sub">2.4GHz Scanner</div>
                         </div>
                     </div>
 
-                    <!-- Tile 5: Settings -->
+                    <!-- Tile 7: Settings -->
                     <div class="app-squircle" style="border-color:#FFB300;" onclick="openApp('settings')">
                         <div class="app-icon-badge" style="background:rgba(255,179,0,0.15); color:#FFB300; border:1px solid #FFB300;">⚙️</div>
                         <div>
@@ -1055,21 +1192,12 @@
                         </div>
                     </div>
 
-                    <!-- Tile 6: Sensors & Info -->
-                    <div class="app-squircle" style="border-color:#3A86FF;" onclick="openApp('sensors')">
-                        <div class="app-icon-badge" style="background:rgba(58,134,255,0.15); color:#3A86FF; border:1px solid #3A86FF;">🧭</div>
+                    <!-- Tile 8: Sensors & Info -->
+                    <div class="app-squircle" style="border-color:#eab308;" onclick="openApp('sensors')">
+                        <div class="app-icon-badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid #eab308;">🧭</div>
                         <div>
                             <div class="app-title">Sensors</div>
                             <div class="app-sub">Compass & Info</div>
-                        </div>
-                    </div>
-
-                    <!-- Tile 7: Music Player (MỚI!) -->
-                    <div class="app-squircle" style="border-color:#9D4EDD;" onclick="openApp('music')">
-                        <div class="app-icon-badge" style="background:rgba(157,78,221,0.15); color:#9D4EDD; border:1px solid #9D4EDD;">🎵</div>
-                        <div>
-                            <div class="app-title">Music Player</div>
-                            <div class="app-sub">/music SD MP3</div>
                         </div>
                     </div>
                 </div>
@@ -1082,6 +1210,40 @@
                     </div>
 
                     <div class="window-body" id="windowBody">
+                        <!-- AI VOICE ASSISTANT (CHAT BUBBLES & PUSH-TO-TALK) -->
+                        <div class="chat-body" id="aiVoiceAppView" style="display:none;">
+                            <div class="chat-history" id="simChatHistory">
+                                <!-- Rendered dynamically via JS -->
+                            </div>
+                            <div class="chat-bottom-dock">
+                                <!-- Dynamic Waveform (7 bars) -->
+                                <div class="chat-waveform" id="simWaveform">
+                                    <div class="wave-bar" id="wb0" style="height:6px; background:#00F2FE;"></div>
+                                    <div class="wave-bar" id="wb1" style="height:12px; background:#9D4EDD;"></div>
+                                    <div class="wave-bar" id="wb2" style="height:18px; background:#00F2FE;"></div>
+                                    <div class="wave-bar" id="wb3" style="height:26px; background:#9D4EDD;"></div>
+                                    <div class="wave-bar" id="wb4" style="height:18px; background:#00F2FE;"></div>
+                                    <div class="wave-bar" id="wb5" style="height:12px; background:#9D4EDD;"></div>
+                                    <div class="wave-bar" id="wb6" style="height:6px; background:#00F2FE;"></div>
+                                </div>
+
+                                <!-- Push-to-Talk Button -->
+                                <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+                                    <button class="ptt-btn" id="simPttBtn"
+                                            onmousedown="startPtt()" onmouseup="stopPtt()"
+                                            ontouchstart="startPtt()" ontouchend="stopPtt()"
+                                            title="Nhấn và giữ để nói, nhả ra để gửi">🎙️</button>
+                                    <span id="simPttLabel" style="font-size:11.5px; color:#a0aec0; font-weight:600;">Nhấn & Giữ để Nói</span>
+                                </div>
+
+                                <!-- Status & Engine Info -->
+                                <div style="font-size:12px; color:#718096; text-align:right; min-width:140px;" id="simAiStatusInfo">
+                                    <span style="color:#00F2FE; font-weight:700;">XiaoZhi Native</span><br>
+                                    <span style="color:#00e676; font-size:11px;">● Core 0 Ready</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- MUSIC PLAYER PRO MAX (SPLIT 2-COLUMN VIEW & ROTATING VINYL DISC) -->
                         <div class="music-body" id="musicAppView" style="display:none;">
                             <!-- Nửa bên trái: Danh sách bài hát từ /music trên thẻ nhớ SD -->
@@ -1384,6 +1546,19 @@
         </div>
     </div>
 
+    <!-- QUICK APP NAVIGATION DOCK (PHÍM TẮT MỞ APP TRỰC TIẾP) -->
+    <div style="width:772px; display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:14px; padding:10px 14px; background:#161b22; border-radius:12px; border:1px solid #30363d; box-shadow:0 4px 14px rgba(0,0,0,0.4);">
+        <span style="color:#00F2FE; font-size:13px; font-weight:700; display:flex; align-items:center; gap:6px;">🚀 Phím Tắt Mở App Nhanh:</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="test-btn" style="background:linear-gradient(135deg, #9D4EDD 0%, #7928ca 100%); color:#ffffff; font-weight:700; border:1px solid #c084fc; box-shadow:0 0 10px rgba(157,78,221,0.4);" onclick="openApp('music')" title="Mở trực tiếp ứng dụng Music Player">🎵 Mở Music Player</button>
+            <button class="test-btn" style="background:linear-gradient(135deg, #00F2FE 0%, #0099ff 100%); color:#0a0d14; font-weight:700; border:1px solid #00F2FE;" onclick="openApp('ai_voice')">🤖 AI Voice</button>
+            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('maps')">📍 Google Maps</button>
+            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('wifi')">📶 WiFi Hub</button>
+            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('system')">⚡ System</button>
+            <button class="test-btn" style="background:#334155; color:#cbd5e0; border:1px solid #475569;" onclick="closeApp()">🏠 Desktop</button>
+        </div>
+    </div>
+
     <!-- BẢNG ĐIỀU KHIỂN BỘ TEST TỰ ĐỘNG -->
     <div class="test-panel">
         <div class="test-header">
@@ -1498,6 +1673,13 @@
                     updatePowerState();
                 }, true);
             }
+
+            // Tự động mở App theo tham số URL (ví dụ: ?app=music)
+            const urlParams = new URLSearchParams(window.location.search);
+            const targetApp = urlParams.get('app');
+            if (targetApp) {
+                setTimeout(() => openApp(targetApp), 150);
+            }
         });
 
         // Chart history data
@@ -1556,7 +1738,7 @@
             document.getElementById('desktopView').style.display = 'none';
             document.getElementById('appWindow').style.display = 'flex';
 
-            const views = ['mapsAppView', 'audioAppView', 'systemAppView', 'wifiAppView', 'settingsAppView', 'sensorsAppView', 'aboutAppView', 'musicAppView'];
+            const views = ['mapsAppView', 'audioAppView', 'systemAppView', 'wifiAppView', 'settingsAppView', 'sensorsAppView', 'aboutAppView', 'musicAppView', 'aiVoiceAppView'];
             views.forEach(v => {
                 let el = document.getElementById(v);
                 if (el) el.style.display = 'none';
@@ -1570,7 +1752,8 @@
                 'settings': '⚙️ Settings Control Center Pro Max',
                 'sensors': '🧭 Sensors & Telemetry Pro Max',
                 'about': 'ℹ️ About Mini OS Pro Max',
-                'music': '🎵 Music Player • /music SD Card'
+                'music': '🎵 Music Player • /music SD Card',
+                'ai_voice': '🤖 XiaoZhi AI Voice • Gemini Assistant'
             };
             document.getElementById('windowTitle').innerText = titles[appId] || 'App';
 
@@ -1598,12 +1781,16 @@
             } else if (appId === 'music') {
                 document.getElementById('musicAppView').style.display = 'flex';
                 initMusicPlayerSimulator();
+            } else if (appId === 'ai_voice') {
+                document.getElementById('aiVoiceAppView').style.display = 'flex';
+                initAiVoiceSimulator();
             }
         }
 
         function closeApp() {
             stopWaveformSimulation();
             pauseMusicTrack();
+            stopPtt();
             document.getElementById('appWindow').style.display = 'none';
             document.getElementById('desktopView').style.display = 'grid';
         }
@@ -2414,6 +2601,121 @@
             }
         }
 
+        // =============================================================
+        // AI VOICE ASSISTANT SIMULATOR (STT -> Gemini AI -> TTS Loa ngoài)
+        // =============================================================
+        const simChatHistory = [
+            { isUser: false, text: "Xin chào! Tôi là XiaoZhi AI Voice Assistant trên ESP32-S3. Hãy nhấn giữ nút Micro bên dưới để trò chuyện cùng tôi nhé!" }
+        ];
+        let pttActive = false;
+        let waveAnimTimer = null;
+        let aiQueryStep = 0;
+
+        const aiQueries = [
+            { user: "Hà Nội hôm nay thời tiết thế nào?", ai: "Hà Nội hôm nay tiết trời rất đẹp, nhiều mây và có nắng nhẹ, nhiệt độ khoảng 28°C, rất lý tưởng để dạo quanh Hồ Gươm!" },
+            { user: "Kiểm tra tình trạng phần cứng bo mạch ESP32-S3?", ai: "ESP32-S3 Dual-Core 240MHz đang hoạt động ổn định ở 41.8°C. Bộ nhớ 8MB Octal PSRAM còn trống hơn 7.2MB!" },
+            { user: "Phát cho tôi một bản nhạc nhẹ nhàng?", ai: "Tôi đã sẵn sàng mở ứng dụng Music Player phát bài 'Chill Lofi Vibes' từ thẻ MicroSD cho bạn thưởng thức!" }
+        ];
+
+        function initAiVoiceSimulator() {
+            renderChatHistory();
+            updateAiStatus("Nhấn & Giữ để Nói", "#a0aec0");
+        }
+
+        function renderChatHistory() {
+            const container = document.getElementById('simChatHistory');
+            if (!container) return;
+            container.innerHTML = "";
+            simChatHistory.forEach(msg => {
+                const bubble = document.createElement('div');
+                bubble.className = 'chat-bubble ' + (msg.isUser ? 'user' : 'ai');
+                if (!msg.isUser) {
+                    bubble.innerHTML = `
+                        <div class="chat-ai-header">🤖 XiaoZhi AI</div>
+                        <div>${msg.text}</div>
+                    `;
+                } else {
+                    bubble.innerText = msg.text;
+                }
+                container.appendChild(bubble);
+            });
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateAiStatus(text, color = "#a0aec0") {
+            const lbl = document.getElementById('simPttLabel');
+            if (lbl) {
+                lbl.innerText = text;
+                lbl.style.color = color;
+            }
+        }
+
+        function startWaveformAnim() {
+            if (waveAnimTimer) clearInterval(waveAnimTimer);
+            waveAnimTimer = setInterval(() => {
+                for (let i = 0; i < 7; i++) {
+                    const bar = document.getElementById('wb' + i);
+                    if (bar) {
+                        let h = 8 + Math.floor(Math.random() * 26);
+                        bar.style.height = h + "px";
+                    }
+                }
+            }, 75);
+        }
+
+        function stopWaveformAnim() {
+            if (waveAnimTimer) {
+                clearInterval(waveAnimTimer);
+                waveAnimTimer = null;
+            }
+            const heights = [6, 12, 18, 26, 18, 12, 6];
+            for (let i = 0; i < 7; i++) {
+                const bar = document.getElementById('wb' + i);
+                if (bar) bar.style.height = heights[i] + "px";
+            }
+        }
+
+        function startPtt() {
+            if (pttActive) return;
+            pttActive = true;
+            const btn = document.getElementById('simPttBtn');
+            if (btn) btn.classList.add('active');
+            updateAiStatus("Đang lắng nghe... (Nói vào Micro)", "#00F2FE");
+            startWaveformAnim();
+            playSoundEffect('beep');
+        }
+
+        async function stopPtt() {
+            if (!pttActive) return;
+            pttActive = false;
+            const btn = document.getElementById('simPttBtn');
+            if (btn) btn.classList.remove('active');
+            stopWaveformAnim();
+
+            const queryPair = aiQueries[aiQueryStep % aiQueries.length];
+            aiQueryStep++;
+
+            // 1. Thêm tin nhắn của User
+            simChatHistory.push({ isUser: true, text: queryPair.user });
+            renderChatHistory();
+
+            // 2. Chuyển sang trạng thái xử lý
+            updateAiStatus("Đang suy nghĩ (Gemini AI)...", "#f59e0b");
+
+            await sleep(900);
+
+            // 3. Nhận phản hồi từ AI
+            simChatHistory.push({ isUser: false, text: queryPair.ai });
+            renderChatHistory();
+
+            // 4. Phát giọng nói phản hồi TTS
+            updateAiStatus("Đang trả lời qua Loa ngoài...", "#00e676");
+            playSoundEffect('melody');
+
+            await sleep(1500);
+            updateAiStatus("Nhấn & Giữ để Nói", "#a0aec0");
+        }
+
         // BỘ TEST TỰ ĐỘNG PRO MAX (E2E TEST SUITE)
         function logMessage(type, text) {
             const logs = document.getElementById('testLogs');
@@ -2505,6 +2807,20 @@
             changeMusicVol(90);
             await sleep(200);
             logMessage('pass', 'Music Player: Điều chỉnh âm lượng Loa ngoài lên 90%');
+            closeApp();
+            await sleep(300);
+
+            // Test 5d: MỞ AI VOICE ASSISTANT (XIAOZHI & GEMINI AI)
+            logMessage('info', 'Kiểm tra Ứng dụng AI Voice Assistant (XiaoZhi & Gemini AI)...');
+            openApp('ai_voice');
+            await sleep(500);
+            logMessage('pass', 'AI Voice: Giao diện bong bóng Chat Messenger & Khung Dock điều khiển hiển thị hoàn hảo');
+            startPtt();
+            await sleep(600);
+            logMessage('pass', 'AI Voice: Push-to-Talk kích hoạt -> Thu âm Mic I2S & Hiệu ứng sóng âm Waveform 7 dải động');
+            await stopPtt();
+            await sleep(400);
+            logMessage('pass', 'AI Voice: Gửi truy vấn AI Gemini -> Nhận câu trả lời & Phát âm thanh TTS qua Loa ngoài');
             closeApp();
             await sleep(300);
 

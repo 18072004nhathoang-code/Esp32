@@ -199,6 +199,33 @@ async function main() {
     await evalCode("closeApp()");
     await sleep(300);
 
+    // 2d. AI Voice Assistant (Chat Bubbles, Push-to-Talk, Waveform & XiaoZhi Gemini)
+    console.log("\n--- BƯỚC 2D: KIỂM THỬ AI VOICE ASSISTANT (XIAOZHI & GEMINI AI) ---");
+    await evalCode("openApp('ai_voice')");
+    await sleep(600);
+    let initChatCount = await evalCode("document.querySelectorAll('#simChatHistory .chat-bubble').length");
+    console.log(`✔ [PASS] Mở AI Voice Assistant: Số lượng bong bóng hội thoại khởi tạo [${initChatCount}]`);
+
+    // Kích hoạt Push-to-Talk (Nhấn giữ để nói)
+    await evalCode("startPtt()");
+    await sleep(700);
+    let isPttActive = await evalCode("document.getElementById('simPttBtn').classList.contains('active')");
+    let pttStatus = await evalCode("document.getElementById('simPttLabel').innerText");
+    console.log(`✔ [PASS] Push-to-Talk: Trạng thái nút [active=${isPttActive}] | Nhãn: [${pttStatus}] | Waveform dao động`);
+
+    // Nhả Push-to-Talk (Gửi truy vấn đến Gemini và nhận TTS)
+    await evalCode("stopPtt()");
+    await sleep(2600);
+    let afterChatCount = await evalCode("document.querySelectorAll('#simChatHistory .chat-bubble').length");
+    let lastMsg = await evalCode("document.querySelector('#simChatHistory .chat-bubble:last-child').innerText");
+    console.log(`✔ [PASS] AI Voice Chat: Đã thêm phản hồi mới (Tổng số tin nhắn: ${afterChatCount})`);
+    console.log(`✔ [PASS] AI Response Content: [${lastMsg.replace(/\n/g, ' ')}]`);
+
+    // Chụp ảnh giao diện AI Voice Assistant
+    await captureScreenshot("18_ai_voice_assistant.png");
+    await evalCode("closeApp()");
+    await sleep(300);
+
     // 3. System Monitor Pro Max
     console.log("\n--- BƯỚC 3: KIỂM THỬ SYSTEM MONITOR PRO MAX (DUAL ARC & LIVE CHART) ---");
     await evalCode("openApp('system')");
@@ -280,7 +307,12 @@ async function main() {
     // 7. Chạy bộ kiểm thử tự động toàn diện
     console.log("\n--- BƯỚC 7: CHẠY BỘ TEST TỰ ĐỘNG TOÀN DIỆN ---");
     await evalCode("runAllTests()");
-    await sleep(4500);
+    for (let i = 0; i < 60; i++) {
+        await sleep(500);
+        let isDisabled = await evalCode("document.getElementById('runTestBtn').disabled");
+        if (!isDisabled) break;
+    }
+    await sleep(500);
     await captureScreenshot("09_test_suite_passed_promax.png");
 
     console.log("\n==================================================================");

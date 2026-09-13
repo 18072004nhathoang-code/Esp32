@@ -11,6 +11,7 @@
 #include "os/wifi_manager.h"
 #include "audio/audio_manager.h"
 #include "audio/music_player.h"
+#include "ai/ai_voice_service.h"
 #include "os/power_manager.h"
 
 void setup()
@@ -50,6 +51,10 @@ void setup()
     // 4b. Khởi tạo Music Player (ESP32-audioI2S & FreeRTOS Core 0)
     Serial.println("[SYSTEM] Khởi tạo Music Player Service trên Core 0...");
     music_player_init();
+
+    // 4c. Khởi tạo AI Voice Assistant Service (Core 0)
+    Serial.println("[SYSTEM] Khởi tạo AI Voice Assistant Service trên Core 0...");
+    ai_voice_init();
 
     // 5. Khởi tạo Desktop và các App hệ thống
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");

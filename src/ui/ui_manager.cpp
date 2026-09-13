@@ -10,8 +10,10 @@
 #include "../apps/audio_app.h"
 #include "../apps/wifi_app.h"
 #include "../apps/music_app.h"
+#include "../apps/ai_voice_app.h"
 #include "../audio/audio_manager.h"
 #include "../audio/music_player.h"
+#include "../ai/ai_voice_service.h"
 #include "../os/wifi_manager.h"
 
 // Biến giao diện chính
@@ -66,6 +68,7 @@ static void open_about_app(void);
 static void open_map_app(void);
 static void open_audio_app(void);
 static void open_music_app(void);
+static void open_ai_voice_app(void);
 static void close_current_app(void);
 
 /* Callback khi bấm nút đóng cửa sổ app */
@@ -88,6 +91,7 @@ static void app_icon_event_cb(lv_event_t *e)
         case 6: open_tools_app(); break;
         case 7: open_audio_app(); break;
         case 8: open_music_app(); break;
+        case 9: open_ai_voice_app(); break;
         default: break;
     }
 }
@@ -253,6 +257,8 @@ static void create_desktop(void)
 
     // Hàng 3 (y = 284)
     create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), 6, 15, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi Gemini",  lv_color_hex(0x00F2FE), 9, 170, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), 4, 325, 284);
 }
 
 /* 4. KHUNG CỬA SỔ ỨNG DỤNG PRO MAX (MODAL WINDOW 480x294) */
@@ -330,6 +336,7 @@ static void close_current_app(void)
     audio_app_close();
     wifi_app_close();
     music_app_close();
+    ai_voice_app_close();
 }
 
 /* =========================================================================
@@ -659,6 +666,24 @@ void ui_open_music_app(void)
 }
 
 /* =========================================================================
+ * 12. ỨNG DỤNG AI VOICE ASSISTANT (CHAT BUBBLES & PUSH-TO-TALK)
+ * ========================================================================= */
+static void open_ai_voice_app(void)
+{
+    ensure_app_window();
+    lv_label_set_text(app_title_lbl, "XiaoZhi AI Voice • Gemini Assistant");
+    lv_obj_clean(app_content_container);
+    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    ai_voice_app_open(app_content_container);
+}
+
+void ui_open_ai_voice_app(void)
+{
+    open_ai_voice_app();
+}
+
+/* =========================================================================
  * KHỞI TẠO HỆ THỐNG GIAO DIỆN
  * ========================================================================= */
 void ui_init(void)
@@ -774,4 +799,7 @@ void ui_update_periodic(const SystemStats &stats)
 
     // 9. Cập nhật tiến trình phát nhạc và animation đĩa than Music Player
     music_app_update();
+
+    // 10. Cập nhật trạng thái AI Voice Assistant và animation sóng âm
+    ai_voice_app_update();
 }
