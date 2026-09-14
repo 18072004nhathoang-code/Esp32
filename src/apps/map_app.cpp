@@ -164,6 +164,10 @@ static void render_offline_vector_map(void)
     draw_canvas_line(map_canvas, { 0, (lv_coord_t)hwy_y }, { MAP_CANVAS_WIDTH, (lv_coord_t)(hwy_y + 24) }, lv_color_hex(0xEA8E18), 3);
 }
 
+/**
+ * @brief Render nội dung bản đồ lên Canvas.
+ * @note Hàm này phải được gọi trong khi đang giữ lvgl_mutex hoặc từ LVGL event callback.
+ */
 void map_app_render(void)
 {
     // Kiểm tra xem đã có ảnh mới giải mã từ Task nền (thẻ SD hoặc mạng) chưa

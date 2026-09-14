@@ -1,6 +1,10 @@
 # DIYMORE ESP32-S3 3.5" IPS Touch Display Mini OS Pro Max
 **Kiến trúc:** FreeRTOS Multi-tasking Embedded OS • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S 3.0.12 • XiaoZhi AI Voice
 
+[![Build Status](https://github.com/18072004nhathoang-code/Esp32/actions/workflows/build.yml/badge.svg)](https://github.com/18072004nhathoang-code/Esp32/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-ESP32--S3-blue)](https://www.espressif.com/)
+
 ---
 
 ## 🚀 1. Tổng quan hệ thống

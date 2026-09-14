@@ -60,6 +60,19 @@ static lv_obj_t *lbl_pitch_val = nullptr;
 // Màu chủ đề Accent hiện tại (Mặc định: Cyan Pro Max)
 static lv_color_t theme_accent = lv_color_hex(0x00F2FE);
 
+enum AppID : uintptr_t {
+    APP_SYSTEM = 1,
+    APP_SETTINGS = 2,
+    APP_WIFI = 3,
+    APP_ABOUT = 4,
+    APP_MAP = 5,
+    APP_TOOLS = 6,
+    APP_AUDIO = 7,
+    APP_MUSIC = 8,
+    APP_AI_VOICE = 9,
+    APP_CAMERA = 10
+};
+
 // Khai báo trước các hàm mở app
 static void open_system_monitor_app(void);
 static void open_settings_app(void);
@@ -85,16 +98,16 @@ static void app_icon_event_cb(lv_event_t *e)
     uintptr_t app_id = (uintptr_t)lv_event_get_user_data(e);
     switch (app_id)
     {
-        case 1: open_system_monitor_app(); break;
-        case 2: open_settings_app(); break;
-        case 3: open_wifi_app(); break;
-        case 4: open_about_app(); break;
-        case 5: open_map_app(); break;
-        case 6: open_tools_app(); break;
-        case 7: open_audio_app(); break;
-        case 8: open_music_app(); break;
-        case 9: open_ai_voice_app(); break;
-        case 10: open_camera_app(); break;
+        case APP_SYSTEM:   open_system_monitor_app(); break;
+        case APP_SETTINGS: open_settings_app(); break;
+        case APP_WIFI:     open_wifi_app(); break;
+        case APP_ABOUT:    open_about_app(); break;
+        case APP_MAP:      open_map_app(); break;
+        case APP_TOOLS:    open_tools_app(); break;
+        case APP_AUDIO:    open_audio_app(); break;
+        case APP_MUSIC:    open_music_app(); break;
+        case APP_AI_VOICE: open_ai_voice_app(); break;
+        case APP_CAMERA:   open_camera_app(); break;
         default: break;
     }
 }
@@ -249,22 +262,22 @@ static void create_desktop(void)
     lv_obj_set_style_pad_bottom(desktop_view, 16, 0);
 
     // Hàng 1 (y = 16)
-    create_app_squircle(desktop_view, LV_SYMBOL_CHARGE,   "System",        "Dual Core 240M",  lv_color_hex(0x00F2FE), 1, 15, 16);
-    create_app_squircle(desktop_view, LV_SYMBOL_GPS,      "Maps Pro",      "WGS84 Vector",    lv_color_hex(0xFF3B30), 5, 170, 16);
-    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "Music Player",  "SD Card MP3",     lv_color_hex(0x9D4EDD), 8, 325, 16);
+    create_app_squircle(desktop_view, LV_SYMBOL_CHARGE,   "System",        "Dual Core 240M",  lv_color_hex(0x00F2FE), APP_SYSTEM,   15, 16);
+    create_app_squircle(desktop_view, LV_SYMBOL_GPS,      "Maps Pro",      "WGS84 Vector",    lv_color_hex(0xFF3B30), APP_MAP,      170, 16);
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "Music Player",  "SD Card MP3",     lv_color_hex(0x9D4EDD), APP_MUSIC,    325, 16);
 
     // Hàng 2 (y = 150)
-    create_app_squircle(desktop_view, LV_SYMBOL_PLAY,     "Voice & Mic",   "XiaoZhi AI",      lv_color_hex(0x00F2FE), 7, 15, 150);
-    create_app_squircle(desktop_view, LV_SYMBOL_WIFI,     "WiFi Hub",      "2.4GHz Scanner",  lv_color_hex(0x00E676), 3, 170, 150);
-    create_app_squircle(desktop_view, LV_SYMBOL_SETTINGS, "Settings",      "Control Center",  lv_color_hex(0xFFB300), 2, 325, 150);
+    create_app_squircle(desktop_view, LV_SYMBOL_PLAY,     "Voice & Mic",   "XiaoZhi AI",      lv_color_hex(0x00F2FE), APP_AUDIO,    15, 150);
+    create_app_squircle(desktop_view, LV_SYMBOL_WIFI,     "WiFi Hub",      "2.4GHz Scanner",  lv_color_hex(0x00E676), APP_WIFI,     170, 150);
+    create_app_squircle(desktop_view, LV_SYMBOL_SETTINGS, "Settings",      "Control Center",  lv_color_hex(0xFFB300), APP_SETTINGS, 325, 150);
 
     // Hàng 3 (y = 284)
-    create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), 6, 15, 284);
-    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi Gemini",  lv_color_hex(0x00F2FE), 9, 170, 284);
-    create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), 4, 325, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), APP_TOOLS,    15, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi Gemini",  lv_color_hex(0x00F2FE), APP_AI_VOICE, 170, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), APP_ABOUT,    325, 284);
 
     // Hàng 4 (y = 418)
-    create_app_squircle(desktop_view, LV_SYMBOL_IMAGE,    "Camera",        "DVP / RTSP",      lv_color_hex(0xFF006E), 10, 15, 418);
+    create_app_squircle(desktop_view, LV_SYMBOL_IMAGE,    "Camera",        "DVP / RTSP",      lv_color_hex(0xFF006E), APP_CAMERA,   15, 418);
 }
 
 /* 4. KHUNG CỬA SỔ ỨNG DỤNG PRO MAX (MODAL WINDOW 480x294) */
@@ -331,13 +344,24 @@ static void close_current_app(void)
         lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     }
     arc_cpu = nullptr;
+    lbl_cpu_arc_val = nullptr;
     arc_ram = nullptr;
+    lbl_ram_arc_val = nullptr;
     chart_system = nullptr;
     ser_cpu = nullptr;
     ser_ram = nullptr;
+    lbl_temp_chip = nullptr;
+    lbl_uptime_chip = nullptr;
+    lbl_psram_chip = nullptr;
     slider_brightness = nullptr;
+    lbl_brightness_val = nullptr;
+    wifi_status_lbl = nullptr;
     wifi_list = nullptr;
     wifi_pwd_modal = nullptr;
+    wifi_ta_pass = nullptr;
+    wifi_keyboard = nullptr;
+    lbl_compass_val = nullptr;
+    lbl_pitch_val = nullptr;
     map_app_close();
     audio_app_close();
     wifi_app_close();

@@ -26,6 +26,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install platformio
 
+      - name: Prepare Secrets Configuration
+        run: |
+          cp include/secrets.example.h include/secrets.h
+
       - name: Compile ESP32-S3 Firmware
         run: |
           pio run

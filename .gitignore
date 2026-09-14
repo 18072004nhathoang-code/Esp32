@@ -24,3 +24,7 @@ desktop.ini
 # Secrets & Credentials
 include/secrets.h
 
+# Backup files
+*.bak
+*.backup
+
