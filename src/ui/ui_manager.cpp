@@ -273,7 +273,7 @@ static void create_desktop(void)
 
     // Hàng 3 (y = 284)
     create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), APP_TOOLS,    15, 284);
-    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi Gemini",  lv_color_hex(0x00F2FE), APP_AI_VOICE, 170, 284);
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi (Demo)",  lv_color_hex(0x00F2FE), APP_AI_VOICE, 170, 284);
     create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), APP_ABOUT,    325, 284);
 
     // Hàng 4 (y = 418)
@@ -709,7 +709,7 @@ void ui_open_music_app(void)
 static void open_ai_voice_app(void)
 {
     ensure_app_window();
-    lv_label_set_text(app_title_lbl, "XiaoZhi AI Voice • Gemini Assistant");
+    lv_label_set_text(app_title_lbl, "XiaoZhi AI Voice (Demo/Mock)");
     lv_obj_clean(app_content_container);
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);

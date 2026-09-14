@@ -38,6 +38,76 @@ static SemaphoreHandle_t audio_mutex = nullptr;
 // Máy trạng thái phân quyền I2S phần cứng
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
+static bool i2s_duplex_installed = false;
+
+/* Cấu hình và cài đặt Driver I2S Duplex (16kHz 16-bit Duplex) cho Microphone & Tone/Voice */
+bool audio_install_duplex_driver(void)
+{
+    if (i2s_duplex_installed) return true;
+
+    i2s_config_t i2s_config = {
+        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
+        .sample_rate = AUDIO_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 6,
+        .dma_buf_len = 128,
+        .use_apll = true,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0
+    };
+
+    i2s_pin_config_t pin_config = {
+        .mck_io_num = AUDIO_I2S_MCLK,
+        .bck_io_num = AUDIO_I2S_BCLK,
+        .ws_io_num = AUDIO_I2S_WS,
+        .data_out_num = AUDIO_I2S_DOUT,
+        .data_in_num = AUDIO_I2S_DIN
+    };
+
+    esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+    if (err != ESP_OK)
+    {
+        Serial.printf("[AUDIO] ❌ LỖI cài đặt I2S Duplex Driver: 0x%X\n", err);
+        return false;
+    }
+
+    err = i2s_set_pin(I2S_NUM_0, &pin_config);
+    if (err != ESP_OK)
+    {
+        Serial.printf("[AUDIO] ❌ LỖI gán chân I2S: 0x%X\n", err);
+        i2s_driver_uninstall(I2S_NUM_0);
+        return false;
+    }
+
+    i2s_duplex_installed = true;
+    Serial.println("[AUDIO] ✔ Đã cài đặt I2S Duplex Driver (16kHz TX+RX) sẵn sàng.");
+    return true;
+}
+
+void audio_uninstall_duplex_driver(void)
+{
+    if (!i2s_duplex_installed) return;
+
+    i2s_zero_dma_buffer(I2S_NUM_0);
+    esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
+    if (err == ESP_OK)
+    {
+        i2s_duplex_installed = false;
+        Serial.println("[AUDIO] 🔌 Đã gỡ bỏ I2S Duplex Driver để nhường cổng I2S_NUM_0.");
+    }
+    else
+    {
+        Serial.printf("[AUDIO] Cảnh báo khi gỡ I2S Driver: 0x%X\n", err);
+    }
+}
+
+bool audio_is_driver_installed(void)
+{
+    return i2s_duplex_installed;
+}
 
 bool audio_request_ownership(AudioOwner requester)
 {
@@ -45,36 +115,63 @@ bool audio_request_ownership(AudioOwner requester)
     {
         audio_owner_mutex = xSemaphoreCreateMutex();
     }
-    if (xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    if (xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(150)) != pdTRUE)
     {
         return false;
     }
 
-    if (current_audio_owner == AUDIO_OWNER_NONE || current_audio_owner == requester)
+    // Nếu đã sở hữu từ trước
+    if (current_audio_owner == requester)
     {
-        current_audio_owner = requester;
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
 
-    // Hiệu ứng hệ thống ngắn được phép ưu tiên
-    if (requester == AUDIO_OWNER_SYSTEM)
+    // 1. Phân hệ MUSIC (ESP32-audioI2S) yêu cầu độc quyền I2S_NUM_0
+    if (requester == AUDIO_OWNER_MUSIC)
     {
-        current_audio_owner = requester;
+        // Nếu hệ thống đang bận ghi âm hoặc AI Voice đang hội thoại -> từ chối
+        if (current_audio_owner == AUDIO_OWNER_RECORDER || current_audio_owner == AUDIO_OWNER_AI_VOICE || recording_active)
+        {
+            xSemaphoreGive(audio_owner_mutex);
+            return false;
+        }
+
+        // Tạm dừng phát âm thanh hệ thống (nếu có)
+        playback_active = false;
+
+        // BẮT BUỘC: Gỡ bỏ I2S driver của AudioManager để ESP32-audioI2S cài driver riêng không bị xung đột
+        audio_uninstall_duplex_driver();
+
+        current_audio_owner = AUDIO_OWNER_MUSIC;
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
 
-    // Thu âm microphone hoặc AI voice cần I2S độc quyền
-    if (requester == AUDIO_OWNER_RECORDER || requester == AUDIO_OWNER_AI_VOICE)
+    // 2. Nếu MUSIC đang sở hữu I2S, các hệ thống khác (TONE, RECORDER, AI) KHÔNG được chiếm bus
+    if (current_audio_owner == AUDIO_OWNER_MUSIC)
     {
-        current_audio_owner = requester;
         xSemaphoreGive(audio_owner_mutex);
-        return true;
+        return false;
     }
 
-    // Nếu MUSIC yêu cầu khi hệ thống đang ghi âm/AI -> từ chối
-    if (requester == AUDIO_OWNER_MUSIC && (current_audio_owner == AUDIO_OWNER_RECORDER || current_audio_owner == AUDIO_OWNER_AI_VOICE))
+    // 3. Đảm bảo I2S Duplex Driver của AudioManager đã sẵn sàng
+    if (!i2s_duplex_installed)
+    {
+        if (!audio_install_duplex_driver())
+        {
+            xSemaphoreGive(audio_owner_mutex);
+            return false;
+        }
+    }
+
+    // 4. Phân xử giữa RECORDER và AI_VOICE
+    if (requester == AUDIO_OWNER_RECORDER && current_audio_owner == AUDIO_OWNER_AI_VOICE)
+    {
+        xSemaphoreGive(audio_owner_mutex);
+        return false;
+    }
+    if (requester == AUDIO_OWNER_AI_VOICE && recording_active)
     {
         xSemaphoreGive(audio_owner_mutex);
         return false;
@@ -87,11 +184,17 @@ bool audio_request_ownership(AudioOwner requester)
 
 void audio_release_ownership(AudioOwner requester)
 {
-    if (audio_owner_mutex && xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    if (audio_owner_mutex && xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(150)) == pdTRUE)
     {
         if (current_audio_owner == requester)
         {
             current_audio_owner = AUDIO_OWNER_NONE;
+
+            // Nếu MUSIC vừa nhả quyền sở hữu, cài đặt lại I2S Duplex Driver cho Mic và Tone
+            if (requester == AUDIO_OWNER_MUSIC)
+            {
+                audio_install_duplex_driver();
+            }
         }
         xSemaphoreGive(audio_owner_mutex);
     }
@@ -294,45 +397,19 @@ bool audio_manager_init(void)
     pinMode(AUDIO_PA_PIN, OUTPUT);
     audio_set_pa_enabled(true);
 
-    // 2. Cấu hình I2S ESP-IDF Driver (Full Duplex Master TX + RX)
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
-        .sample_rate = AUDIO_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 6,
-        .dma_buf_len = 128,
-        .use_apll = true,
-        .tx_desc_auto_clear = true,
-        .fixed_mclk = 0
-    };
-
-    i2s_pin_config_t pin_config = {
-        .mck_io_num = AUDIO_I2S_MCLK,
-        .bck_io_num = AUDIO_I2S_BCLK,
-        .ws_io_num = AUDIO_I2S_WS,
-        .data_out_num = AUDIO_I2S_DOUT,
-        .data_in_num = AUDIO_I2S_DIN
-    };
-
-    esp_err_t err = i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
-    if (err != ESP_OK)
+    // 2. Cài đặt Driver I2S Duplex (16kHz 16-bit Master TX + RX)
+    if (!audio_install_duplex_driver())
     {
-        Serial.printf("[AUDIO] LỖI cài đặt I2S Driver: 0x%X\n", err);
-        return false;
-    }
-
-    err = i2s_set_pin(I2S_NUM_0, &pin_config);
-    if (err != ESP_OK)
-    {
-        Serial.printf("[AUDIO] LỖI gắn chân I2S: 0x%X\n", err);
+        Serial.println("[AUDIO] ❌ Lỗi khởi tạo I2S Duplex Driver!");
         return false;
     }
 
     // 3. Khởi tạo Codec ES8311 qua I2C nếu có trên mạch
-    es8311_init_codec();
+    bool has_codec = es8311_init_codec();
+    if (has_codec)
+    {
+        Serial.println("[AUDIO] ✔ ES8311 Codec được cấu hình thành công");
+    }
     audio_set_volume(80);
 
     // 4. Cấp phát bộ đệm ghi âm 320KB trong 8MB Octal PSRAM
@@ -351,7 +428,7 @@ bool audio_manager_init(void)
     }
 
     // 5. Khởi tạo FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
-    xTaskCreatePinnedToCore(
+    BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_background_task,
         "Audio_Task",
         4096,
@@ -360,6 +437,13 @@ bool audio_manager_init(void)
         &audio_task_handle,
         0  // Core 0 (để Core 1 chuyên cho LVGL Display)
     );
+
+    if (task_ret != pdPASS)
+    {
+        Serial.println("[AUDIO] ❌ Không thể tạo Audio_Task trên Core 0!");
+        audio_uninstall_duplex_driver();
+        return false;
+    }
 
     is_initialized = true;
     Serial.println("[AUDIO] Hệ thống âm thanh đã sẵn sàng trên Core 0!");

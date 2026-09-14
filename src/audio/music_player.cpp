@@ -7,11 +7,12 @@
 #include "music_player.h"
 #include "audio_manager.h"
 #include "../apps/sd_map_cache.h"
+#include "../display/spi_bus_guard.h"
 #include <Audio.h>
 #include <SD.h>
 #include <FS.h>
 
-static Audio audio;
+static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
 static SemaphoreHandle_t audio_mutex = NULL;
 
@@ -44,7 +45,7 @@ static void music_audio_task(void *pvParameters)
         {
             if (audio_request_ownership(AUDIO_OWNER_MUSIC))
             {
-                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                 {
                     cmd_request_play = false;
                     Serial.printf("[MUSIC_AUDIO] Core 0 nhận lệnh mở tệp: %s\n", pending_filepath);
@@ -53,22 +54,41 @@ static void music_audio_task(void *pvParameters)
                     pinMode(AUDIO_PA_PIN, OUTPUT);
                     digitalWrite(AUDIO_PA_PIN, 0);
 
-                    // Áp dụng mức âm lượng (0 - 21 trong thư viện ESP32-audioI2S)
-                    uint8_t scaled_vol = (player_state.volume * 21) / 100;
-                    audio.setVolume(scaled_vol);
-
-                    // Nạp file từ thẻ nhớ SD
-                    if (SD.exists(pending_filepath))
+                    // Tái tạo đối tượng Audio động để cài driver I2S riêng biệt
+                    if (audio)
                     {
-                        audio.connecttoFS(SD, pending_filepath);
-                        player_state.is_playing = true;
-                        player_state.is_paused = false;
+                        delete audio;
+                        audio = nullptr;
                     }
-                    else
+                    audio = new Audio();
+                    if (audio)
                     {
-                        Serial.printf("[MUSIC_AUDIO] ⚠️ Không tìm thấy tệp %s, phát giả lập thời gian\n", pending_filepath);
-                        player_state.is_playing = true;
-                        player_state.is_paused = false;
+                        audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
+
+                        // Áp dụng mức âm lượng (0 - 21 trong thư viện ESP32-audioI2S)
+                        uint8_t scaled_vol = (player_state.volume * 21) / 100;
+                        audio->setVolume(scaled_vol);
+
+                        // Nạp file từ thẻ nhớ SD với khóa đồng bộ SPI
+                        bool file_exists = false;
+                        if (spi_bus_lock(500))
+                        {
+                            file_exists = SD.exists(pending_filepath);
+                            spi_bus_unlock();
+                        }
+
+                        if (file_exists)
+                        {
+                            audio->connecttoFS(SD, pending_filepath);
+                            player_state.is_playing = true;
+                            player_state.is_paused = false;
+                        }
+                        else
+                        {
+                            Serial.printf("[MUSIC_AUDIO] ⚠️ Không tìm thấy tệp %s, phát giả lập thời gian\n", pending_filepath);
+                            player_state.is_playing = true;
+                            player_state.is_paused = false;
+                        }
                     }
                     xSemaphoreGive(audio_mutex);
                 }
@@ -83,13 +103,13 @@ static void music_audio_task(void *pvParameters)
         // 2. Vòng lặp giải mã stream I2S liên tục khi đang phát nhạc
         if (player_state.is_playing && !player_state.is_paused)
         {
-            if (audio_get_current_owner() == AUDIO_OWNER_MUSIC)
+            if (audio_get_current_owner() == AUDIO_OWNER_MUSIC && audio != nullptr)
             {
-                audio.loop();
+                audio->loop();
 
                 // Cập nhật vị trí và thời lượng
-                uint32_t cur = audio.getAudioCurrentTime();
-                uint32_t dur = audio.getAudioFileDuration();
+                uint32_t cur = audio->getAudioCurrentTime();
+                uint32_t dur = audio->getAudioFileDuration();
                 
                 if (cur > 0) player_state.current_time_sec = cur;
                 if (dur > 0) player_state.total_duration_sec = dur;
@@ -115,22 +135,19 @@ bool music_player_init(void)
 {
     Serial.println("[MUSIC_PLAYER] Đang khởi tạo Music Player...");
 
-    audio_mutex = xSemaphoreCreateMutex();
-
-    // 1. Cấu hình chân phần cứng I2S (BCLK=18, WS=21, DOUT=15)
-    audio.setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
+    if (!audio_mutex)
+    {
+        audio_mutex = xSemaphoreCreateMutex();
+    }
 
     // Mở IC khuếch đại PA
     pinMode(AUDIO_PA_PIN, OUTPUT);
     digitalWrite(AUDIO_PA_PIN, 0);
 
-    // Cài đặt âm lượng ban đầu (80%)
-    audio.setVolume((player_state.volume * 21) / 100);
-
-    // 2. Quét thẻ nhớ MicroSD để tìm bài hát
+    // Quét thẻ nhớ MicroSD để tìm bài hát (có khóa SPI bus)
     music_player_scan_sd();
 
-    // 3. Khởi tạo FreeRTOS Task trên Core 0 (Priority 3: Audio Realtime)
+    // Khởi tạo FreeRTOS Task trên Core 0 (Priority 3: Audio Realtime)
     if (audio_task_handle == NULL)
     {
         BaseType_t ret = xTaskCreatePinnedToCore(
@@ -165,48 +182,52 @@ void music_player_scan_sd(void)
         sd_map_cache_init();
     }
 
-    // Kiểm tra thư mục /music
+    // Kiểm tra thư mục /music với khóa bảo vệ bus SPI
     if (sd_map_cache_is_available())
     {
-        if (!SD.exists(MUSIC_DIR))
+        if (spi_bus_lock(1000))
         {
-            Serial.printf("[MUSIC_PLAYER] Tạo thư mục nhạc: %s\n", MUSIC_DIR);
-            SD.mkdir(MUSIC_DIR);
-        }
-
-        File dir = SD.open(MUSIC_DIR);
-        if (dir && dir.isDirectory())
-        {
-            File file = dir.openNextFile();
-            while (file && total_tracks_found < MUSIC_MAX_TRACKS)
+            if (!SD.exists(MUSIC_DIR))
             {
-                if (!file.isDirectory())
-                {
-                    String fname = String(file.name());
-                    // Bỏ tiền tố thư mục nếu có
-                    int lastSlash = fname.lastIndexOf('/');
-                    if (lastSlash >= 0) fname = fname.substring(lastSlash + 1);
-
-                    if (fname.endsWith(".mp3") || fname.endsWith(".MP3"))
-                    {
-                        MusicTrack &track = playlist[total_tracks_found];
-                        strncpy(track.filename, fname.c_str(), sizeof(track.filename) - 1);
-                        snprintf(track.filepath, sizeof(track.filepath), "%s/%s", MUSIC_DIR, fname.c_str());
-
-                        // Tạo tên hiển thị đẹp từ filename (bỏ đuôi .mp3, thay _ bằng space)
-                        String title = fname.substring(0, fname.length() - 4);
-                        title.replace('_', ' ');
-                        strncpy(track.title, title.c_str(), sizeof(track.title) - 1);
-                        track.duration_sec = 210; // Mặc định thời lượng ước tính
-
-                        Serial.printf("[MUSIC_PLAYER] 🎵 Tìm thấy bài hát [%d]: %s (%s)\n", 
-                                      total_tracks_found + 1, track.title, track.filepath);
-                        total_tracks_found++;
-                    }
-                }
-                file = dir.openNextFile();
+                Serial.printf("[MUSIC_PLAYER] Tạo thư mục nhạc: %s\n", MUSIC_DIR);
+                SD.mkdir(MUSIC_DIR);
             }
-            dir.close();
+
+            File dir = SD.open(MUSIC_DIR);
+            if (dir && dir.isDirectory())
+            {
+                File file = dir.openNextFile();
+                while (file && total_tracks_found < MUSIC_MAX_TRACKS)
+                {
+                    if (!file.isDirectory())
+                    {
+                        String fname = String(file.name());
+                        // Bỏ tiền tố thư mục nếu có
+                        int lastSlash = fname.lastIndexOf('/');
+                        if (lastSlash >= 0) fname = fname.substring(lastSlash + 1);
+
+                        if (fname.endsWith(".mp3") || fname.endsWith(".MP3"))
+                        {
+                            MusicTrack &track = playlist[total_tracks_found];
+                            strncpy(track.filename, fname.c_str(), sizeof(track.filename) - 1);
+                            snprintf(track.filepath, sizeof(track.filepath), "%s/%s", MUSIC_DIR, fname.c_str());
+
+                            // Tạo tên hiển thị đẹp từ filename (bỏ đuôi .mp3, thay _ bằng space)
+                            String title = fname.substring(0, fname.length() - 4);
+                            title.replace('_', ' ');
+                            strncpy(track.title, title.c_str(), sizeof(track.title) - 1);
+                            track.duration_sec = 210; // Mặc định thời lượng ước tính
+
+                            Serial.printf("[MUSIC_PLAYER] 🎵 Tìm thấy bài hát [%d]: %s (%s)\n", 
+                                          total_tracks_found + 1, track.title, track.filepath);
+                            total_tracks_found++;
+                        }
+                    }
+                    file = dir.openNextFile();
+                }
+                dir.close();
+            }
+            spi_bus_unlock();
         }
     }
 
@@ -318,10 +339,12 @@ void music_player_pause(void)
 {
     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
     {
-        audio.pauseResume();
+        if (audio)
+        {
+            audio->pauseResume();
+        }
         player_state.is_paused = true;
         xSemaphoreGive(audio_mutex);
-        audio_release_ownership(AUDIO_OWNER_MUSIC);
         Serial.println("[MUSIC_PLAYER] ⏸ Tạm dừng phát nhạc");
     }
 }
@@ -332,9 +355,19 @@ void music_player_resume(void)
     {
         if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            audio.pauseResume();
-            player_state.is_paused = false;
-            player_state.is_playing = true;
+            if (audio)
+            {
+                audio->pauseResume();
+                player_state.is_paused = false;
+                player_state.is_playing = true;
+            }
+            else
+            {
+                // Nếu chưa có đối tượng Audio, khởi động lại bài hát hiện tại
+                xSemaphoreGive(audio_mutex);
+                music_player_play_index(player_state.current_track_idx);
+                return;
+            }
             xSemaphoreGive(audio_mutex);
             Serial.println("[MUSIC_PLAYER] ▶ Tiếp tục phát nhạc");
         }
@@ -343,15 +376,20 @@ void music_player_resume(void)
 
 void music_player_stop(void)
 {
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
-        audio.stopSong();
+        if (audio)
+        {
+            audio->stopSong();
+            delete audio;
+            audio = nullptr;
+        }
         player_state.is_playing = false;
         player_state.is_paused = false;
         player_state.current_time_sec = 0;
         xSemaphoreGive(audio_mutex);
         audio_release_ownership(AUDIO_OWNER_MUSIC);
-        Serial.println("[MUSIC_PLAYER] ⏹ Dừng phát nhạc");
+        Serial.println("[MUSIC_PLAYER] ⏹ Dừng phát nhạc & giải phóng I2S driver");
     }
 }
 
@@ -359,7 +397,10 @@ void music_player_seek(uint32_t sec)
 {
     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
     {
-        audio.setAudioPlayPosition(sec);
+        if (audio)
+        {
+            audio->setAudioPlayPosition(sec);
+        }
         player_state.current_time_sec = sec;
         xSemaphoreGive(audio_mutex);
         Serial.printf("[MUSIC_PLAYER] ⏩ Tua tới giây %u\n", sec);
@@ -372,7 +413,10 @@ void music_player_set_volume(uint8_t vol_percent)
     player_state.volume = vol_percent;
 
     uint8_t scaled_vol = (vol_percent * 21) / 100;
-    audio.setVolume(scaled_vol);
+    if (audio)
+    {
+        audio->setVolume(scaled_vol);
+    }
     Serial.printf("[MUSIC_PLAYER] 🔊 Đặt âm lượng: %d%%\n", vol_percent);
 }
 

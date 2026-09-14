@@ -32,7 +32,8 @@
     #define LCD_RST         -1      // Nối EN hoặc để -1
     #define LCD_BL          45      // Điều khiển độ sáng đèn nền PWM (hoặc GPIO 48 / 16 tùy revision)
 
-    #define TOUCH_TYPE_CAPACITIVE   // Cảm ứng điện dung FT6336U / GT911
+    // Cảm ứng điện dung: Mặc định chip FocalTech FT6336U (đổi sang TOUCH_CONTROLLER_GT911 nếu dùng GT911)
+    #define TOUCH_CONTROLLER_FT6336U
     #define TOUCH_SDA       8       // Chân I2C SDA
     #define TOUCH_SCL       9       // Chân I2C SCL
     #define TOUCH_INT       -1      // Chế độ polling qua I2C (tránh xung đột với LCD_DC GPIO 4)
@@ -48,7 +49,7 @@
     #define LCD_RST         -1
     #define LCD_BL          16
 
-    #define TOUCH_TYPE_RESISTIVE    // Dùng chip XPT2046
+    #define TOUCH_CONTROLLER_XPT2046    // Dùng chip cảm ứng điện trở XPT2046 SPI
     #define TOUCH_MOSI      11
     #define TOUCH_MISO      13
     #define TOUCH_SCK       12
@@ -65,7 +66,7 @@
     #define LCD_RST         -1
     #define LCD_BL          16
 
-    #define TOUCH_TYPE_CAPACITIVE
+    #define TOUCH_CONTROLLER_CST816S    // Dùng chip cảm ứng điện dung Hynitron CST816S I2C
     #define TOUCH_SDA       4
     #define TOUCH_SCL       5
     #define TOUCH_INT       0
@@ -81,7 +82,7 @@
     #define LCD_RST         -1
     #define LCD_BL          21
 
-    #define TOUCH_TYPE_RESISTIVE
+    #define TOUCH_CONTROLLER_XPT2046
     #define TOUCH_MOSI      13
     #define TOUCH_MISO      12
     #define TOUCH_SCK       14
@@ -96,7 +97,7 @@
     #define LCD_CS          10
     #define LCD_RST         -1
     #define LCD_BL          45
-    #define TOUCH_TYPE_CAPACITIVE
+    #define TOUCH_CONTROLLER_FT6336U
     #define TOUCH_SDA       8
     #define TOUCH_SCL       9
     #define TOUCH_INT       -1
@@ -129,10 +130,14 @@ class LGFX : public lgfx::LGFX_Device
     lgfx::Bus_SPI       _bus_instance;      // Giao tiếp SPI phần cứng
     lgfx::Light_PWM     _light_instance;    // PWM LED Backlight
 
-#if defined(TOUCH_TYPE_RESISTIVE)
-    lgfx::Touch_XPT2046 _touch_instance;    // Driver cảm ứng điện trở
-#elif defined(TOUCH_TYPE_CAPACITIVE)
-    lgfx::Touch_FT5x06  _touch_instance;    // Driver cảm ứng điện dung FT6336U / GT911
+#if defined(TOUCH_CONTROLLER_XPT2046)
+    lgfx::Touch_XPT2046 _touch_instance;    // Driver cảm ứng điện trở SPI
+#elif defined(TOUCH_CONTROLLER_GT911)
+    lgfx::Touch_GT911   _touch_instance;    // Driver cảm ứng điện dung Goodix GT911
+#elif defined(TOUCH_CONTROLLER_CST816S)
+    lgfx::Touch_CSTxxx  _touch_instance;    // Driver cảm ứng điện dung Hynitron CST816S
+#else
+    lgfx::Touch_FT5x06  _touch_instance;    // Driver cảm ứng điện dung FocalTech FT6336U / FT5x06
 #endif
 
 public:
@@ -199,9 +204,9 @@ public:
             _panel_instance.setLight(&_light_instance);
         }
 
-#if defined(TOUCH_TYPE_RESISTIVE)
+#if defined(TOUCH_CONTROLLER_XPT2046)
         {
-            // Cấu hình Cảm ứng điện trở XPT2046
+            // Cấu hình Cảm ứng điện trở XPT2046 (SPI)
             auto cfg = _touch_instance.config();
             cfg.x_min      = 300;
             cfg.x_max      = 3900;
@@ -218,30 +223,60 @@ public:
             _touch_instance.config(cfg);
             _panel_instance.setTouch(&_touch_instance);
         }
-#elif defined(TOUCH_TYPE_CAPACITIVE)
+#elif defined(TOUCH_CONTROLLER_GT911)
         {
-            // Cấu hình Cảm ứng điện dung (I2C)
+            // Cấu hình Cảm ứng điện dung Goodix GT911 (I2C)
             auto cfg = _touch_instance.config();
-#if defined(BOARD_DIYMORE_S3_35C)
             cfg.x_min      = 0;
             cfg.x_max      = 319;
             cfg.y_min      = 0;
             cfg.y_max      = 479;
-            cfg.i2c_addr   = 0x38;          // FT6336U default 0x38 (hoặc GT911 0x5D/0x14)
-#else
+            cfg.pin_int    = TOUCH_INT;
+            cfg.bus_shared = false;
+            cfg.i2c_port   = 1;
+            cfg.i2c_addr   = 0x5D;          // Goodix GT911 mặc định 0x5D (hoặc 0x14)
+            cfg.pin_sda    = TOUCH_SDA;
+            cfg.pin_scl    = TOUCH_SCL;
+            cfg.pin_rst    = TOUCH_RST;
+            cfg.freq       = 400000;
+            _touch_instance.config(cfg);
+            _panel_instance.setTouch(&_touch_instance);
+        }
+#elif defined(TOUCH_CONTROLLER_CST816S)
+        {
+            // Cấu hình Cảm ứng điện dung Hynitron CST816S (I2C)
+            auto cfg = _touch_instance.config();
             cfg.x_min      = 0;
             cfg.x_max      = 239;
             cfg.y_min      = 0;
             cfg.y_max      = 319;
-            cfg.i2c_addr   = 0x15;          // CST816S default 0x15
-#endif
             cfg.pin_int    = TOUCH_INT;
             cfg.bus_shared = false;
             cfg.i2c_port   = 1;
+            cfg.i2c_addr   = 0x15;          // CST816S mặc định 0x15
             cfg.pin_sda    = TOUCH_SDA;
             cfg.pin_scl    = TOUCH_SCL;
             cfg.pin_rst    = TOUCH_RST;
-            cfg.freq       = 400000;        // I2C 400kHz Fast Mode
+            cfg.freq       = 400000;
+            _touch_instance.config(cfg);
+            _panel_instance.setTouch(&_touch_instance);
+        }
+#else
+        {
+            // Cấu hình Cảm ứng điện dung FocalTech FT6336U / FT5x06 (I2C)
+            auto cfg = _touch_instance.config();
+            cfg.x_min      = 0;
+            cfg.x_max      = 319;
+            cfg.y_min      = 0;
+            cfg.y_max      = 479;
+            cfg.pin_int    = TOUCH_INT;
+            cfg.bus_shared = false;
+            cfg.i2c_port   = 1;
+            cfg.i2c_addr   = 0x38;          // FocalTech FT6336U mặc định 0x38
+            cfg.pin_sda    = TOUCH_SDA;
+            cfg.pin_scl    = TOUCH_SCL;
+            cfg.pin_rst    = TOUCH_RST;
+            cfg.freq       = 400000;
             _touch_instance.config(cfg);
             _panel_instance.setTouch(&_touch_instance);
         }

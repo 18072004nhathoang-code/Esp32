@@ -1,19 +1,46 @@
 /**
  * @file camera_types.h
- * @brief Định nghĩa các kiểu dữ liệu, cấu hình và cấu trúc Frame cho hệ thống Camera / RTSP
+ * @brief Định nghĩa các kiểu dữ liệu, profile camera đa hãng và cấu trúc Frame
+ * cho ESP32-S3 Mini OS Camera Subsystem.
  */
 
 #pragma once
 
 #include <Arduino.h>
 
-// Các dòng cảm biến Camera tương thích ESP32-S3
+// Loại nguồn cung cấp Camera
+enum CameraSourceType
+{
+    CAM_SOURCE_NONE = 0,
+    CAM_SOURCE_LOCAL_DVP,       // Camera phần cứng trực tiếp qua giao tiếp DVP 8-bit (OV2640 / OV5640)
+    CAM_SOURCE_NETWORK_STREAM   // IP Camera qua mạng (ONVIF / RTSP / MJPEG / HTTP Snapshot)
+};
+
+// Cảm biến Camera DVP phần cứng cục bộ
 enum CameraModel
 {
     CAMERA_MODEL_NONE = 0,
-    CAMERA_MODEL_OV2640,
-    CAMERA_MODEL_OV5640,
-    CAMERA_MODEL_GC0308
+    CAMERA_MODEL_OV2640,        // OmniVision OV2640 2MP
+    CAMERA_MODEL_OV5640,        // OmniVision OV5640 5MP
+    CAMERA_MODEL_GC0308         // GalaxyCore GC0308 VGA
+};
+
+// Các profile hỗ trợ của các hãng Camera an ninh phổ biến
+enum CameraVendorProfile
+{
+    CAM_VENDOR_GENERIC_ONVIF = 0, // Chuẩn ONVIF chung (Profile S)
+    CAM_VENDOR_HIKVISION,         // Hikvision IP Camera / NVR
+    CAM_VENDOR_KBVISION,          // KBVision / Dahua IP Camera
+    CAM_VENDOR_EZVIZ,             // Ezviz Cloud / Local RTSP
+    CAM_VENDOR_YOOSEE             // Yoosee / SriHome Smart Cam
+};
+
+// Giao thức truyền phát hình ảnh qua mạng
+enum CameraStreamProtocol
+{
+    CAM_PROTO_HTTP_SNAPSHOT = 0, // Ảnh tĩnh chụp định kỳ qua HTTP (JPEG)
+    CAM_PROTO_MJPEG,             // Luồng Motion JPEG HTTP
+    CAM_PROTO_RTSP               // Real Time Streaming Protocol (RTSP H.264/H.265)
 };
 
 // Định dạng điểm ảnh đầu ra
@@ -44,14 +71,14 @@ struct CameraFrame
     uint32_t timestamp_ms;
 };
 
-// Cấu hình chân phần cứng và thông số DVP Camera
-struct CameraConfig
+// Cấu hình Camera DVP cục bộ
+struct LocalCameraConfig
 {
     CameraModel model;
     CameraFrameSize frame_size;
     CameraPixelFormat pixel_format;
-    uint8_t jpeg_quality; // 0 - 63 (chất lượng cao nhất: số nhỏ hơn)
-    uint8_t fb_count;     // Số lượng frame buffer trong PSRAM (1 hoặc 2)
+    uint8_t jpeg_quality; // 0 - 63
+    uint8_t fb_count;     // Số buffer PSRAM (1 hoặc 2)
 
     // Sơ đồ chân giao tiếp DVP 8-bit
     int8_t pin_pwdn;
@@ -71,5 +98,19 @@ struct CameraConfig
     int8_t pin_href;
     int8_t pin_pclk;
 
-    uint32_t xclk_freq_hz; // Tần số clock XCLK (10MHz - 20MHz)
+    uint32_t xclk_freq_hz;
+};
+
+// Thông số cấu hình IP Camera qua mạng
+struct NetworkCameraProfile
+{
+    CameraVendorProfile vendor;
+    CameraStreamProtocol protocol;
+    char name[32];
+    char ip[48];
+    uint16_t port;
+    char username[32];
+    char password[32];
+    uint8_t channel;
+    char custom_url[128];
 };

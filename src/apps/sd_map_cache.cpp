@@ -5,32 +5,19 @@
 
 #include "sd_map_cache.h"
 #include "../display/lvgl_port.h"
+#include "../display/spi_bus_guard.h"
 
 static bool sd_initialized = false;
-static SPIClass sd_spi(FSPI); // Hoặc HSPI/VSPI tùy theo cấu hình bus phần cứng
-static SemaphoreHandle_t sd_bus_mutex = nullptr;
+static SPIClass sd_spi(FSPI); // FSPI (SPI2_HOST) dùng chung GPIO 11/12/13
 
 static bool sd_acquire_bus(uint32_t timeout_ms = 1000)
 {
-    if (!sd_bus_mutex)
-    {
-        sd_bus_mutex = xSemaphoreCreateMutex();
-    }
-    if (xSemaphoreTake(sd_bus_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)
-    {
-        // Chờ hoàn tất mọi tác vụ DMA/SPI của màn hình LovyanGFX trên bus dùng chung
-        gfx.waitDMA();
-        return true;
-    }
-    return false;
+    return spi_bus_lock(timeout_ms);
 }
 
 static void sd_release_bus(void)
 {
-    if (sd_bus_mutex)
-    {
-        xSemaphoreGive(sd_bus_mutex);
-    }
+    spi_bus_unlock();
 }
 
 bool sd_map_cache_init(void)

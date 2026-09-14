@@ -68,6 +68,11 @@ bool map_tile_downloader_has_new_data(void);
 const lv_color_t* map_tile_downloader_get_buffer(void);
 
 /**
+ * @brief Sao chép an toàn dữ liệu từ Front Buffer sang bộ đệm đích dưới khóa Mutex (chống tearing)
+ */
+bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels);
+
+/**
  * @brief Đánh dấu đã nạp xong ảnh vào màn hình
  */
 void map_tile_downloader_clear_new_data(void);

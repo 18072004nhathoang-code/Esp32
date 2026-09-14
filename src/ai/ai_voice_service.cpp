@@ -97,7 +97,7 @@ bool ai_voice_init(void)
 
     // Thêm tin nhắn chào mừng mặc định ban đầu
     ai_voice_clear_history();
-    ai_voice_add_message(false, "Xin chào! Tôi là XiaoZhi AI Voice Assistant trên ESP32-S3. Hãy nhấn giữ nút Micro bên dưới để trò chuyện cùng tôi nhé!");
+    ai_voice_add_message(false, "Xin chào! Tôi là XiaoZhi AI Voice Assistant (Demo/Mock giả lập trên ESP32-S3). Hãy nhấn giữ nút Micro bên dưới để thử nghiệm trò chuyện cùng tôi nhé!");
 
     // Khởi tạo Task FreeRTOS trên Core 0
     if (ai_task_handle == NULL)

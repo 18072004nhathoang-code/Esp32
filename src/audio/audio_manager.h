@@ -62,6 +62,22 @@ void audio_release_ownership(AudioOwner requester);
 AudioOwner audio_get_current_owner(void);
 
 /**
+ * @brief Cài đặt Driver I2S Duplex (16kHz 16-bit Master TX+RX) cho hệ thống âm thanh nội bộ
+ * @return true nếu driver được cài đặt thành công
+ */
+bool audio_install_duplex_driver(void);
+
+/**
+ * @brief Gỡ bỏ Driver I2S Duplex để nhường cổng I2S_NUM_0 hoàn toàn cho ESP32-audioI2S
+ */
+void audio_uninstall_duplex_driver(void);
+
+/**
+ * @brief Kiểm tra xem I2S Duplex driver của AudioManager có đang được cài đặt không
+ */
+bool audio_is_driver_installed(void);
+
+/**
  * @brief Khởi tạo Driver I2S Duplex và cấu hình Codec ES8311 / PA Loa
  * Chạy tác vụ xử lý âm thanh ngầm trên Core 0 (đảm bảo không gián đoạn đồ họa LVGL trên Core 1)
  */

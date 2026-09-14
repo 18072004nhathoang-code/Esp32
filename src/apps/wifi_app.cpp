@@ -108,15 +108,14 @@ static void connect_btn_event_cb(lv_event_t *e)
     wifi_manager_connect(current_selected_ssid, pwd);
 }
 
-// Bấm nút Quên Mạng (Xóa NVS)
+// Bấm nút Quên Mạng (Xóa NVS và chặn auto-reconnect)
 static void forget_btn_event_cb(lv_event_t *e)
 {
-    wifi_manager_clear_credentials();
-    wifi_manager_disconnect();
+    wifi_manager_forget_network();
 
     if (lbl_status)
     {
-        lv_label_set_text(lbl_status, "🗑 Đã xóa mạng khỏi Flash NVS");
+        lv_label_set_text(lbl_status, "🗑 Đã quên mạng khỏi hệ thống");
         lv_obj_set_style_text_color(lbl_status, lv_color_hex(0xFF3B30), 0);
     }
     if (ta_password)

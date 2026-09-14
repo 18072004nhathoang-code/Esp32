@@ -4,6 +4,7 @@
  */
 
 #include "lvgl_port.h"
+#include "spi_bus_guard.h"
 #include "../os/power_manager.h"
 #include <esp_heap_caps.h>
 
@@ -32,11 +33,25 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    gfx.startWrite();
-    gfx.setAddrWindow(area->x1, area->y1, w, h);
-    gfx.writePixelsDMA((uint16_t *)color_p, w * h);
-    gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi kết thúc transaction
-    gfx.endWrite();
+    // Đồng bộ bus SPI dùng chung với thẻ nhớ MicroSD
+    if (spi_bus_lock(500))
+    {
+        gfx.startWrite();
+        gfx.setAddrWindow(area->x1, area->y1, w, h);
+        gfx.writePixelsDMA((uint16_t *)color_p, w * h);
+        gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi nhả SPI bus
+        gfx.endWrite();
+        spi_bus_unlock();
+    }
+    else
+    {
+        // Fallback khẩn cấp nếu timeout mutex: vẫn đợi DMA và ghi an toàn
+        gfx.startWrite();
+        gfx.setAddrWindow(area->x1, area->y1, w, h);
+        gfx.writePixelsDMA((uint16_t *)color_p, w * h);
+        gfx.waitDMA();
+        gfx.endWrite();
+    }
 
     // Báo cho LVGL biết frame đã hoàn thành để vẽ frame tiếp theo
     lv_disp_flush_ready(disp);
@@ -134,6 +149,8 @@ void lvgl_port_unlock(void)
 
 bool lvgl_port_init(void)
 {
+    spi_bus_guard_init();
+
     log_i("Khởi tạo phần cứng LovyanGFX...");
     if (!gfx.init())
     {

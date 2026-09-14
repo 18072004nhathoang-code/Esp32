@@ -60,9 +60,9 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_set_style_border_width(bubble, 1, 0);
         lv_obj_set_style_radius(bubble, 14, 0);
 
-        // Header nhỏ: 🤖 XiaoZhi AI
+        // Header nhỏ: 🤖 XiaoZhi AI (Demo/Mock)
         lv_obj_t *lbl_hdr = lv_label_create(bubble);
-        lv_label_set_text(lbl_hdr, "🤖 XiaoZhi AI");
+        lv_label_set_text(lbl_hdr, "🤖 XiaoZhi AI (Demo/Mock)");
         lv_obj_set_style_text_color(lbl_hdr, lv_color_hex(0x00F2FE), 0);
         lv_obj_set_style_text_font(lbl_hdr, &lv_font_montserrat_12, 0);
         lv_obj_align(lbl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);

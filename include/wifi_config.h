@@ -5,17 +5,27 @@
 
 #pragma once
 
-// Nếu bạn muốn bo mạch tự động kết nối WiFi nhà bạn ngay khi bật nguồn,
-// hãy điền tên mạng và mật khẩu vào đây. Nếu để trống, bạn có thể quét và
-// nhập mật khẩu trực tiếp bằng bàn phím cảm ứng trên màn hình 2.8".
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+#ifndef DEFAULT_WIFI_SSID
 #define DEFAULT_WIFI_SSID ""
+#endif
+
+#ifndef DEFAULT_WIFI_PASS
 #define DEFAULT_WIFI_PASS ""
+#endif
 
 // Thời gian chờ kết nối tối đa (mili-giây)
+#ifndef WIFI_CONNECT_TIMEOUT_MS
 #define WIFI_CONNECT_TIMEOUT_MS 15000
+#endif
 
-// Bật tự động kết nối lại khi mất sóng
+// Bật tự động kết nối lại khi mất sóng (1 = Bật, 0 = Tắt)
+#ifndef WIFI_AUTO_RECONNECT
 #define WIFI_AUTO_RECONNECT 1
+#endif
 
 // Tên phân vùng NVS lưu trữ thông tin mạng
 #define WIFI_PREFS_NAMESPACE "minios_wifi"

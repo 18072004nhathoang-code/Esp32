@@ -1,76 +1,122 @@
 /**
  * @file camera_service.cpp
- * @brief Triển khai tầng dịch vụ quản lý Camera / RTSP Video Streamer cho ESP32-S3
- * Thiết kế chuẩn để mở rộng thêm OV2640 / OV5640 / RTSP / ONVIF sau này.
+ * @brief Triển khai tầng dịch vụ thống nhất quản lý Camera cho UI (Vendor-Agnostic Facade)
  */
 
 #include "camera_service.h"
 
-static bool is_cam_available = false;
-static bool is_cam_streaming = false;
-static CameraModel active_model = CAMERA_MODEL_NONE;
-static CameraConfig active_config;
+static CameraSourceType active_source = CAM_SOURCE_LOCAL_DVP;
+static char status_text_buffer[64] = "Chưa kết nối Camera";
 
-bool camera_service_init(const CameraConfig &config)
+bool camera_service_init(void)
 {
-    active_config = config;
-    Serial.println("[CAMERA] Đang quét phần cứng cảm biến Camera DVP...");
+    Serial.println("[CAMERA] Khởi tạo hệ thống quản lý Camera đa nguồn...");
 
-    // Khi chưa có phần cứng Camera cắm vào chân GPIO, đánh dấu không khả dụng một cách an toàn
-    // Không crash, không loop vô tận và không chiếm dụng bộ đệm DMA
-    is_cam_available = false;
-    is_cam_streaming = false;
-    active_model = CAMERA_MODEL_NONE;
+    // Cấu hình thử Camera DVP cục bộ
+    LocalCameraConfig local_cfg;
+    memset(&local_cfg, 0, sizeof(local_cfg));
+    g_local_camera.init(local_cfg);
 
-    Serial.println("[CAMERA] ⚠️ Không phát hiện cảm biến Camera DVP (Hệ thống sẵn sàng mở rộng module OV2640/OV5640).");
-    return false;
+    if (g_local_camera.isAvailable())
+    {
+        active_source = CAM_SOURCE_LOCAL_DVP;
+        snprintf(status_text_buffer, sizeof(status_text_buffer), "DVP: %s", g_local_camera.getSensorName());
+    }
+    else
+    {
+        active_source = CAM_SOURCE_NETWORK_STREAM;
+        snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
+    }
+
+    return true;
+}
+
+void camera_service_set_source(CameraSourceType source)
+{
+    active_source = source;
+}
+
+CameraSourceType camera_service_get_source(void)
+{
+    return active_source;
+}
+
+bool camera_service_configure_network(const NetworkCameraProfile &profile)
+{
+    bool ok = g_network_camera.configure(profile);
+    if (ok)
+    {
+        snprintf(status_text_buffer, sizeof(status_text_buffer), "%s (%s)",
+                 NetworkCameraService::getVendorName(profile.vendor), profile.ip);
+    }
+    return ok;
 }
 
 bool camera_service_start(void)
 {
-    if (!is_cam_available)
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
-        return false;
+        return g_local_camera.start();
     }
-    is_cam_streaming = true;
-    Serial.println("[CAMERA] Đã kích hoạt luồng phát hình Video.");
-    return true;
+    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    {
+        return g_network_camera.start();
+    }
+    return false;
 }
 
 void camera_service_stop(void)
 {
-    is_cam_streaming = false;
-    Serial.println("[CAMERA] Đã dừng luồng phát hình Video.");
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        g_local_camera.stop();
+    }
+    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    {
+        g_network_camera.stop();
+    }
 }
 
 CameraFrame* camera_service_get_frame(uint32_t timeout_ms)
 {
-    // Mock an toàn: Khi chưa có phần cứng, trả về nullptr
-    if (!is_cam_available || !is_cam_streaming)
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
-        return nullptr;
+        return g_local_camera.getFrame(timeout_ms);
     }
     return nullptr;
 }
 
 void camera_service_return_frame(CameraFrame *frame)
 {
-    if (frame == nullptr) return;
-    // Giải phóng / tái sử dụng frame buffer
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        g_local_camera.returnFrame(frame);
+    }
 }
 
 bool camera_service_is_available(void)
 {
-    return is_cam_available;
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        return g_local_camera.isAvailable();
+    }
+    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    {
+        return g_network_camera.isConnected();
+    }
+    return false;
+}
+
+const char* camera_service_get_status_text(void)
+{
+    return status_text_buffer;
 }
 
 const char* camera_service_get_model_name(void)
 {
-    switch (active_model)
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
-        case CAMERA_MODEL_OV2640: return "OmniVision OV2640 (2MP)";
-        case CAMERA_MODEL_OV5640: return "OmniVision OV5640 (5MP)";
-        case CAMERA_MODEL_GC0308: return "GalaxyCore GC0308 (VGA)";
-        default: return "No Camera Hardware Detected";
+        return g_local_camera.getSensorName();
     }
+    return "Network IP Camera";
 }

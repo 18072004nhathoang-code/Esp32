@@ -173,11 +173,10 @@ void map_app_render(void)
     // Kiểm tra xem đã có ảnh mới giải mã từ Task nền (thẻ SD hoặc mạng) chưa
     if (map_tile_downloader_has_new_data())
     {
-        const lv_color_t *tile_buf = map_tile_downloader_get_buffer();
-        if (tile_buf && canvas_buffer)
+        if (canvas_buffer)
         {
-            // Sao chép vùng ảnh 480x266 từ bộ đệm 480x320
-            memcpy(canvas_buffer, tile_buf, MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT * sizeof(lv_color_t));
+            // Sao chép an toàn từ Front Buffer dưới khóa Mutex (ngăn ngừa tuyệt đối race condition & tearing)
+            map_tile_downloader_copy_front(canvas_buffer, MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT);
         }
         map_tile_downloader_clear_new_data();
 

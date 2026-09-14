@@ -112,3 +112,18 @@ bool wifi_manager_load_credentials(String &ssid, String &pass);
  * @brief Xóa thông tin WiFi đã lưu trong NVS Flash
  */
 void wifi_manager_clear_credentials(void);
+
+/**
+ * @brief Quên mạng hiện tại (Xóa NVS, xóa mục tiêu kết nối và chặn tự động reconnect)
+ */
+void wifi_manager_forget_network(void);
+
+/**
+ * @brief Bật hoặc tắt tính năng tự động kết nối lại khi mất sóng
+ */
+void wifi_manager_set_auto_reconnect(bool enable);
+
+/**
+ * @brief Kiểm tra trạng thái cấu hình tự động kết nối lại
+ */
+bool wifi_manager_is_auto_reconnect_enabled(void);

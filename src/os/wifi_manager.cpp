@@ -29,6 +29,8 @@ static uint32_t connect_start_time = 0;
 static bool should_save_credentials = false;
 static uint32_t reconnect_backoff_ms = 2000;
 static uint32_t last_disconnect_time = 0;
+static bool auto_reconnect_enabled = (WIFI_AUTO_RECONNECT != 0);
+static bool manual_disconnect = false;
 
 static void lock_wifi()
 {
@@ -121,7 +123,8 @@ static void wifi_service_task(void *pvParameters)
         else if (current_state == WIFI_STATE_DISCONNECTED || current_state == WIFI_STATE_FAILED)
         {
             // Tự động kết nối lại (Auto-reconnect) với Exponential Backoff (2s -> 4s -> 8s -> ... -> max 60s)
-            if (strlen(target_ssid) > 0 && (millis() - last_disconnect_time >= reconnect_backoff_ms))
+            // Chỉ thực hiện khi người dùng không chủ động Forget/Disconnect và auto reconnect bật
+            if (auto_reconnect_enabled && !manual_disconnect && strlen(target_ssid) > 0 && (millis() - last_disconnect_time >= reconnect_backoff_ms))
             {
                 log_i("Tự động kết nối lại WiFi '%s' (Backoff: %u ms)...", target_ssid, reconnect_backoff_ms);
                 reconnect_backoff_ms = (reconnect_backoff_ms * 2 > 60000) ? 60000 : (reconnect_backoff_ms * 2);
@@ -214,6 +217,8 @@ bool wifi_manager_connect(const char *ssid, const char *pass)
     if (ssid == nullptr || strlen(ssid) == 0) return false;
 
     lock_wifi();
+    manual_disconnect = false;
+    reconnect_backoff_ms = 2000;
     strncpy(target_ssid, ssid, sizeof(target_ssid) - 1);
     target_ssid[sizeof(target_ssid) - 1] = '\0';
 
@@ -238,9 +243,13 @@ bool wifi_manager_connect(const char *ssid, const char *pass)
 void wifi_manager_disconnect(void)
 {
     lock_wifi();
+    manual_disconnect = true;
+    target_ssid[0] = '\0';
+    target_pass[0] = '\0';
     WiFi.disconnect();
     current_state = WIFI_STATE_DISCONNECTED;
     unlock_wifi();
+    log_i("Đã ngắt kết nối WiFi thủ công (Đã xóa runtime target & vô hiệu hóa auto-reconnect)");
 }
 
 WiFiState wifi_manager_get_state(void)
@@ -317,4 +326,24 @@ void wifi_manager_clear_credentials(void)
     prefs.remove(WIFI_PREFS_KEY_PASS);
     prefs.end();
     log_i("Đã xóa thông tin WiFi trong NVS Flash");
+}
+
+void wifi_manager_forget_network(void)
+{
+    wifi_manager_clear_credentials();
+    wifi_manager_disconnect();
+    log_i("Đã quên mạng WiFi hiện tại: NVS đã xóa, runtime target đã dọn sạch, ngắt kết nối an toàn.");
+}
+
+void wifi_manager_set_auto_reconnect(bool enable)
+{
+    lock_wifi();
+    auto_reconnect_enabled = enable;
+    unlock_wifi();
+    log_i("Cấu hình WiFi Auto-Reconnect: %s", enable ? "BẬT" : "TẮT");
+}
+
+bool wifi_manager_is_auto_reconnect_enabled(void)
+{
+    return auto_reconnect_enabled;
 }
