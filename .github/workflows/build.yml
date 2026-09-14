@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -15,20 +16,37 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Install PlatformIO Core
         run: |
           python -m pip install --upgrade pip
           pip install platformio
 
-      - name: Prepare Secrets Configuration
+      - name: Create secrets.h from GitHub Secrets
+        env:
+          WIFI_SSID: ${{ secrets.WIFI_SSID }}
+          WIFI_PASS: ${{ secrets.WIFI_PASS }}
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
-          cp include/secrets.example.h include/secrets.h
+          cat << EOF > include/secrets.h
+          #pragma once
+
+          // Cấu hình mạng WiFi mặc định từ GitHub Secrets
+          #define DEFAULT_WIFI_SSID           "${WIFI_SSID:-Your_WiFi_SSID}"
+          #define DEFAULT_WIFI_PASS           "${WIFI_PASS:-Your_WiFi_Password}"
+
+          // Google Maps Static API Key từ GitHub Secrets
+          #define GOOGLE_MAPS_STATIC_API_KEY "${MAPS_API_KEY:-}"
+          #define MAPS_API_KEY                "${MAPS_API_KEY:-}"
+
+          // AI Voice Assistant API Keys
+          #define GEMINI_API_KEY              ""
+          #define OPENAI_API_KEY              ""
+          EOF
 
       - name: Compile ESP32-S3 Firmware
         run: |
