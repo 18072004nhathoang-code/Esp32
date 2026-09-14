@@ -78,6 +78,18 @@ void audio_uninstall_duplex_driver(void);
 bool audio_is_driver_installed(void);
 
 /**
+ * @brief Yêu cầu dừng an toàn tác vụ Audio Task nền và chờ xác nhận ACK trước khi gỡ driver
+ * @param timeout_ms Thời gian chờ tối đa (ms)
+ * @return true nếu Audio Task đã vào trạng thái PAUSED an toàn
+ */
+bool audio_manager_pause_task_sync(uint32_t timeout_ms = 300);
+
+/**
+ * @brief Đánh thức và khôi phục hoạt động cho tác vụ Audio Task nền sau khi cài đặt lại driver
+ */
+void audio_manager_resume_task(void);
+
+/**
  * @brief Khởi tạo Driver I2S Duplex và cấu hình Codec ES8311 / PA Loa
  * Chạy tác vụ xử lý âm thanh ngầm trên Core 0 (đảm bảo không gián đoạn đồ họa LVGL trên Core 1)
  */

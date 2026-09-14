@@ -49,34 +49,36 @@ Dự án firmware Mini OS Pro Max biến bo mạch **ESP32-S3 N16R8 (16MB Flash 
 
 ### A. Bo mạch thực tế: DIYMORE ESP32-S3 3.5" IPS (ST7796 480x320 Capacitive Touch)
 
-| Module / Ngoại vi | Chức năng tín hiệu | Chân ESP32-S3 (GPIO) | Trạng thái xác nhận & Ghi chú |
+| Module / Ngoại vi | Chức năng tín hiệu | Chân ESP32-S3 (GPIO) | Trạng thái kiểm nghiệm & Ghi chú |
 | :--- | :--- | :--- | :--- |
-| **Màn hình LCD (ST7796 SPI)** | LCD_MOSI | **GPIO 11** | Đã xác nhận (SPI2_HOST / FSPI, 40MHz DMA) |
-| | LCD_MISO | **GPIO 13** | Đã xác nhận (Dùng chung bus SPI với MicroSD) |
-| | LCD_SCLK | **GPIO 12** | Đã xác nhận (Xung nhịp SPI chung) |
-| | LCD_CS | **GPIO 10** | Đã xác nhận (Chip Select LCD) |
-| | LCD_DC | **GPIO 4** | Đã xác nhận (Data / Command Select) |
+| **Màn hình LCD (ST7796 SPI)** | LCD_MOSI | **GPIO 11** | Đã kiểm tra thực tế (SPI2_HOST / FSPI, 40MHz DMA) |
+| | LCD_MISO | **GPIO 13** | Đã kiểm tra thực tế (Dùng chung bus SPI với MicroSD) |
+| | LCD_SCLK | **GPIO 12** | Đã kiểm tra thực tế (Xung nhịp SPI chung) |
+| | LCD_CS | **GPIO 10** | Đã kiểm tra thực tế (Chip Select LCD) |
+| | LCD_DC | **GPIO 4** | Đã kiểm tra thực tế (Data / Command Select) |
 | | LCD_RST | **-1** | Nối qua chân RESET chung hoặc EN |
-| | LCD_BL | **GPIO 45** | Đã xác nhận (Điều khiển độ sáng LEDC PWM 1.2kHz) |
-| **Cảm ứng điện dung** | TOUCH_SDA | **GPIO 8** | Đã xác nhận (`LGFX_Config.hpp`) |
-| *(FT6336U / FT5x06 / GT911 / CST816S)* | TOUCH_SCL | **GPIO 9** | Đã xác nhận (`LGFX_Config.hpp`) |
+| | LCD_BL | **GPIO 45** | Đã kiểm tra thực tế (Điều khiển độ sáng LEDC PWM 1.2kHz) |
+| **Cảm ứng điện dung** | TOUCH_SDA | **GPIO 8** | Configured in firmware (`LGFX_Config.hpp`) |
+| *(FT6336U / FT5x06 / GT911 / CST816S)* | TOUCH_SCL | **GPIO 9** | Configured in firmware (`LGFX_Config.hpp`) |
 | | TOUCH_INT | **-1** | Polling I2C định kỳ từ LVGL task |
-| | TOUCH_RST | **GPIO 3** | Đã xác nhận (`LGFX_Config.hpp`) |
-| **Thẻ nhớ MicroSD (SPI Slot)** | SD_MOSI | **GPIO 11** | Đã xác nhận (Bảo vệ qua `spi_bus_guard`) |
-| | SD_MISO | **GPIO 13** | Đã xác nhận (Bảo vệ qua `spi_bus_guard`) |
-| | SD_SCLK | **GPIO 12** | Đã xác nhận (Bảo vệ qua `spi_bus_guard`) |
-| | SD_CS | **GPIO 42** | Đã xác nhận (Chip Select riêng cho thẻ MicroSD) |
-| **Âm thanh I2S Duplex** | I2S_BCK | **GPIO 18** | Đã xác nhận (`audio_manager.h`) |
-| *(MAX98357A / ES8388 / INMP441)* | I2S_WS | **GPIO 21** | Đã xác nhận (`audio_manager.h`) |
-| | I2S_DOUT | **GPIO 15** | Đã xác nhận (Dữ liệu ra Loa) |
-| | I2S_DIN | **GPIO 16** | Đã xác nhận (Dữ liệu vào từ Micro MEMS) |
-| | I2S_MCK | **GPIO 17** | Đã xác nhận (Master Clock) |
-| | I2S_PA_EN | **GPIO 1** | Đã xác nhận (Kích hoạt công suất Audio Amp) |
-| **Camera DVP 8-bit cục bộ** | D0 - D7, XCLK, VSYNC... | *Header dự phòng* | ⚠️ **Chưa xác nhận thực tế** (Chờ sơ đồ schematic phần cứng chi tiết của bo mạch) |
-| **Biến thể Cảm ứng GT911 / CST816** | Chân INT / Địa chỉ I2C | *0x5D / 0x15* | ⚠️ **Chưa xác nhận thực tế** (Hỗ trợ cấu hình qua macro `TOUCH_CONTROLLER_*`) |
+| | TOUCH_RST | **GPIO 3** | Configured in firmware (`LGFX_Config.hpp`) |
+| **Thẻ nhớ MicroSD (SPI Slot)** | SD_MOSI | **GPIO 11** | Configured in firmware (Bảo vệ qua `spi_bus_guard`) |
+| | SD_MISO | **GPIO 13** | Configured in firmware (Bảo vệ qua `spi_bus_guard`) |
+| | SD_SCLK | **GPIO 12** | Configured in firmware (Bảo vệ qua `spi_bus_guard`) |
+| | SD_CS | **GPIO 42** | Configured in firmware (Chip Select thẻ MicroSD) |
+| **Âm thanh I2S Duplex & Codec** | I2S_BCK | **GPIO 18** | Configured in firmware (`audio_manager.h`) |
+| *(ES8311 Codec / MAX98357A / INMP441)*| I2S_WS | **GPIO 21** | Configured in firmware (`audio_manager.h`) |
+| | I2S_DOUT | **GPIO 15** | Configured in firmware (Dữ liệu ra Loa) |
+| | I2S_DIN | **GPIO 16** | Configured in firmware (Dữ liệu vào từ Mic MEMS) |
+| | I2S_MCK | **GPIO 17** | Configured in firmware (Master Clock ES8311) |
+| | I2S_PA_EN | **GPIO 1** | Configured in firmware (Power Amp Enable) |
+| | I2C_SDA (Codec) | **GPIO 38** | Configured in firmware (Giao tiếp điều khiển ES8311) |
+| | I2C_SCL (Codec) | **GPIO 39** | Configured in firmware (Giao tiếp điều khiển ES8311) |
+| **Camera DVP 8-bit cục bộ** | D0 - D7, XCLK, VSYNC... | *Header dự phòng* | ⚠️ Chưa xác nhận thực tế (Chưa test phần cứng cảm biến) |
+| **Biến thể Cảm ứng GT911 / CST816** | Chân INT / Địa chỉ I2C | *0x5D / 0x15* | ⚠️ Configured in firmware (Chưa test vật lý module rời) |
 
 > [!IMPORTANT]
-> **Bảo vệ Bus SPI (FSPI)**: Màn hình ST7796 và thẻ nhớ MicroSD chia sẻ GPIO 11, 12, 13. Hệ thống sử dụng `spi_bus_lock()` và `spi_bus_unlock()` trong `spi_bus_guard.cpp` để đợi DMA màn hình (`gfx.waitDMA()`) hoàn tất trước khi thao tác thẻ SD, loại bỏ hoàn toàn lỗi xung đột bus phần cứng.
+> **Bảo vệ Bus SPI (FSPI)**: Màn hình ST7796 và thẻ nhớ MicroSD chia sẻ GPIO 11, 12, 13. Hệ thống sử dụng `spi_bus_lock()` và `spi_bus_unlock()` trong `spi_bus_guard.cpp` để đợi DMA màn hình (`gfx.waitDMA()`) hoàn tất trước khi thao tác thẻ SD. Nếu lock fail, frame vẽ sẽ bị bỏ qua và tuyệt đối không truy cập SPI khi chưa chiếm được bus.
 
 ---
 
@@ -100,8 +102,8 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | :--- | :--- | :--- | :--- |
 | **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng, đồng bộ qua `lvgl_port_lock()` và `spi_bus_lock()`. |
 | **AudioTask (MP3)** | **Core 0** | **3** | Chu kỳ 2ms, giải mã âm thanh từ SD, tự động uninstall/reinstall driver I2S theo nhu cầu. |
-| **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và bật/tắt auto-reconnect. |
-| **Map_Worker** | **Core 0** | **2** | Tải tile HTTP/HTTPS qua FreeRTOS Queue, giải mã JPEG ping-pong buffer vào PSRAM. |
+| **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và bật/tắt auto-reconnect, bảo vệ NVS bằng mutex. |
+| **Map_Worker** | **Core 0** | **2** | Tải tile HTTP/HTTPS qua FreeRTOS Queue, giải mã JPEG ping-pong buffer vào PSRAM, TLS Root CA bundle. |
 | **AI_Voice_Task** | **Core 0** | **2** | Demo/Mock mô phỏng tương tác giọng nói cục bộ (không rò rỉ API key khi build/log). |
 
 ---
@@ -114,10 +116,10 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
    ```
 2. Cập nhật thông tin trong `include/secrets.h`:
    ```c
-   #define WIFI_DEFAULT_SSID       "Your_SSID"
-   #define WIFI_DEFAULT_PASS       "Your_Password"
-   #define GOOGLE_MAPS_API_KEY     "AIzaSy..."
-   #define GEMINI_API_KEY          "AIzaSy..."
+   #define DEFAULT_WIFI_SSID           "Your_SSID"
+   #define DEFAULT_WIFI_PASS           "Your_Password"
+   #define GOOGLE_MAPS_STATIC_API_KEY  "AIzaSy..."
+   #define GEMINI_API_KEY              "AIzaSy..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
 
@@ -141,11 +143,15 @@ pio run -t monitor
 ## 📱 7. Các phân hệ ứng dụng
 
 1. **System Monitor**: Đo thời gian thực tần số CPU (240MHz), dung lượng RAM nội, 8MB Octal PSRAM, nhiệt độ lõi chip (°C) và Uptime.
-2. **Google Maps Pro**: Chế độ bản đồ Vector Offline WGS84 kèm chế độ Online Google Satellite / Roadmap Tiles với cơ chế đệm kép Ping-Pong Buffer trong PSRAM.
-3. **Music Player**: Trình phát nhạc MP3 giao diện chia đôi cột, animation đĩa than quay xoay tròn, quản lý sở hữu bus I2S độc quyền khi phát nhạc.
+2. **Google Maps Pro**: Chế độ bản đồ Vector Offline WGS84 kèm chế độ Online Google Satellite / Roadmap Tiles với cơ chế đệm kép Ping-Pong Buffer và API tiêu thụ atomic dưới mutex trong PSRAM.
+3. **Music Player**: Trình phát nhạc MP3 giao diện chia đôi cột, animation đĩa than quay xoay tròn, quản lý sở hữu bus I2S độc quyền khi phát nhạc, bảo vệ I/O thẻ nhớ bằng `spi_bus_guard`.
 4. **XiaoZhi AI Voice (Demo/Mock)**: Giao diện chat bong bóng hội thoại phong cách iOS/iMessage, nút Push-To-Talk, mô phỏng phản hồi giả lập nội bộ.
-5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, ghi nhớ mạng, hỗ trợ quên mạng và tùy chọn tự động kết nối lại.
-6. **Camera Subsystem**: Tầng kiến trúc tách biệt giữa `LocalCameraService` (DVP OV2640/OV5640) và `NetworkCameraService` (ONVIF/RTSP/HTTP snapshot cho Hikvision, KBVision, Ezviz, Yoosee).
+5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, ghi nhớ mạng với Preferences thread-safe, hỗ trợ quên mạng và tùy chọn tự động kết nối lại.
+6. **Camera Subsystem**:
+   - **HTTP Snapshot (JPEG)**: `READY` (Nạp và hiển thị ảnh tĩnh IP camera thực tế).
+   - **ONVIF Client**: `PARTIAL / FALLBACK ADAPTER` (Hỗ trợ cấu trúc SOAP và adapter các hãng Hikvision, KBVision, Ezviz, Yoosee).
+   - **MJPEG & RTSP / H.264**: `NOT_IMPLEMENTED` (Khung giao diện phân tầng scaffold chuẩn, chưa hoàn chỉnh bộ giải mã video).
+   - **Local DVP (OV2640/OV5640)**: Driver abstraction layer sẵn sàng, trạng thái vật lý `NOT_DETECTED`.
 
 ---
 

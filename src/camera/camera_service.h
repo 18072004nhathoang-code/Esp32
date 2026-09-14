@@ -60,3 +60,12 @@ const char* camera_service_get_status_text(void);
  * @brief Lấy tên model sensor hoặc luồng camera hiện tại
  */
 const char* camera_service_get_model_name(void);
+
+/**
+ * @brief Truy vấn trạng thái thực tế của từng tính năng
+ */
+CameraFeatureStatus camera_service_get_snapshot_status(void);
+CameraFeatureStatus camera_service_get_mjpeg_status(void);
+CameraFeatureStatus camera_service_get_rtsp_status(void);
+CameraFeatureStatus camera_service_get_onvif_status(void);
+CameraFeatureStatus camera_service_get_local_dvp_status(void);

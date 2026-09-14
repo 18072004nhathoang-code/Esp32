@@ -45,15 +45,12 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     }
     else
     {
-        // Fallback khẩn cấp nếu timeout mutex: vẫn đợi DMA và ghi an toàn
-        gfx.startWrite();
-        gfx.setAddrWindow(area->x1, area->y1, w, h);
-        gfx.writePixelsDMA((uint16_t *)color_p, w * h);
-        gfx.waitDMA();
-        gfx.endWrite();
+        // Tuyệt đối không truy cập SPI khi lock thất bại để tránh xung đột với thẻ MicroSD
+        // Bỏ qua frame hiện tại và báo cho LVGL tiếp tục chu trình tiếp theo
+        Serial.println("[LVGL] Cảnh báo: spi_bus_lock() timeout trong disp_flush_cb, bỏ qua frame!");
     }
 
-    // Báo cho LVGL biết frame đã hoàn thành để vẽ frame tiếp theo
+    // Báo cho LVGL biết hoàn tất lượt flush
     lv_disp_flush_ready(disp);
 }
 

@@ -40,6 +40,17 @@ static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
 static bool i2s_duplex_installed = false;
 
+// Máy trạng thái đồng bộ hóa an toàn vòng đời Audio Task (Handshake/State Machine)
+enum AudioTaskState
+{
+    AUDIO_TASK_ACTIVE = 0,
+    AUDIO_TASK_PAUSE_REQUESTED,
+    AUDIO_TASK_PAUSED,
+    AUDIO_TASK_RESUME_REQUESTED
+};
+static volatile AudioTaskState audio_task_state = AUDIO_TASK_ACTIVE;
+static SemaphoreHandle_t audio_task_ack_sem = nullptr;
+
 /* Cấu hình và cài đặt Driver I2S Duplex (16kHz 16-bit Duplex) cho Microphone & Tone/Voice */
 bool audio_install_duplex_driver(void)
 {
@@ -109,6 +120,38 @@ bool audio_is_driver_installed(void)
     return i2s_duplex_installed;
 }
 
+bool audio_manager_pause_task_sync(uint32_t timeout_ms)
+{
+    if (audio_task_handle == nullptr) return true;
+    if (audio_task_state == AUDIO_TASK_PAUSED) return true;
+
+    if (audio_task_ack_sem == nullptr)
+    {
+        audio_task_ack_sem = xSemaphoreCreateBinary();
+    }
+    xSemaphoreTake(audio_task_ack_sem, 0); // Dọn sạch token cũ nếu còn
+
+    audio_task_state = AUDIO_TASK_PAUSE_REQUESTED;
+
+    // Đợi Audio Task gửi ACK xác nhận đã ra khỏi mọi hàm I2S DMA
+    if (xSemaphoreTake(audio_task_ack_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)
+    {
+        Serial.println("[AUDIO] 🛑 Audio Task đã dừng an toàn và gửi ACK.");
+        return true;
+    }
+    Serial.println("[AUDIO] ⚠️ Timeout chờ ACK dừng Audio Task!");
+    return (audio_task_state == AUDIO_TASK_PAUSED);
+}
+
+void audio_manager_resume_task(void)
+{
+    if (audio_task_state == AUDIO_TASK_PAUSED || audio_task_state == AUDIO_TASK_PAUSE_REQUESTED)
+    {
+        audio_task_state = AUDIO_TASK_RESUME_REQUESTED;
+        Serial.println("[AUDIO] ▶ Đã gửi yêu cầu khôi phục hoạt động cho Audio Task.");
+    }
+}
+
 bool audio_request_ownership(AudioOwner requester)
 {
     if (audio_owner_mutex == nullptr)
@@ -140,7 +183,15 @@ bool audio_request_ownership(AudioOwner requester)
         // Tạm dừng phát âm thanh hệ thống (nếu có)
         playback_active = false;
 
-        // BẮT BUỘC: Gỡ bỏ I2S driver của AudioManager để ESP32-audioI2S cài driver riêng không bị xung đột
+        // BƯỚC BẮT BUỘC: Đồng bộ dừng hoàn toàn Audio Task và chờ ACK trước khi gỡ driver
+        if (!audio_manager_pause_task_sync(300))
+        {
+            Serial.println("[AUDIO] ❌ Lỗi: Không thể pause Audio Task kịp thời để nhường I2S cho MUSIC!");
+            xSemaphoreGive(audio_owner_mutex);
+            return false;
+        }
+
+        // Gỡ bỏ I2S driver của AudioManager khi chắc chắn không còn tác vụ nào gọi i2s_read/i2s_write
         audio_uninstall_duplex_driver();
 
         current_audio_owner = AUDIO_OWNER_MUSIC;
@@ -190,10 +241,11 @@ void audio_release_ownership(AudioOwner requester)
         {
             current_audio_owner = AUDIO_OWNER_NONE;
 
-            // Nếu MUSIC vừa nhả quyền sở hữu, cài đặt lại I2S Duplex Driver cho Mic và Tone
+            // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
             if (requester == AUDIO_OWNER_MUSIC)
             {
                 audio_install_duplex_driver();
+                audio_manager_resume_task();
             }
         }
         xSemaphoreGive(audio_owner_mutex);
@@ -283,10 +335,31 @@ static void audio_background_task(void *pvParameters)
 
     while (1)
     {
-        // 0. Nếu I2S đang được Music Player hoặc AI Voice sử dụng độc quyền, nhường bus hoàn toàn
-        if (current_audio_owner == AUDIO_OWNER_MUSIC)
+        // 0a. Máy trạng thái Handshake dừng/khôi phục Audio Task an toàn
+        if (audio_task_state == AUDIO_TASK_PAUSE_REQUESTED)
         {
-            vTaskDelay(pdMS_TO_TICKS(50));
+            audio_task_state = AUDIO_TASK_PAUSED;
+            if (audio_task_ack_sem)
+            {
+                xSemaphoreGive(audio_task_ack_sem);
+            }
+        }
+
+        if (audio_task_state == AUDIO_TASK_PAUSED)
+        {
+            vTaskDelay(pdMS_TO_TICKS(15));
+            continue;
+        }
+
+        if (audio_task_state == AUDIO_TASK_RESUME_REQUESTED)
+        {
+            audio_task_state = AUDIO_TASK_ACTIVE;
+        }
+
+        // 0b. Nếu I2S đang được Music Player sử dụng hoặc driver chưa cài đặt, nhường bus hoàn toàn
+        if (current_audio_owner == AUDIO_OWNER_MUSIC || !i2s_duplex_installed)
+        {
+            vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
 
@@ -427,7 +500,12 @@ bool audio_manager_init(void)
         }
     }
 
-    // 5. Khởi tạo FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
+    // 5. Khởi tạo Semaphore Handshake & FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
+    if (audio_task_ack_sem == nullptr)
+    {
+        audio_task_ack_sem = xSemaphoreCreateBinary();
+    }
+
     BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_background_task,
         "Audio_Task",

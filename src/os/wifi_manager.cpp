@@ -15,6 +15,7 @@ static Preferences prefs;
 static WiFiState current_state = WIFI_STATE_DISCONNECTED;
 static TaskHandle_t wifi_task_handle = nullptr;
 static SemaphoreHandle_t wifi_mutex = nullptr;
+static SemaphoreHandle_t prefs_mutex = nullptr;
 
 // Bộ nhớ đệm kết quả quét mạng
 static std::vector<WiFiNetworkInfo> scan_results;
@@ -40,6 +41,16 @@ static void lock_wifi()
 static void unlock_wifi()
 {
     if (wifi_mutex) xSemaphoreGive(wifi_mutex);
+}
+
+static void lock_prefs()
+{
+    if (prefs_mutex) xSemaphoreTake(prefs_mutex, portMAX_DELAY);
+}
+
+static void unlock_prefs()
+{
+    if (prefs_mutex) xSemaphoreGive(prefs_mutex);
 }
 
 /* Task chuyên trách quản lý mạng WiFi chạy độc lập trên Core 0 */
@@ -169,7 +180,8 @@ static void wifi_service_task(void *pvParameters)
 
 void wifi_manager_init(void)
 {
-    wifi_mutex = xSemaphoreCreateMutex();
+    if (!wifi_mutex) wifi_mutex = xSemaphoreCreateMutex();
+    if (!prefs_mutex) prefs_mutex = xSemaphoreCreateMutex();
 
     // Khởi tạo Task FreeRTOS ghim cố định trên Core 0
     xTaskCreatePinnedToCore(
@@ -294,37 +306,45 @@ int8_t wifi_manager_get_rssi(void)
 
 bool wifi_manager_has_saved_credentials(void)
 {
+    lock_prefs();
     prefs.begin(WIFI_PREFS_NAMESPACE, true);
     String ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
     prefs.end();
+    unlock_prefs();
     return (ssid.length() > 0);
 }
 
 void wifi_manager_save_credentials(const char *ssid, const char *pass)
 {
     if (!ssid || strlen(ssid) == 0) return;
+    lock_prefs();
     prefs.begin(WIFI_PREFS_NAMESPACE, false);
     prefs.putString(WIFI_PREFS_KEY_SSID, ssid);
     prefs.putString(WIFI_PREFS_KEY_PASS, pass ? pass : "");
     prefs.end();
+    unlock_prefs();
     log_i("Đã lưu thông tin WiFi [%s] vào NVS Flash", ssid);
 }
 
 bool wifi_manager_load_credentials(String &ssid, String &pass)
 {
+    lock_prefs();
     prefs.begin(WIFI_PREFS_NAMESPACE, true);
     ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
     pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
     prefs.end();
+    unlock_prefs();
     return (ssid.length() > 0);
 }
 
 void wifi_manager_clear_credentials(void)
 {
+    lock_prefs();
     prefs.begin(WIFI_PREFS_NAMESPACE, false);
     prefs.remove(WIFI_PREFS_KEY_SSID);
     prefs.remove(WIFI_PREFS_KEY_PASS);
     prefs.end();
+    unlock_prefs();
     log_i("Đã xóa thông tin WiFi trong NVS Flash");
 }
 

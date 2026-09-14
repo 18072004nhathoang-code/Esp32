@@ -60,6 +60,29 @@ enum CameraFrameSize
     CAM_FRAMESIZE_HD_1280x720
 };
 
+// Trạng thái khả dụng thực tế của từng tính năng/giao thức
+enum CameraFeatureStatus
+{
+    CAM_STATUS_NOT_IMPLEMENTED = 0, // Chưa triển khai (hoặc chỉ mới dựng scaffold)
+    CAM_STATUS_NOT_DETECTED,        // Phần cứng chưa được phát hiện
+    CAM_STATUS_READY,               // Sẵn sàng hoạt động hoàn chỉnh
+    CAM_STATUS_PARTIAL_FALLBACK,    // Triển khai một phần / chuyển sang adapter dự phòng
+    CAM_STATUS_ERROR                // Lỗi kết nối hoặc xử lý
+};
+
+inline const char* camera_feature_status_to_string(CameraFeatureStatus st)
+{
+    switch (st)
+    {
+        case CAM_STATUS_READY: return "READY";
+        case CAM_STATUS_NOT_DETECTED: return "NOT_DETECTED";
+        case CAM_STATUS_PARTIAL_FALLBACK: return "PARTIAL / FALLBACK";
+        case CAM_STATUS_ERROR: return "ERROR";
+        case CAM_STATUS_NOT_IMPLEMENTED:
+        default: return "NOT_IMPLEMENTED";
+    }
+}
+
 // Cấu trúc khung hình (Frame Buffer)
 struct CameraFrame
 {

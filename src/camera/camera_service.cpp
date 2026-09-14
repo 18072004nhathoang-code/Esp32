@@ -83,6 +83,10 @@ CameraFrame* camera_service_get_frame(uint32_t timeout_ms)
     {
         return g_local_camera.getFrame(timeout_ms);
     }
+    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    {
+        return g_network_camera.getFrame(timeout_ms);
+    }
     return nullptr;
 }
 
@@ -91,6 +95,10 @@ void camera_service_return_frame(CameraFrame *frame)
     if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
         g_local_camera.returnFrame(frame);
+    }
+    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    {
+        g_network_camera.returnFrame(frame);
     }
 }
 
@@ -120,3 +128,29 @@ const char* camera_service_get_model_name(void)
     }
     return "Network IP Camera";
 }
+
+CameraFeatureStatus camera_service_get_snapshot_status(void)
+{
+    return g_network_camera.getSnapshotStatus();
+}
+
+CameraFeatureStatus camera_service_get_mjpeg_status(void)
+{
+    return g_network_camera.getMjpegStatus();
+}
+
+CameraFeatureStatus camera_service_get_rtsp_status(void)
+{
+    return g_network_camera.getRtspStatus();
+}
+
+CameraFeatureStatus camera_service_get_onvif_status(void)
+{
+    return g_network_camera.getOnvifStatus();
+}
+
+CameraFeatureStatus camera_service_get_local_dvp_status(void)
+{
+    return g_local_camera.isAvailable() ? CAM_STATUS_READY : CAM_STATUS_NOT_DETECTED;
+}
+

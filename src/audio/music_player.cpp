@@ -43,76 +43,128 @@ static void music_audio_task(void *pvParameters)
         // 1. Kiểm tra nếu có lệnh yêu cầu phát bài mới từ Core 1
         if (cmd_request_play)
         {
-            if (audio_request_ownership(AUDIO_OWNER_MUSIC))
+            cmd_request_play = false;
+
+            // Kiểm tra file có tồn tại trên thẻ SD trước với khóa SPI bus
+            bool file_exists = false;
+            if (spi_bus_lock(1000))
             {
+                file_exists = SD.exists(pending_filepath);
+                spi_bus_unlock();
+            }
+
+            if (!file_exists)
+            {
+                Serial.printf("[MUSIC_AUDIO] ❌ Tệp %s không tồn tại trên thẻ SD -> Hủy phát nhạc!\n", pending_filepath);
                 if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                 {
-                    cmd_request_play = false;
-                    Serial.printf("[MUSIC_AUDIO] Core 0 nhận lệnh mở tệp: %s\n", pending_filepath);
-                    
-                    // Mở loa ngoài qua chân PA (Active LOW trên DIYMORE)
-                    pinMode(AUDIO_PA_PIN, OUTPUT);
-                    digitalWrite(AUDIO_PA_PIN, 0);
-
-                    // Tái tạo đối tượng Audio động để cài driver I2S riêng biệt
                     if (audio)
                     {
                         delete audio;
                         audio = nullptr;
                     }
-                    audio = new Audio();
-                    if (audio)
-                    {
-                        audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
-
-                        // Áp dụng mức âm lượng (0 - 21 trong thư viện ESP32-audioI2S)
-                        uint8_t scaled_vol = (player_state.volume * 21) / 100;
-                        audio->setVolume(scaled_vol);
-
-                        // Nạp file từ thẻ nhớ SD với khóa đồng bộ SPI
-                        bool file_exists = false;
-                        if (spi_bus_lock(500))
-                        {
-                            file_exists = SD.exists(pending_filepath);
-                            spi_bus_unlock();
-                        }
-
-                        if (file_exists)
-                        {
-                            audio->connecttoFS(SD, pending_filepath);
-                            player_state.is_playing = true;
-                            player_state.is_paused = false;
-                        }
-                        else
-                        {
-                            Serial.printf("[MUSIC_AUDIO] ⚠️ Không tìm thấy tệp %s, phát giả lập thời gian\n", pending_filepath);
-                            player_state.is_playing = true;
-                            player_state.is_paused = false;
-                        }
-                    }
+                    player_state.is_playing = false;
+                    player_state.is_paused = false;
                     xSemaphoreGive(audio_mutex);
                 }
+                audio_release_ownership(AUDIO_OWNER_MUSIC);
             }
             else
             {
-                // Hệ thống khác đang bận, thử lại sau 50ms
-                vTaskDelay(pdMS_TO_TICKS(50));
+                // File tồn tại -> yêu cầu quyền I2S độc quyền
+                if (audio_request_ownership(AUDIO_OWNER_MUSIC))
+                {
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                    {
+                        Serial.printf("[MUSIC_AUDIO] Core 0 mở tệp hợp lệ: %s\n", pending_filepath);
+
+                        // Mở loa ngoài qua chân PA (Active LOW trên DIYMORE)
+                        pinMode(AUDIO_PA_PIN, OUTPUT);
+                        digitalWrite(AUDIO_PA_PIN, 0);
+
+                        // Tái tạo đối tượng Audio động sau khi AudioManager đã nhả I2S
+                        if (audio)
+                        {
+                            delete audio;
+                            audio = nullptr;
+                        }
+
+                        audio = new Audio();
+                        if (audio)
+                        {
+                            audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
+
+                            uint8_t scaled_vol = (player_state.volume * 21) / 100;
+                            audio->setVolume(scaled_vol);
+
+                            // Kết nối FS với khóa bảo vệ bus SPI
+                            bool connected = false;
+                            if (spi_bus_lock(1000))
+                            {
+                                connected = audio->connecttoFS(SD, pending_filepath);
+                                spi_bus_unlock();
+                            }
+
+                            if (connected)
+                            {
+                                player_state.is_playing = true;
+                                player_state.is_paused = false;
+                                Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", pending_filepath);
+                            }
+                            else
+                            {
+                                Serial.printf("[MUSIC_AUDIO] ❌ connecttoFS() thất bại cho tệp %s\n", pending_filepath);
+                                delete audio;
+                                audio = nullptr;
+                                player_state.is_playing = false;
+                                player_state.is_paused = false;
+                                audio_release_ownership(AUDIO_OWNER_MUSIC);
+                            }
+                        }
+                        else
+                        {
+                            player_state.is_playing = false;
+                            player_state.is_paused = false;
+                            audio_release_ownership(AUDIO_OWNER_MUSIC);
+                        }
+                        xSemaphoreGive(audio_mutex);
+                    }
+                    else
+                    {
+                        audio_release_ownership(AUDIO_OWNER_MUSIC);
+                    }
+                }
+                else
+                {
+                    Serial.println("[MUSIC_AUDIO] ⚠️ Không lấy được quyền sở hữu I2S cho MUSIC");
+                }
             }
         }
 
         // 2. Vòng lặp giải mã stream I2S liên tục khi đang phát nhạc
         if (player_state.is_playing && !player_state.is_paused)
         {
-            if (audio_get_current_owner() == AUDIO_OWNER_MUSIC && audio != nullptr)
+            if (audio_get_current_owner() == AUDIO_OWNER_MUSIC)
             {
-                audio->loop();
+                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
+                {
+                    if (audio != nullptr && player_state.is_playing && !player_state.is_paused)
+                    {
+                        // Bảo vệ đọc dữ liệu thẻ SD qua SPI bus guard
+                        if (spi_bus_lock(50))
+                        {
+                            audio->loop();
+                            spi_bus_unlock();
+                        }
 
-                // Cập nhật vị trí và thời lượng
-                uint32_t cur = audio->getAudioCurrentTime();
-                uint32_t dur = audio->getAudioFileDuration();
-                
-                if (cur > 0) player_state.current_time_sec = cur;
-                if (dur > 0) player_state.total_duration_sec = dur;
+                        uint32_t cur = audio->getAudioCurrentTime();
+                        uint32_t dur = audio->getAudioFileDuration();
+
+                        if (cur > 0) player_state.current_time_sec = cur;
+                        if (dur > 0) player_state.total_duration_sec = dur;
+                    }
+                    xSemaphoreGive(audio_mutex);
+                }
 
                 // Nhường nhẹ CPU để không làm đói các task khác trên Core 0
                 vTaskDelay(pdMS_TO_TICKS(2));
@@ -413,9 +465,13 @@ void music_player_set_volume(uint8_t vol_percent)
     player_state.volume = vol_percent;
 
     uint8_t scaled_vol = (vol_percent * 21) / 100;
-    if (audio)
+    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
     {
-        audio->setVolume(scaled_vol);
+        if (audio)
+        {
+            audio->setVolume(scaled_vol);
+        }
+        xSemaphoreGive(audio_mutex);
     }
     Serial.printf("[MUSIC_PLAYER] 🔊 Đặt âm lượng: %d%%\n", vol_percent);
 }

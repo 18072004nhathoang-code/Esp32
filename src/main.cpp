@@ -12,6 +12,7 @@
 #include "audio/audio_manager.h"
 #include "audio/music_player.h"
 #include "ai/ai_voice_service.h"
+#include "camera/camera_service.h"
 #include "os/power_manager.h"
 
 void setup()
@@ -45,16 +46,39 @@ void setup()
 
     // 4. Khởi tạo hệ thống Âm thanh I2S Duplex (Mic MEMS & Loa ngoài) trên Core 0
     Serial.println("[SYSTEM] Khởi tạo I2S Audio Manager Service trên Core 0...");
-    audio_manager_init();
-    audio_play_sound_effect(FX_CHIME); // Âm thanh khởi động Mini OS
+    bool audio_ok = audio_manager_init();
+    if (audio_ok)
+    {
+        audio_play_sound_effect(FX_CHIME); // Âm thanh khởi động Mini OS
+    }
+    else
+    {
+        Serial.println("[SYSTEM] ❌ Audio Manager khởi tạo thất bại! Tạm tắt các chức năng âm thanh.");
+    }
 
     // 4b. Khởi tạo Music Player (ESP32-audioI2S & FreeRTOS Core 0)
     Serial.println("[SYSTEM] Khởi tạo Music Player Service trên Core 0...");
-    music_player_init();
+    bool music_ok = music_player_init();
+    if (!music_ok)
+    {
+        Serial.println("[SYSTEM] ❌ Music Player khởi tạo thất bại! Vui lòng kiểm tra thẻ nhớ SD.");
+    }
 
     // 4c. Khởi tạo AI Voice Assistant Service (Core 0)
     Serial.println("[SYSTEM] Khởi tạo AI Voice Assistant Service trên Core 0...");
-    ai_voice_init();
+    bool ai_voice_ok = ai_voice_init();
+    if (!ai_voice_ok)
+    {
+        Serial.println("[SYSTEM] ❌ AI Voice Service khởi tạo thất bại!");
+    }
+
+    // 4d. Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
+    Serial.println("[SYSTEM] Khởi tạo Camera Service đa nguồn...");
+    bool camera_ok = camera_service_init();
+    if (!camera_ok)
+    {
+        Serial.println("[SYSTEM] ❌ Camera Service khởi tạo thất bại!");
+    }
 
     // 5. Khởi tạo Desktop và các App hệ thống
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");

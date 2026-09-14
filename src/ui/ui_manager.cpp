@@ -752,28 +752,22 @@ static void open_camera_app(void)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
 
     lv_obj_t *desc = lv_label_create(card);
-    bool cam_avail = camera_service_is_available();
-    if (cam_avail)
-    {
-        lv_label_set_text_fmt(desc,
-            "Trạng thái: Đã kết nối sensor [%s]\n"
-            "Chế độ sẵn sàng: DVP 8-bit DMA / RTSP Video Server\n"
-            "Độ phân giải hỗ trợ: QVGA (320x240) • HVGA (480x320) • VGA\n"
-            "Bộ đệm Frame Buffer: Cấp phát trên 8MB Octal PSRAM\n"
-            "Hỗ trợ chuẩn: ONVIF Profile S / RTSP H.264 / MJPEG",
-            camera_service_get_model_name());
-    }
-    else
-    {
-        lv_label_set_text(desc,
-            "⚠️ Camera Module Not Detected (Chưa cắm phần cứng)\n\n"
-            "Hệ điều hành đã tích hợp sẵn Driver & Abstraction Layer:\n"
-            "• Chuẩn kết nối hỗ trợ: DVP 8-bit song song (OV2640 / OV5640)\n"
-            "• Lưu ý phần cứng: Chân DVP camera cần kiểm tra xung đột với\n"
-            "  bus SPI LCD ST7796 và khe cắm thẻ nhớ MicroSD.\n"
-            "• Sẵn sàng cho: Live Preview LVGL, RTSP Streamer & ONVIF NVTs.\n\n"
-            "Trạng thái Subsystem: Idle / Ready for Hardware Initialization");
-    }
+    lv_label_set_text_fmt(desc,
+        "Nguồn hoạt động: %s\n\n"
+        "• Local DVP (OV2640/OV5640):  %s\n"
+        "• HTTP Snapshot (JPEG):       %s\n"
+        "• ONVIF Client Discovery:     %s\n"
+        "• MJPEG HTTP Stream:          %s\n"
+        "• RTSP / H.264 Client:        %s\n\n"
+        "Trạng thái: %s",
+        camera_service_get_model_name(),
+        camera_feature_status_to_string(camera_service_get_local_dvp_status()),
+        camera_feature_status_to_string(camera_service_get_snapshot_status()),
+        camera_feature_status_to_string(camera_service_get_onvif_status()),
+        camera_feature_status_to_string(camera_service_get_mjpeg_status()),
+        camera_feature_status_to_string(camera_service_get_rtsp_status()),
+        camera_service_get_status_text()
+    );
     lv_obj_set_style_text_color(desc, lv_color_hex(0xCBD5E0), 0);
     lv_obj_set_style_text_font(desc, &lv_font_montserrat_12, 0);
     lv_obj_align(desc, LV_ALIGN_CENTER, 0, 16);
