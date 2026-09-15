@@ -86,10 +86,12 @@
 #define LV_USE_OPA_SCALE 1
 #define LV_USE_IMG_TRANSFORM 1
 
-/* Hiển thị FPS và mức độ chiếm dụng CPU / RAM trên màn hình (Rất hữu ích cho Mini OS) */
-#define LV_USE_PERF_MONITOR 1
-#if LV_USE_PERF_MONITOR
+/* Hiển thị FPS và mức độ chiếm dụng CPU / RAM trên màn hình (Chỉ bật khi có cờ MINI_OS_DEBUG_PERF) */
+#ifdef MINI_OS_DEBUG_PERF
+    #define LV_USE_PERF_MONITOR 1
     #define LV_USE_PERF_MONITOR_POS LV_ALIGN_BOTTOM_RIGHT
+#else
+    #define LV_USE_PERF_MONITOR 0
 #endif
 
 #define LV_USE_MEM_MONITOR 0

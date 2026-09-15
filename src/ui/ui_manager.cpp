@@ -7,6 +7,7 @@
 
 #include "ui_manager.h"
 #include "ui_theme.h"
+#include "color_test.h"
 #include "../display/lvgl_port.h"
 #include "../apps/map_app.h"
 #include "../apps/audio_app.h"
@@ -136,6 +137,13 @@ static void theme_color_event_cb(lv_event_t *e)
     theme_accent = lv_color_hex(color_val);
 }
 
+
+/* Callback mở màn hình Color Test */
+static void color_test_btn_cb(lv_event_t *e)
+{
+    ui_color_test_open(app_content_container);
+}
+
 /* Callback bấm nút Ngủ Ngay trong Power App */
 static void sleep_now_btn_cb(lv_event_t *e)
 {
@@ -157,51 +165,39 @@ static void create_status_bar(void)
     lv_obj_set_style_pad_hor(status_bar, 6, 0);
     lv_obj_set_style_pad_ver(status_bar, 1, 0);
 
-    // Bên trái: Đồng hồ số
+    // Bên trái: Giờ / Đồng hồ số
     lbl_clock = lv_label_create(status_bar);
     lv_label_set_text(lbl_clock, "00:00");
     lv_obj_set_style_text_color(lbl_clock, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_clock, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_clock, UI_FONT_12, 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 2, 0);
 
-    // Ở giữa: Huy hiệu phần cứng
-    lv_obj_t *lbl_badge = lv_label_create(status_bar);
-    lv_label_set_text(lbl_badge, "● S3 2.8\"");
-    lv_obj_set_style_text_color(lbl_badge, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_badge, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_badge, LV_ALIGN_CENTER, 0, 0);
-
-    // Bên phải: Cụm chỉ số (WiFi, Loa, RAM, Pin)
+    // Bên phải: Cụm chỉ số tối giản (Speaker khi phát, WiFi, Pin)
     lv_obj_t *right_cluster = lv_obj_create(status_bar);
-    lv_obj_set_size(right_cluster, 100, 20);
+    lv_obj_set_size(right_cluster, 64, 20);
     lv_obj_align(right_cluster, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_opa(right_cluster, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(right_cluster, 0, 0);
     lv_obj_set_style_pad_all(right_cluster, 0, 0);
     lv_obj_clear_flag(right_cluster, LV_OBJ_FLAG_SCROLLABLE);
 
-    lbl_wifi_icon = lv_label_create(right_cluster);
-    lv_label_set_text(lbl_wifi_icon, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(lbl_wifi_icon, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_wifi_icon, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_wifi_icon, LV_ALIGN_LEFT_MID, 4, 0);
-
     lbl_spk_icon = lv_label_create(right_cluster);
     lv_label_set_text(lbl_spk_icon, LV_SYMBOL_VOLUME_MAX);
     lv_obj_set_style_text_color(lbl_spk_icon, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_spk_icon, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_spk_icon, LV_ALIGN_LEFT_MID, 24, 0);
+    lv_obj_set_style_text_font(lbl_spk_icon, UI_FONT_10, 0);
+    lv_obj_align(lbl_spk_icon, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_add_flag(lbl_spk_icon, LV_OBJ_FLAG_HIDDEN);
 
-    lbl_ram_pill = lv_label_create(right_cluster);
-    lv_label_set_text(lbl_ram_pill, "28%");
-    lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_ram_pill, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_ram_pill, LV_ALIGN_LEFT_MID, 44, 0);
+    lbl_wifi_icon = lv_label_create(right_cluster);
+    lv_label_set_text(lbl_wifi_icon, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_color(lbl_wifi_icon, lv_color_hex(COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(lbl_wifi_icon, UI_FONT_10, 0);
+    lv_obj_align(lbl_wifi_icon, LV_ALIGN_RIGHT_MID, -20, 0);
 
     lbl_battery_pill = lv_label_create(right_cluster);
-    lv_label_set_text(lbl_battery_pill, "⚡");
-    lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_battery_pill, &lv_font_montserrat_10, 0);
+    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_FULL);
+    lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+    lv_obj_set_style_text_font(lbl_battery_pill, UI_FONT_10, 0);
     lv_obj_align(lbl_battery_pill, LV_ALIGN_RIGHT_MID, 0, 0);
 }
 
@@ -239,14 +235,14 @@ static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const cha
     lv_obj_t *lbl_sym = lv_label_create(btn);
     lv_label_set_text(lbl_sym, symbol);
     lv_obj_set_style_text_color(lbl_sym, accent, 0);
-    lv_obj_set_style_text_font(lbl_sym, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_sym, UI_FONT_14, 0);
     lv_obj_center(lbl_sym);
 
     // Tên ứng dụng bên dưới icon
     lv_obj_t *lbl_title = lv_label_create(container);
     lv_label_set_text(lbl_title, title);
     lv_obj_set_style_text_color(lbl_title, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_title, UI_FONT_10, 0);
     lv_obj_align(lbl_title, LV_ALIGN_BOTTOM_MID, 0, 0);
 }
 
@@ -269,7 +265,7 @@ static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t ac
     lv_obj_t *lbl = lv_label_create(btn);
     lv_label_set_text(lbl, symbol);
     lv_obj_set_style_text_color(lbl, accent, 0);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl, UI_FONT_14, 0);
     lv_obj_center(lbl);
 }
 
@@ -351,19 +347,20 @@ static void ensure_app_window(void)
     lv_label_set_text(app_title_lbl, "App");
     lv_obj_align(app_title_lbl, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_set_style_text_color(app_title_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(app_title_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(app_title_lbl, UI_FONT_12, 0);
 
-    // Nút đóng app (X)
+    // Nút đóng app (X) tối thiểu >=32x32 hit area
     lv_obj_t *close_btn = lv_btn_create(header);
-    lv_obj_set_size(close_btn, 28, 20);
-    lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_size(close_btn, 32, 24);
+    lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_bg_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_set_style_radius(close_btn, 6, 0);
+    lv_obj_set_ext_click_area(close_btn, 6); // Hit area 44x36 >= 32x32
     lv_obj_add_event_cb(close_btn, close_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *close_lbl = lv_label_create(close_btn);
     lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(close_lbl, UI_FONT_12, 0);
     lv_obj_center(close_lbl);
 
     // Khung chứa nội dung ứng dụng (240 x 270)
@@ -453,7 +450,7 @@ static void open_system_monitor_app(void)
     lv_label_set_text(lbl_cpu_arc_val, "35%\nCPU (Demo)");
     lv_obj_set_style_text_align(lbl_cpu_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_cpu_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_cpu_arc_val, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_cpu_arc_val, UI_FONT_10, 0);
     lv_obj_center(lbl_cpu_arc_val);
 
     // RAM Arc
@@ -474,7 +471,7 @@ static void open_system_monitor_app(void)
     lv_label_set_text(lbl_ram_arc_val, "28%\nRAM");
     lv_obj_set_style_text_align(lbl_ram_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_ram_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_ram_arc_val, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_ram_arc_val, UI_FONT_10, 0);
     lv_obj_center(lbl_ram_arc_val);
 
     // Card 2: Live Chart
@@ -510,21 +507,21 @@ static void open_system_monitor_app(void)
     lv_obj_clear_flag(telemetry_box, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_temp_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_temp_chip, "🔥 Temp: 41.8 °C");
+    lv_label_set_text(lbl_temp_chip, "Nhiệt độ: 41.8 °C");
     lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_temp_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_temp_chip, UI_FONT_10, 0);
     lv_obj_set_pos(lbl_temp_chip, 4, 4);
 
     lbl_psram_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_psram_chip, "💾 PSRAM: 1.1 / 8.0 MB");
+    lv_label_set_text(lbl_psram_chip, LV_SYMBOL_SD_CARD " PSRAM: 1.1 / 8.0 MB");
     lv_obj_set_style_text_color(lbl_psram_chip, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_psram_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_psram_chip, UI_FONT_10, 0);
     lv_obj_set_pos(lbl_psram_chip, 4, 26);
 
     lbl_uptime_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_uptime_chip, "⏱ Uptime: 00:01:25");
+    lv_label_set_text(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: 00:01:25");
     lv_obj_set_style_text_color(lbl_uptime_chip, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_uptime_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_uptime_chip, UI_FONT_10, 0);
     lv_obj_set_pos(lbl_uptime_chip, 4, 48);
 }
 
@@ -552,9 +549,9 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_bright, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_brightness_val = lv_label_create(card_bright);
-    lv_label_set_text(lbl_brightness_val, "☀️ Độ sáng Màn hình: 85%");
+    lv_label_set_text(lbl_brightness_val, "Độ sáng Màn hình: 85%");
     lv_obj_set_style_text_color(lbl_brightness_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_brightness_val, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_brightness_val, UI_FONT_10, 0);
     lv_obj_align(lbl_brightness_val, LV_ALIGN_TOP_LEFT, 0, 0);
 
     slider_brightness = lv_slider_create(card_bright);
@@ -577,9 +574,9 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_theme, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *theme_title = lv_label_create(card_theme);
-    lv_label_set_text(theme_title, "🎨 Màu Chủ Đề Accent:");
+    lv_label_set_text(theme_title, "Màu Chủ Đề Accent:");
     lv_obj_set_style_text_color(theme_title, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(theme_title, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(theme_title, UI_FONT_10, 0);
     lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     int pill_w = (SCREEN_WIDTH - 48) / 4;
@@ -593,7 +590,7 @@ static void open_settings_app(void)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_color(l, lv_color_hex(0x0A0D14), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(l, UI_FONT_10, 0);
         lv_obj_center(l);
     };
 
@@ -613,9 +610,9 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_pwr, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl_pwr_t = lv_label_create(card_pwr);
-    lv_label_set_text(lbl_pwr_t, "⚡ Quản Lý Nguồn Điện");
+    lv_label_set_text(lbl_pwr_t, "Quản Lý Nguồn Điện");
     lv_obj_set_style_text_color(lbl_pwr_t, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_pwr_t, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_pwr_t, UI_FONT_10, 0);
     lv_obj_align(lbl_pwr_t, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *btn_to_pwr = lv_btn_create(card_pwr);
@@ -627,7 +624,7 @@ static void open_settings_app(void)
 
     lv_obj_t *lbl_btn_p = lv_label_create(btn_to_pwr);
     lv_label_set_text(lbl_btn_p, "Mở " LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(lbl_btn_p, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_btn_p, UI_FONT_10, 0);
     lv_obj_center(lbl_btn_p);
 }
 
@@ -655,15 +652,15 @@ static void open_power_app(void)
     lv_obj_clear_flag(card_stat, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *t_pwr = lv_label_create(card_stat);
-    lv_label_set_text(t_pwr, "⚡ Trạng Thái Nguồn (Power State)");
+    lv_label_set_text(t_pwr, "Trạng Thái Nguồn");
     lv_obj_set_style_text_color(t_pwr, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(t_pwr, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(t_pwr, UI_FONT_10, 0);
     lv_obj_align(t_pwr, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lbl_power_state = lv_label_create(card_stat);
-    lv_label_set_text(lbl_power_state, "🟢 Hoạt Động (ACTIVE - 100%)");
+    lv_label_set_text(lbl_power_state, LV_SYMBOL_OK " Hoạt Động (100%)");
     lv_obj_set_style_text_color(lbl_power_state, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_power_state, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_power_state, UI_FONT_12, 0);
     lv_obj_align(lbl_power_state, LV_ALIGN_BOTTOM_LEFT, 0, -4);
 
     // Card 2: Hẹn giờ tự động mờ và ngủ
@@ -677,15 +674,15 @@ static void open_power_app(void)
     lv_obj_clear_flag(card_timer, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *t_t = lv_label_create(card_timer);
-    lv_label_set_text(t_t, "⏱ Thời Gian Chờ (Inactivity Timers):");
+    lv_label_set_text(t_t, "Thời Gian Chờ:");
     lv_obj_set_style_text_color(t_t, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(t_t, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(t_t, UI_FONT_10, 0);
     lv_obj_align(t_t, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *lbl_t_info = lv_label_create(card_timer);
     lv_label_set_text(lbl_t_info, "• Mờ sau: 30 giây\n• Tắt màn hình sau: 60 giây");
     lv_obj_set_style_text_color(lbl_t_info, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_t_info, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_t_info, UI_FONT_10, 0);
     lv_obj_align(lbl_t_info, LV_ALIGN_BOTTOM_LEFT, 0, -4);
 
     // Card 3: Thao tác Ngủ Ngay (Sleep Now)
@@ -701,7 +698,7 @@ static void open_power_app(void)
     lv_obj_t *lbl_slp = lv_label_create(btn_sleep);
     lv_label_set_text(lbl_slp, LV_SYMBOL_POWER " Tắt Màn Hình & Ngủ Ngay");
     lv_obj_set_style_text_color(lbl_slp, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(lbl_slp, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_slp, UI_FONT_10, 0);
     lv_obj_center(lbl_slp);
 }
 
@@ -726,22 +723,39 @@ static void open_tools_app(void)
     lv_obj_set_style_border_width(compass_card, 1, 0);
 
     lv_obj_t *t = lv_label_create(compass_card);
-    lv_label_set_text(t, "🧭 Sensors & IMU (Demo/Mock)");
+    lv_label_set_text(t, "Sensors & IMU (Demo)");
     lv_obj_set_style_text_color(t, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(t, UI_FONT_10, 0);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 4);
 
     lbl_compass_val = lv_label_create(compass_card);
     lv_label_set_text(lbl_compass_val, "[DEMO]\nHướng: 180.5° Nam\nTừ trường: 48.2 µT");
     lv_obj_set_style_text_color(lbl_compass_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_compass_val, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(lbl_compass_val, UI_FONT_12, 0);
     lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -18);
 
     lbl_pitch_val = lv_label_create(compass_card);
     lv_label_set_text(lbl_pitch_val, "Pitch/Roll: 0.2° | -0.5°\nGia tốc: 9.81 m/s²\nÁp suất: 1013.25 hPa");
     lv_obj_set_style_text_color(lbl_pitch_val, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_pitch_val, &lv_font_montserrat_10, 0);
-    lv_obj_align(lbl_pitch_val, LV_ALIGN_BOTTOM_MID, 0, -8);
+    lv_obj_set_style_text_font(lbl_pitch_val, UI_FONT_10, 0);
+    lv_obj_align(lbl_pitch_val, LV_ALIGN_CENTER, 0, 36);
+
+    // Nút mở Color Self-Test
+    lv_obj_t *btn_ct = lv_btn_create(compass_card);
+    lv_obj_set_size(btn_ct, 180, 32);
+    lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_MID, 0, -6);
+    lv_obj_set_style_bg_color(btn_ct, lv_color_hex(0x1F2937), 0);
+    lv_obj_set_style_border_color(btn_ct, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+    lv_obj_set_style_border_width(btn_ct, 1, 0);
+    lv_obj_set_style_radius(btn_ct, 6, 0);
+    lv_obj_set_ext_click_area(btn_ct, 4);
+    lv_obj_add_event_cb(btn_ct, color_test_btn_cb, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *lbl_ct = lv_label_create(btn_ct);
+    lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Test Màu Màn Hình");
+    lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+    lv_obj_set_style_text_font(lbl_ct, UI_FONT_12, 0);
+    lv_obj_center(lbl_ct);
 }
 
 /* =========================================================================
@@ -765,9 +779,9 @@ static void open_about_app(void)
     lv_obj_set_style_border_width(card, 1, 0);
 
     lv_obj_t *title = lv_label_create(card);
-    lv_label_set_text(title, "✨ ESP32-S3 Mini OS");
+    lv_label_set_text(title, "ESP32-S3 Mini OS");
     lv_obj_set_style_text_color(title, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_12, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *desc = lv_label_create(card);
@@ -780,7 +794,7 @@ static void open_about_app(void)
         "Âm thanh: ES8311 Codec\n"
         "Cảm ứng: FT6336 I2C");
     lv_obj_set_style_text_color(desc, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(desc, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(desc, UI_FONT_10, 0);
     lv_obj_align(desc, LV_ALIGN_CENTER, 0, 10);
 }
 
@@ -911,16 +925,14 @@ void ui_update_periodic(const SystemStats &stats)
         lv_label_set_text_fmt(lbl_clock, "%02u:%02u", (s % 3600) / 60, s % 60);
     }
 
-    // 2. Cập nhật RAM Pill
-    if (lbl_ram_pill)
+    // Cập nhật biểu tượng Loa (chỉ hiện khi đang phát âm thanh)
+    if (lbl_spk_icon)
     {
-        lv_label_set_text_fmt(lbl_ram_pill, "%d%%", stats.heap_usage_percent);
-        if (stats.heap_usage_percent > 80)
-            lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_ACCENT_RED), 0);
-        else if (stats.heap_usage_percent > 50)
-            lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+        bool is_audio_active = (audio_get_current_owner() == AUDIO_OWNER_MUSIC || audio_is_playing());
+        if (is_audio_active)
+            lv_obj_clear_flag(lbl_spk_icon, LV_OBJ_FLAG_HIDDEN);
         else
-            lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+            lv_obj_add_flag(lbl_spk_icon, LV_OBJ_FLAG_HIDDEN);
     }
 
     // 3. Cập nhật WiFi Icon
@@ -956,17 +968,17 @@ void ui_update_periodic(const SystemStats &stats)
 
     if (lbl_temp_chip)
     {
-        lv_label_set_text_fmt(lbl_temp_chip, "🔥 Temp: %.1f °C", stats.core_temp_c);
+        lv_label_set_text_fmt(lbl_temp_chip, "Nhiệt độ: %.1f °C", stats.core_temp_c);
     }
 
     if (lbl_psram_chip)
     {
-        lv_label_set_text_fmt(lbl_psram_chip, "💾 PSRAM: %.1f / 8.0 MB", (float)stats.used_psram / (1024.0f * 1024.0f));
+        lv_label_set_text_fmt(lbl_psram_chip, LV_SYMBOL_SD_CARD " PSRAM: %.1f / 8.0 MB", (float)stats.used_psram / (1024.0f * 1024.0f));
     }
 
     if (lbl_uptime_chip)
     {
-        lv_label_set_text_fmt(lbl_uptime_chip, "⏱ Uptime: %s", stats.uptime_str);
+        lv_label_set_text_fmt(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: %s", stats.uptime_str);
     }
 
     // 5. Cập nhật Power State (nếu đang mở)
@@ -974,11 +986,11 @@ void ui_update_periodic(const SystemStats &stats)
     {
         PowerState p_st = power_manager_get_state();
         if (p_st == POWER_STATE_ACTIVE)
-            lv_label_set_text(lbl_power_state, "🟢 Hoạt Động (ACTIVE - 100%)");
+            lv_label_set_text(lbl_power_state, LV_SYMBOL_OK " Hoạt Động (100%)");
         else if (p_st == POWER_STATE_DIMMED)
-            lv_label_set_text(lbl_power_state, "🟡 Mờ Màn Hình (DIMMED - 20%)");
+            lv_label_set_text(lbl_power_state, LV_SYMBOL_EYE_CLOSE " Mờ Màn Hình (20%)");
         else
-            lv_label_set_text(lbl_power_state, "🔴 Tắt Màn Hình (SLEEP)");
+            lv_label_set_text(lbl_power_state, LV_SYMBOL_POWER " Tắt Màn Hình");
     }
 
     // 6. Cập nhật icon Loa trên Status Bar

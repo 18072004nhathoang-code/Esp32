@@ -36,8 +36,9 @@ static TaskHandle_t audio_task_handle = nullptr;
 static SemaphoreHandle_t audio_mutex = nullptr;
 static SemaphoreHandle_t audio_i2s_tx_mutex = nullptr; // Mutex độc quyền đường truyền TX i2s_write
 
-// Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership)
+// Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
+static volatile uint32_t audio_owner_refcount = 0;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
 static bool i2s_duplex_installed = false;
 
@@ -164,15 +165,16 @@ bool audio_request_ownership(AudioOwner requester)
         return false;
     }
 
-    // Nếu đã sở hữu từ trước
+    // Nếu chính requester này đang giữ lease: tăng refcount
     if (current_audio_owner == requester)
     {
+        audio_owner_refcount++;
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
 
     // NGUYÊN TẮC BẮT BUỘC: Độc quyền thực sự (Exclusive Arbitration)
-    // Không cho SYSTEM, RECORDER, AI_VOICE, MUSIC ghi đè chủ sở hữu đang bận
+    // Không cho SYSTEM, RECORDER, AI_VOICE, MUSIC chiếm khi chủ sở hữu khác đang bận
     if (current_audio_owner != AUDIO_OWNER_NONE)
     {
         xSemaphoreGive(audio_owner_mutex);
@@ -197,6 +199,7 @@ bool audio_request_ownership(AudioOwner requester)
         audio_uninstall_duplex_driver();
 
         current_audio_owner = AUDIO_OWNER_MUSIC;
+        audio_owner_refcount = 1;
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
@@ -213,6 +216,7 @@ bool audio_request_ownership(AudioOwner requester)
     }
 
     current_audio_owner = requester;
+    audio_owner_refcount = 1;
     xSemaphoreGive(audio_owner_mutex);
     return true;
 }
@@ -223,13 +227,21 @@ void audio_release_ownership(AudioOwner requester)
     {
         if (current_audio_owner == requester)
         {
-            current_audio_owner = AUDIO_OWNER_NONE;
-
-            // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
-            if (requester == AUDIO_OWNER_MUSIC)
+            if (audio_owner_refcount > 1)
             {
-                audio_install_duplex_driver();
-                audio_manager_resume_task();
+                audio_owner_refcount--;
+            }
+            else
+            {
+                audio_owner_refcount = 0;
+                current_audio_owner = AUDIO_OWNER_NONE;
+
+                // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
+                if (requester == AUDIO_OWNER_MUSIC)
+                {
+                    audio_install_duplex_driver();
+                    audio_manager_resume_task();
+                }
             }
         }
         xSemaphoreGive(audio_owner_mutex);

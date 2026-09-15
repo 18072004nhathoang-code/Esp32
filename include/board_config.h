@@ -68,11 +68,11 @@
 // ==============================================================================
 
 #ifndef SCREEN_WIDTH
-#define SCREEN_WIDTH            240
+#define SCREEN_WIDTH            BOARD_LCD_WIDTH
 #endif
 
 #ifndef SCREEN_HEIGHT
-#define SCREEN_HEIGHT           320
+#define SCREEN_HEIGHT           BOARD_LCD_HEIGHT
 #endif
 
 #ifndef DISP_HOR_RES

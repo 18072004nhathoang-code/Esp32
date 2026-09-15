@@ -6,16 +6,18 @@
 #pragma once
 
 #include <lvgl.h>
+#include "board_config.h"
+#include "fonts/ui_fonts.h"
 
 // ==============================================================================
 // 1. SCREEN DIMENSIONS & LAYOUT METRICS
 // ==============================================================================
 #ifndef SCREEN_WIDTH
-#define SCREEN_WIDTH         240
+#define SCREEN_WIDTH         BOARD_LCD_WIDTH
 #endif
 
 #ifndef SCREEN_HEIGHT
-#define SCREEN_HEIGHT        320
+#define SCREEN_HEIGHT        BOARD_LCD_HEIGHT
 #endif
 
 #define STATUS_BAR_HEIGHT    22

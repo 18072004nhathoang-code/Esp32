@@ -227,7 +227,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_snap = lv_label_create(btn_snap);
     lv_label_set_text(lbl_snap, LV_SYMBOL_REFRESH " Chụp");
     lv_obj_set_style_text_color(lbl_snap, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_snap, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_snap, UI_FONT_10, 0);
     lv_obj_center(lbl_snap);
 
     // Nút Cấu hình
@@ -243,7 +243,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_cfg = lv_label_create(btn_cfg);
     lv_label_set_text(lbl_cfg, LV_SYMBOL_SETTINGS " Cài đặt");
     lv_obj_set_style_text_color(lbl_cfg, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_cfg, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_cfg, UI_FONT_10, 0);
     lv_obj_center(lbl_cfg);
 
     // Nút Ngắt kết nối
@@ -259,21 +259,21 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_dis = lv_label_create(btn_disconnect);
     lv_label_set_text(lbl_dis, LV_SYMBOL_POWER " Dừng");
     lv_obj_set_style_text_color(lbl_dis, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(lbl_dis, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_dis, UI_FONT_10, 0);
     lv_obj_center(lbl_dis);
 
     // Dòng thông số thực tế (FPS, Độ phân giải, Độ trễ)
     lbl_metrics = lv_label_create(toolbar_box);
     lv_label_set_text(lbl_metrics, "FPS: 0.0 • 0x0 • 0 KB");
     lv_obj_set_style_text_color(lbl_metrics, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_metrics, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_metrics, UI_FONT_10, 0);
     lv_obj_align(lbl_metrics, LV_ALIGN_BOTTOM_LEFT, 2, -18);
 
     // Dòng trạng thái nguồn & Năng lực thực
     lbl_cam_status = lv_label_create(toolbar_box);
     lv_label_set_text(lbl_cam_status, "HTTP Snap: Sẵn sàng | ONVIF/RTSP: Chưa hỗ trợ");
     lv_obj_set_style_text_color(lbl_cam_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_cam_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_cam_status, UI_FONT_10, 0);
     lv_obj_align(lbl_cam_status, LV_ALIGN_BOTTOM_LEFT, 2, -2);
 
     // 4. MODAL CẤU HÌNH CAMERA CUỘN DỌC (MẶC ĐỊNH ẨN)
@@ -290,9 +290,9 @@ void camera_app_open(lv_obj_t *parent)
 
     // Header modal cấu hình
     lv_obj_t *m_hdr = lv_label_create(cfg_modal);
-    lv_label_set_text(m_hdr, "⚙ Cấu Hình IP Camera");
+    lv_label_set_text(m_hdr, LV_SYMBOL_SETTINGS " Cấu Hình IP Cam");
     lv_obj_set_style_text_color(m_hdr, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(m_hdr, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(m_hdr, UI_FONT_12, 0);
     lv_obj_align(m_hdr, LV_ALIGN_TOP_LEFT, 4, 0);
 
     lv_obj_t *btn_m_close = lv_btn_create(cfg_modal);
@@ -304,7 +304,7 @@ void camera_app_open(lv_obj_t *parent)
 
     lv_obj_t *lbl_mc = lv_label_create(btn_m_close);
     lv_label_set_text(lbl_mc, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_font(lbl_mc, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_mc, UI_FONT_10, 0);
     lv_obj_center(lbl_mc);
 
     // Form nhập liệu
@@ -312,7 +312,7 @@ void camera_app_open(lv_obj_t *parent)
         lv_obj_t *lbl = lv_label_create(cfg_modal);
         lv_label_set_text(lbl, label_text);
         lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_10, 0);
         lv_obj_set_pos(lbl, 6, y_pos);
 
         lv_obj_t *ta = lv_textarea_create(cfg_modal);
@@ -324,7 +324,7 @@ void camera_app_open(lv_obj_t *parent)
         lv_obj_set_style_bg_color(ta, lv_color_hex(0x151B27), 0);
         lv_obj_set_style_border_color(ta, lv_color_hex(0x2A354A), 0);
         lv_obj_set_style_text_color(ta, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(ta, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(ta, UI_FONT_10, 0);
         return ta;
     };
 
@@ -340,7 +340,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_v = lv_label_create(cfg_modal);
     lv_label_set_text(lbl_v, "Nhà sản xuất (Vendor):");
     lv_obj_set_style_text_color(lbl_v, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_v, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_v, UI_FONT_10, 0);
     lv_obj_set_pos(lbl_v, 6, 348);
 
     dd_vendor = lv_dropdown_create(cfg_modal);
@@ -348,13 +348,13 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_pos(dd_vendor, 6, 362);
     lv_dropdown_set_options(dd_vendor, "Generic ONVIF\nHikvision\nKBVision\nEZVIZ\nYoosee");
     lv_obj_set_style_bg_color(dd_vendor, lv_color_hex(0x151B27), 0);
-    lv_obj_set_style_text_font(dd_vendor, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(dd_vendor, UI_FONT_10, 0);
 
     // Dropdown Giao thức
     lv_obj_t *lbl_p = lv_label_create(cfg_modal);
     lv_label_set_text(lbl_p, "Giao thức (Protocol):");
     lv_obj_set_style_text_color(lbl_p, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_p, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_p, UI_FONT_10, 0);
     lv_obj_set_pos(lbl_p, 6, 396);
 
     dd_proto = lv_dropdown_create(cfg_modal);
@@ -362,7 +362,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_pos(dd_proto, 6, 410);
     lv_dropdown_set_options(dd_proto, "HTTP Snapshot (OK)\nMJPEG (Chưa)\nRTSP/H.264 (Chưa)");
     lv_obj_set_style_bg_color(dd_proto, lv_color_hex(0x151B27), 0);
-    lv_obj_set_style_text_font(dd_proto, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(dd_proto, UI_FONT_10, 0);
 
     // Nút Lưu & Kết nối
     btn_save_connect = lv_btn_create(cfg_modal);
@@ -375,7 +375,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_save = lv_label_create(btn_save_connect);
     lv_label_set_text(lbl_save, LV_SYMBOL_SAVE " Lưu & Kết Nối");
     lv_obj_set_style_text_color(lbl_save, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_save, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_save, UI_FONT_10, 0);
     lv_obj_center(lbl_save);
 
     // Khởi tạo decoder TJpg

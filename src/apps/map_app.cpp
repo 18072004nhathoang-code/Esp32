@@ -9,6 +9,7 @@
 #include "map_tile_downloader.h"
 #include "sd_map_cache.h"
 #include "../os/wifi_manager.h"
+#include "../ui/ui_theme.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <math.h>
@@ -178,12 +179,12 @@ void map_app_render(void)
         {
             if (src == TILE_SOURCE_SD_CACHE)
             {
-                lv_label_set_text(hud_lbl_source, "💾 SD Cache Hit");
+                lv_label_set_text(hud_lbl_source, LV_SYMBOL_SD_CARD " SD Cache Hit");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
             }
             else
             {
-                lv_label_set_text(hud_lbl_source, "🌐 Google Static API");
+                lv_label_set_text(hud_lbl_source, LV_SYMBOL_WIFI " Google Static API");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
             }
         }
@@ -196,7 +197,7 @@ void map_app_render(void)
         {
             if (hud_lbl_source)
             {
-                lv_label_set_text(hud_lbl_source, "⏳ Đang tải ảnh...");
+                lv_label_set_text(hud_lbl_source, LV_SYMBOL_REFRESH " Đang tải ảnh...");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
             }
         }
@@ -204,7 +205,7 @@ void map_app_render(void)
         {
             if (hud_lbl_source)
             {
-                lv_label_set_text(hud_lbl_source, "⚠️ Lỗi nạp -> Vector");
+                lv_label_set_text(hud_lbl_source, "[!] Lỗi nạp -> Vector");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
             }
             render_offline_vector_map();
@@ -215,7 +216,7 @@ void map_app_render(void)
     // Cập nhật nhãn thành phố & Zoom
     if (hud_lbl_city)
     {
-        lv_label_set_text_fmt(hud_lbl_city, "📍 %s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
+        lv_label_set_text_fmt(hud_lbl_city, "%s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
     }
     if (hud_coord_lbl)
     {
@@ -225,12 +226,12 @@ void map_app_render(void)
     {
         if (strcmp(cur_maptype, "satellite") == 0)
         {
-            lv_label_set_text(hud_lbl_type, "🛰️ Vệ Tinh");
+            lv_label_set_text(hud_lbl_type, "Vệ Tinh");
             lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00F2FE), 0);
         }
         else
         {
-            lv_label_set_text(hud_lbl_type, "🛣️ Đường Phố");
+            lv_label_set_text(hud_lbl_type, "Đường Phố");
             lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00E676), 0);
         }
     }
@@ -248,17 +249,17 @@ static void trigger_map_reload(void)
         // Kiểm tra nhanh trước trên thẻ nhớ SD để cập nhật nhãn tức thì
         if (sd_map_cache_is_available() && sd_map_cache_exists(cur_lat, cur_lon, cur_zoom, cur_maptype))
         {
-            lv_label_set_text(hud_lbl_source, "💾 Đang đọc thẻ SD...");
+            lv_label_set_text(hud_lbl_source, LV_SYMBOL_SD_CARD " Đang đọc thẻ SD...");
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
         }
         else if (wifi_manager_is_connected())
         {
-            lv_label_set_text(hud_lbl_source, "🌐 Gửi yêu cầu Google API...");
+            lv_label_set_text(hud_lbl_source, LV_SYMBOL_WIFI " Gửi yêu cầu Google API...");
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
         }
         else
         {
-            lv_label_set_text(hud_lbl_source, "⚪ Không có mạng & Chưa có cache");
+            lv_label_set_text(hud_lbl_source, "[Offline] Chưa có cache");
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xA0AEC0), 0);
         }
     }
@@ -389,9 +390,9 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(hud_type_btn, btn_toggle_type_cb, LV_EVENT_CLICKED, nullptr);
 
     hud_lbl_type = lv_label_create(hud_type_btn);
-    lv_label_set_text(hud_lbl_type, "🛣️");
+    lv_label_set_text(hud_lbl_type, "Road");
     lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00E676), 0);
-    lv_obj_set_style_text_font(hud_lbl_type, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(hud_lbl_type, UI_FONT_10, 0);
     lv_obj_center(hud_lbl_type);
 
     // 5. FLOATING HUD TOP: Tiêu đề vị trí & Mức Zoom (Giữa)
@@ -407,9 +408,9 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(hud_city_pill, LV_OBJ_FLAG_SCROLLABLE);
 
     hud_lbl_city = lv_label_create(hud_city_pill);
-    lv_label_set_text_fmt(hud_lbl_city, "📍 %s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
+    lv_label_set_text_fmt(hud_lbl_city, "%s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
     lv_obj_set_style_text_color(hud_lbl_city, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(hud_lbl_city, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(hud_lbl_city, UI_FONT_10, 0);
     lv_obj_center(hud_lbl_city);
 
     // Nút chuyển địa điểm tiếp theo (Phải)
@@ -426,7 +427,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_t *l_nc = lv_label_create(btn_next_city);
     lv_label_set_text(l_nc, LV_SYMBOL_NEXT);
     lv_obj_set_style_text_color(l_nc, lv_color_hex(0x00F2FE), 0);
-    lv_obj_set_style_text_font(l_nc, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(l_nc, UI_FONT_10, 0);
     lv_obj_center(l_nc);
 
     // 6. CỤM NÚT FLOATING ZOOM [+] VÀ [-] (Góc phải)
@@ -494,9 +495,9 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(hud_source_pill, LV_OBJ_FLAG_SCROLLABLE);
 
     hud_lbl_source = lv_label_create(hud_source_pill);
-    lv_label_set_text(hud_lbl_source, "💾 Nạp SD Cache...");
+    lv_label_set_text(hud_lbl_source, LV_SYMBOL_SD_CARD " Nạp SD Cache...");
     lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
-    lv_obj_set_style_text_font(hud_lbl_source, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(hud_lbl_source, UI_FONT_10, 0);
     lv_obj_center(hud_lbl_source);
 
     // Kích hoạt nạp bản đồ ban đầu (Hà Nội, Z15, Roadmap)

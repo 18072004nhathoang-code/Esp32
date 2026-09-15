@@ -7,6 +7,7 @@
 #include "ai_voice_app.h"
 #include "../ai/ai_voice_service.h"
 #include "../audio/audio_manager.h"
+#include "../ui/ui_theme.h"
 
 #define NUM_WAVE_BARS 7
 
@@ -49,7 +50,7 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_set_width(lbl_text, LV_SIZE_CONTENT);
         lv_obj_set_style_max_width(lbl_text, 175, 0);
         lv_obj_set_style_text_color(lbl_text, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(lbl_text, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(lbl_text, UI_FONT_12, 0);
     }
     else
     {
@@ -60,11 +61,11 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_set_style_border_width(bubble, 1, 0);
         lv_obj_set_style_radius(bubble, 12, 0);
 
-        // Header nhỏ: 🤖 XiaoZhi AI (Demo/Mock)
+        // Header nhỏ: XiaoZhi AI (Demo/Mock)
         lv_obj_t *lbl_hdr = lv_label_create(bubble);
-        lv_label_set_text(lbl_hdr, "🤖 XiaoZhi AI (Demo)");
+        lv_label_set_text(lbl_hdr, "XiaoZhi AI (Demo)");
         lv_obj_set_style_text_color(lbl_hdr, lv_color_hex(0x00F2FE), 0);
-        lv_obj_set_style_text_font(lbl_hdr, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(lbl_hdr, UI_FONT_10, 0);
         lv_obj_align(lbl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         lv_obj_t *lbl_text = lv_label_create(bubble);
@@ -73,7 +74,7 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_set_width(lbl_text, LV_SIZE_CONTENT);
         lv_obj_set_style_max_width(lbl_text, 175, 0);
         lv_obj_set_style_text_color(lbl_text, lv_color_hex(0xE2E8F0), 0);
-        lv_obj_set_style_text_font(lbl_text, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(lbl_text, UI_FONT_12, 0);
         lv_obj_set_style_pad_top(lbl_text, 14, 0);
     }
 
@@ -218,14 +219,14 @@ void ai_voice_app_open(lv_obj_t *parent)
     lbl_ptt_icon = lv_label_create(btn_push_to_talk);
     lv_label_set_text(lbl_ptt_icon, LV_SYMBOL_AUDIO);
     lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x00F2FE), 0);
-    lv_obj_set_style_text_font(lbl_ptt_icon, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_ptt_icon, UI_FONT_14, 0);
     lv_obj_center(lbl_ptt_icon);
 
     // 2.3 Nhãn trạng thái AI & Hướng dẫn sử dụng
     lbl_status_text = lv_label_create(bottom_bar);
     lv_label_set_text(lbl_status_text, "Giữ nút để nói");
     lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
-    lv_obj_set_style_text_font(lbl_status_text, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_status_text, UI_FONT_10, 0);
     lv_obj_align(lbl_status_text, LV_ALIGN_RIGHT_MID, -4, 0);
 }
 

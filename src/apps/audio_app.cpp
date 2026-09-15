@@ -38,7 +38,7 @@ static void volume_slider_cb(lv_event_t *e)
     audio_set_volume((uint8_t)val);
     if (lbl_vol_val)
     {
-        lv_label_set_text_fmt(lbl_vol_val, "🔊 Loa: %d%%", val);
+        lv_label_set_text_fmt(lbl_vol_val, LV_SYMBOL_VOLUME_MAX " Loa: %d%%", val);
     }
 }
 
@@ -58,7 +58,7 @@ static void record_btn_cb(lv_event_t *e)
         if (lbl_recorder_status)
         {
             uint32_t dur = audio_get_recorded_duration_ms();
-            lv_label_set_text_fmt(lbl_recorder_status, "✅ Đã lưu PSRAM: %.1fs", (float)dur / 1000.0f);
+            lv_label_set_text_fmt(lbl_recorder_status, "[OK] Đã lưu: %.1fs", (float)dur / 1000.0f);
             lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
         }
     }
@@ -70,7 +70,7 @@ static void record_btn_cb(lv_event_t *e)
             lv_obj_set_style_bg_color(btn_record, lv_color_hex(0xE53E3E), 0);
             if (lbl_recorder_status)
             {
-                lv_label_set_text(lbl_recorder_status, "🔴 Đang thu âm từ Mic...");
+                lv_label_set_text(lbl_recorder_status, "[REC] Đang thu âm...");
                 lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_RED), 0);
             }
         }
@@ -78,7 +78,7 @@ static void record_btn_cb(lv_event_t *e)
         {
             if (lbl_recorder_status)
             {
-                lv_label_set_text(lbl_recorder_status, "⚠️ Lỗi: Bus bận hoặc thiếu PSRAM!");
+                lv_label_set_text(lbl_recorder_status, "[!] Lỗi: Bus bận / thiếu RAM");
                 lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
             }
         }
@@ -106,7 +106,7 @@ static void play_btn_cb(lv_event_t *e)
             lv_obj_set_style_bg_color(btn_play, lv_color_hex(0x2B6CB0), 0);
             if (lbl_recorder_status)
             {
-                lv_label_set_text(lbl_recorder_status, "🔊 Đang phát ra Loa...");
+                lv_label_set_text(lbl_recorder_status, "[PLAY] Đang phát ra Loa...");
                 lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_CYAN), 0);
             }
         }
@@ -114,7 +114,7 @@ static void play_btn_cb(lv_event_t *e)
         {
             if (lbl_recorder_status)
             {
-                lv_label_set_text(lbl_recorder_status, "⚠️ Chưa có bản ghi âm!");
+                lv_label_set_text(lbl_recorder_status, "[!] Chưa có bản ghi âm");
                 lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
             }
         }
@@ -149,9 +149,9 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(card_mic, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *t_mic = lv_label_create(card_mic);
-    lv_label_set_text(t_mic, "🎙️ Mic Live Waveform");
+    lv_label_set_text(t_mic, "Mic Live Waveform");
     lv_obj_set_style_text_color(t_mic, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(t_mic, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(t_mic, UI_FONT_10, 0);
     lv_obj_align(t_mic, LV_ALIGN_TOP_LEFT, 0, 0);
 
     bar_vu_meter = lv_bar_create(card_mic);
@@ -166,7 +166,7 @@ void audio_app_open(lv_obj_t *parent)
     lbl_vu_val = lv_label_create(card_mic);
     lv_label_set_text(lbl_vu_val, "Mức thu: 0% | -60.0 dB");
     lv_obj_set_style_text_color(lbl_vu_val, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_vu_val, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_vu_val, UI_FONT_10, 0);
     lv_obj_align(lbl_vu_val, LV_ALIGN_TOP_LEFT, 0, 28);
 
     chart_waveform = lv_chart_create(card_mic);
@@ -201,9 +201,9 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(card_spk, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_vol_val = lv_label_create(card_spk);
-    lv_label_set_text_fmt(lbl_vol_val, "🔊 Loa: %d%%", audio_get_volume());
+    lv_label_set_text_fmt(lbl_vol_val, LV_SYMBOL_VOLUME_MAX " Loa: %d%%", audio_get_volume());
     lv_obj_set_style_text_color(lbl_vol_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_vol_val, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_vol_val, UI_FONT_10, 0);
     lv_obj_align(lbl_vol_val, LV_ALIGN_TOP_LEFT, 0, 0);
 
     slider_vol = lv_slider_create(card_spk);
@@ -226,14 +226,14 @@ void audio_app_open(lv_obj_t *parent)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_color(l, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_10, 0);
+        lv_obj_set_style_text_font(l, UI_FONT_10, 0);
         lv_obj_center(l);
     };
 
     create_snd_btn(LV_SYMBOL_BELL " Chime",  2,   34, 0x1E3A8A, FX_CHIME);
     create_snd_btn(LV_SYMBOL_CHARGE " Beep", 108, 34, 0x7C2D12, FX_BEEP);
     create_snd_btn(LV_SYMBOL_AUDIO " Melody",2,   66, 0x14532D, FX_MELODY);
-    create_snd_btn("🤖 XiaoZhi",              108, 66, 0x581C87, FX_XIAOZHI_WAKE);
+    create_snd_btn("XiaoZhi",              108, 66, 0x581C87, FX_XIAOZHI_WAKE);
 
     // =========================================================================
     // 3. CARD 3 (W: 226, H: 96): PSRAM VOICE MEMO
@@ -249,9 +249,9 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(memo_box, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *t_memo = lv_label_create(memo_box);
-    lv_label_set_text(t_memo, "🎙️ Ghi Âm PSRAM (Tối đa 10s)");
+    lv_label_set_text(t_memo, "Ghi Âm PSRAM (Max 10s)");
     lv_obj_set_style_text_color(t_memo, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(t_memo, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(t_memo, UI_FONT_10, 0);
     lv_obj_align(t_memo, LV_ALIGN_TOP_LEFT, 0, 0);
 
     btn_record = lv_btn_create(memo_box);
@@ -263,7 +263,7 @@ void audio_app_open(lv_obj_t *parent)
 
     lbl_record_btn = lv_label_create(btn_record);
     lv_label_set_text(lbl_record_btn, LV_SYMBOL_PLAY " Thu");
-    lv_obj_set_style_text_font(lbl_record_btn, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_record_btn, UI_FONT_10, 0);
     lv_obj_center(lbl_record_btn);
 
     btn_play = lv_btn_create(memo_box);
@@ -275,13 +275,13 @@ void audio_app_open(lv_obj_t *parent)
 
     lbl_play_btn = lv_label_create(btn_play);
     lv_label_set_text(lbl_play_btn, LV_SYMBOL_AUDIO " Phát");
-    lv_obj_set_style_text_font(lbl_play_btn, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_play_btn, UI_FONT_10, 0);
     lv_obj_center(lbl_play_btn);
 
     lbl_recorder_status = lv_label_create(memo_box);
     lv_label_set_text(lbl_recorder_status, "Sẵn sàng ghi âm");
     lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_recorder_status, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_font(lbl_recorder_status, UI_FONT_10, 0);
     lv_obj_align(lbl_recorder_status, LV_ALIGN_BOTTOM_LEFT, 2, -10);
 
     bar_record_progress = lv_bar_create(memo_box);
@@ -357,7 +357,7 @@ void audio_app_update(void)
             lv_bar_set_value(bar_record_progress, progress, LV_ANIM_OFF);
             if (lbl_recorder_status)
             {
-                lv_label_set_text_fmt(lbl_recorder_status, "🔴 Thu: %.1fs / %ds",
+                lv_label_set_text_fmt(lbl_recorder_status, "[REC] Thu: %.1fs / %ds",
                                       (float)dur / 1000.0f, AUDIO_RECORD_MAX_SEC);
             }
         }
@@ -370,7 +370,7 @@ void audio_app_update(void)
             lv_bar_set_value(bar_record_progress, progress, LV_ANIM_OFF);
             if (lbl_recorder_status)
             {
-                lv_label_set_text_fmt(lbl_recorder_status, "🟢 Phát: %.1fs / %.1fs",
+                lv_label_set_text_fmt(lbl_recorder_status, "[PLAY] Phát: %.1fs / %.1fs",
                                       (float)prog / 1000.0f, (float)total / 1000.0f);
             }
         }
