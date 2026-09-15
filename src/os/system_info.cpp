@@ -36,3 +36,56 @@ SystemStats system_get_stats(void)
 
     return stats;
 }
+
+BatteryInfo system_get_battery_info(void)
+{
+    BatteryInfo info;
+    memset(&info, 0, sizeof(info));
+
+#if defined(BOARD_BATTERY_ADC_PIN) && (BOARD_BATTERY_ADC_PIN >= 0)
+    info.has_battery = true;
+    info.is_calibrated = BOARD_BATTERY_CALIBRATED;
+
+    // Đọc điện áp pin ADC qua analogReadMilliVolts
+    uint32_t raw_mv = analogReadMilliVolts(BOARD_BATTERY_ADC_PIN);
+    
+    // Cầu phân áp: Vbat = Vadc * (R1 + R2) / R2
+#if defined(BOARD_BATTERY_DIVIDER_R1) && defined(BOARD_BATTERY_DIVIDER_R2) && (BOARD_BATTERY_DIVIDER_R2 > 0)
+    float ratio = (BOARD_BATTERY_DIVIDER_R1 + BOARD_BATTERY_DIVIDER_R2) / BOARD_BATTERY_DIVIDER_R2;
+#else
+    float ratio = 2.0f;
+#endif
+    info.voltage = ((float)raw_mv * ratio) / 1000.0f;
+
+    // Pin Li-Po 3.7V: 3.2V (0%) đến 4.2V (100%)
+    if (info.voltage <= 3.20f)
+    {
+        info.percentage = 0;
+    }
+    else if (info.voltage >= 4.20f)
+    {
+        info.percentage = 100;
+    }
+    else
+    {
+        info.percentage = (uint8_t)(((info.voltage - 3.20f) / 1.0f) * 100.0f);
+    }
+
+    if (info.is_calibrated)
+    {
+        snprintf(info.status_str, sizeof(info.status_str), "%u%% (%.2fV)", info.percentage, info.voltage);
+    }
+    else
+    {
+        snprintf(info.status_str, sizeof(info.status_str), "Uncalibrated (%.2fV)", info.voltage);
+    }
+#else
+    info.has_battery = false;
+    info.is_calibrated = false;
+    info.voltage = 0.0f;
+    info.percentage = 0;
+    snprintf(info.status_str, sizeof(info.status_str), "No Battery");
+#endif
+
+    return info;
+}

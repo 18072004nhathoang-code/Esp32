@@ -6,6 +6,7 @@
 
 #include <Arduino.h>
 #include "board_config.h"
+#include "shared_i2c_bus.h"
 #include "display/lvgl_port.h"
 #include "ui/ui_manager.h"
 #include "os/system_info.h"
@@ -37,6 +38,9 @@ void setup()
     Serial.printf("[BOOT] Temperature: %.1f °C\n", init_stats.core_temp_c);
     Serial.printf("[HW] Board Profile: %s\n", BOARD_PROFILE_NAME);
 
+    // 1b. [I2C] Khởi tạo physical I2C Bus dùng chung cho Touch & Audio Codec
+    shared_i2c_init();
+
     // 2. [LCD] Khởi tạo tầng đồ họa LovyanGFX + LVGL 8 (Core 1)
     Serial.printf("[LCD] Panel: %s | Resolution: %dx%d | Bus: SPI 40MHz DMA\n",
 #if (BOARD_LCD_CONTROLLER == LCD_CTRL_ILI9341)
@@ -55,10 +59,17 @@ void setup()
     }
     Serial.println("[LCD] Status: Ready (LVGL 8.3 + LovyanGFX DMA)");
 
-    // 3. [TOUCH] Thông tin cảm ứng
-    Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (SDA:%d, SCL:%d)\n",
+    // 3. [TOUCH] Thông tin cảm ứng & Trạng thái Probe thật
+    Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (Configured: SDA:%d, SCL:%d)\n",
                   BOARD_TOUCH_I2C_ADDR, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
-    Serial.println("[TOUCH] Status: Ready");
+    if (shared_i2c_touch_is_detected())
+    {
+        Serial.println("[TOUCH] Status: Detected & Ready");
+    }
+    else
+    {
+        Serial.println("[TOUCH] Status: ⚠️ Not Detected (Degraded Mode, UI vẫn chạy)");
+    }
 
     // 4. [SD] Khởi tạo phân hệ lưu trữ thẻ nhớ MicroSD qua HAL storage_manager
     Serial.printf("[SD] Interface: %s\n",
@@ -74,12 +85,20 @@ void setup()
     }
 
     // 5. [AUDIO] Khởi tạo hệ thống Âm thanh I2S Duplex (Mic MEMS & Loa ngoài) trên Core 0
-    Serial.printf("[AUDIO] Codec: ES8311 | I2S (BCLK:%d, WS:%d, DOUT:%d, DIN:%d, MCLK:%d, PA:%d)\n",
+    Serial.printf("[AUDIO] Codec: ES8311 | I2C Addr: 0x%02X (Configured: SDA:%d, SCL:%d) | I2S (BCLK:%d, WS:%d, DOUT:%d, DIN:%d, MCLK:%d, PA:%d)\n",
+                  BOARD_AUDIO_ES8311_ADDR, BOARD_AUDIO_I2C_SDA, BOARD_AUDIO_I2C_SCL,
                   AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT, AUDIO_I2S_DIN, AUDIO_I2S_MCLK, AUDIO_PA_PIN);
     bool audio_ok = audio_manager_init();
     if (audio_ok)
     {
-        Serial.println("[AUDIO] Status: Ready");
+        if (shared_i2c_codec_is_detected())
+        {
+            Serial.println("[AUDIO] Status: Ready (ES8311 Codec Detected)");
+        }
+        else
+        {
+            Serial.println("[AUDIO] Status: Ready (Direct I2S / Bypass Mode)");
+        }
         audio_play_sound_effect(FX_CHIME); // Âm thanh khởi động Mini OS
     }
     else

@@ -99,7 +99,9 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 | | I2C SDA / SCL (Codec) | **38, 39** | `[TESTED]` Đã test thực tế trên phần cứng cũ |
 
 > [!IMPORTANT]
-> **Bảo vệ Bus SPI (FSPI)**: Màn hình ST7796 và thẻ nhớ MicroSD chia sẻ GPIO 11, 12, 13. Hệ thống sử dụng `spi_bus_lock()` và `spi_bus_unlock()` trong `spi_bus_guard.cpp` để đợi DMA màn hình (`gfx.waitDMA()`) hoàn tất trước khi thao tác thẻ SD. Nếu lock fail, frame vẽ sẽ bị bỏ qua và tuyệt đối không truy cập SPI khi chưa chiếm được bus.
+> **Shared I2C Bus (ES3C28P)**: Màn hình cảm ứng FT6336G (`0x38`) và Audio Codec ES8311 (`0x18`) chia sẻ cùng chân GPIO 16 (SDA) và GPIO 15 (SCL). Hệ thống sử dụng module `shared_i2c_bus` với duy nhất một Wire controller được đồng bộ bằng FreeRTOS Mutex (`shared_i2c_lock` / `shared_i2c_unlock`), ngăn chặn xung đột driver hoặc tranh chấp bus.
+>
+> **Bảo vệ Bus SPI (FSPI trên DIYMORE)**: Màn hình ST7796 và thẻ nhớ MicroSD chia sẻ GPIO 11, 12, 13. Hệ thống sử dụng `spi_bus_lock()` và `spi_bus_unlock()` trong `spi_bus_guard.cpp` để đợi DMA màn hình (`gfx.waitDMA()`) hoàn tất trước khi thao tác thẻ SD. Nếu lock fail, frame vẽ sẽ bị bỏ qua và tuyệt đối không truy cập SPI khi chưa chiếm được bus.
 
 ---
 
@@ -183,10 +185,12 @@ pio device monitor -b 115200
    - **ONVIF Client**: `NOT_IMPLEMENTED` (Hỗ trợ cấu trúc SOAP cơ bản, không trả kết quả thành công giả khi chưa parse được profile).
    - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
    - **RTSP / H.264 Client**: `NOT_IMPLEMENTED`.
-   - **Local DVP (OV2640/OV5640)**: `NOT_DETECTED` (Không có trên phần cứng ES3C28P, tự động cách ly an toàn).
+8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
+9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Montserrat** và **Be Vietnam Pro** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu.
 
 
 ---
 
 ## ⚖️ 8. Giấy phép mã nguồn
-Dự án được phát hành theo giấy phép **MIT License**.
+- Mã nguồn firmware được phát hành theo giấy phép **MIT License**.
+- Các phông chữ giao diện được phát hành theo giấy phép **SIL Open Font License 1.1**.

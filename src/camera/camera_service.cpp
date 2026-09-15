@@ -31,6 +31,7 @@ bool camera_service_init(void)
     }
 #else
     active_source = CAM_SOURCE_NETWORK_STREAM;
+    g_network_camera.loadProfileFromNVS();
     snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
     Serial.println("[CAMERA] Board không có local DVP camera -> Chuyển hoàn toàn sang Network Camera (IP Cam).");
 #endif
@@ -57,6 +58,16 @@ bool camera_service_configure_network(const NetworkCameraProfile &profile)
                  NetworkCameraService::getVendorName(profile.vendor), profile.ip);
     }
     return ok;
+}
+
+bool camera_service_save_network_profile(void)
+{
+    return g_network_camera.saveProfileToNVS();
+}
+
+const NetworkCameraProfile& camera_service_get_network_profile(void)
+{
+    return g_network_camera.getActiveProfile();
 }
 
 bool camera_service_start(void)
@@ -124,7 +135,21 @@ bool camera_service_is_available(void)
 
 const char* camera_service_get_status_text(void)
 {
-    return status_text_buffer;
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        return g_local_camera.isAvailable() ? "CONNECTED" : "NOT_DETECTED";
+    }
+
+    CameraRuntimeState st = g_network_camera.getRuntimeState();
+    switch (st)
+    {
+        case CAM_STATE_CONNECTING: return "CONNECTING";
+        case CAM_STATE_CONNECTED:  return "CONNECTED";
+        case CAM_STATE_ERROR:      return "ERROR";
+        case CAM_STATE_STOPPED:    return "STOPPED";
+        case CAM_STATE_NOT_CONFIGURED:
+        default:                   return "NOT_CONFIGURED";
+    }
 }
 
 const char* camera_service_get_model_name(void)

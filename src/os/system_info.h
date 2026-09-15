@@ -22,7 +22,20 @@ struct SystemStats {
     char     uptime_str[24];
 };
 
+struct BatteryInfo {
+    bool has_battery;
+    bool is_calibrated;
+    float voltage;
+    uint8_t percentage;
+    char status_str[40];
+};
+
 /**
  * @brief Thu thập thông số hoạt động của chip ESP32-S3
  */
 SystemStats system_get_stats(void);
+
+/**
+ * @brief Thu thập thông số pin phần cứng thực tế
+ */
+BatteryInfo system_get_battery_info(void);

@@ -185,7 +185,33 @@ const char* ai_voice_get_state_text(void)
 
 int ai_voice_get_message_count(void)
 {
-    return total_messages;
+    int cnt = 0;
+    if (ai_mutex && xSemaphoreTake(ai_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    {
+        cnt = total_messages;
+        xSemaphoreGive(ai_mutex);
+    }
+    else
+    {
+        cnt = total_messages;
+    }
+    return cnt;
+}
+
+bool ai_voice_get_message_copy(int index, ChatMessage *out_msg)
+{
+    if (!out_msg || index < 0) return false;
+    bool ok = false;
+    if (ai_mutex && xSemaphoreTake(ai_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    {
+        if (index < total_messages)
+        {
+            *out_msg = chat_history[index];
+            ok = true;
+        }
+        xSemaphoreGive(ai_mutex);
+    }
+    return ok;
 }
 
 const ChatMessage* ai_voice_get_message(int index)

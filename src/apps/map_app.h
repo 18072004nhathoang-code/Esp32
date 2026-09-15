@@ -10,14 +10,15 @@
 #include <Arduino.h>
 #include <lvgl.h>
 
+#include "../ui/ui_theme.h"
 #include "../display/lvgl_port.h"
 
 // Kích thước khung hình bản đồ tương thích màn hình 240x320 Portrait
 #ifndef MAP_CANVAS_WIDTH
-#define MAP_CANVAS_WIDTH  240
+#define MAP_CANVAS_WIDTH  SCREEN_WIDTH
 #endif
 #ifndef MAP_CANVAS_HEIGHT
-#define MAP_CANVAS_HEIGHT 270 // Chiếm toàn bộ vùng nội dung ứng dụng
+#define MAP_CANVAS_HEIGHT APP_CONTENT_HEIGHT // Chiếm toàn bộ vùng nội dung ứng dụng
 #endif
 
 // Tọa độ mặc định: Hà Nội (Hồ Hoàn Kiếm)

@@ -27,6 +27,7 @@
 #define BOARD_LCD_BL                45
 #define BOARD_LCD_INVERT            true
 #define BOARD_LCD_RGB_ORDER         false
+#define BOARD_LCD_ROTATION          1       // Landscape mode (480x320)
 #define BOARD_LCD_SPI_FREQ          40000000
 
 // --- Touch: FocalTech FT6336U (Capacitive I2C) ---
@@ -61,4 +62,5 @@
 #define BOARD_BOOT_PIN              0
 #define BOARD_RGB_LED_PIN           -1
 #define BOARD_BATTERY_ADC_PIN       -1
+#define BOARD_BATTERY_CALIBRATED    false
 #define BOARD_HAS_LOCAL_CAMERA      0

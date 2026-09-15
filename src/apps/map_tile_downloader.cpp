@@ -5,6 +5,7 @@
  */
 
 #include "map_tile_downloader.h"
+#include "map_app.h"
 #include "sd_map_cache.h"
 #include "../os/wifi_manager.h"
 #include <WiFi.h>
@@ -440,7 +441,12 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels)
     if (!dest || !tile_buf_front) return false;
     if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
-        memcpy(dest, tile_buf_front, count_pixels * sizeof(lv_color_t));
+        size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
+        size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
+        for (size_t r = 0; r < copy_rows; r++)
+        {
+            memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));
+        }
         xSemaphoreGive(tile_swap_mutex);
         return true;
     }
@@ -454,7 +460,12 @@ bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, Ti
     {
         if (has_new_tile)
         {
-            memcpy(dest, tile_buf_front, count_pixels * sizeof(lv_color_t));
+            size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
+            size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
+            for (size_t r = 0; r < copy_rows; r++)
+            {
+                memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));
+            }
             if (out_source)
             {
                 *out_source = current_source;

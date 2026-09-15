@@ -29,6 +29,7 @@
 #define BOARD_LCD_BL                45      // IO45 điều khiển đèn nền LCD Backlight
 #define BOARD_LCD_INVERT            false   // ILI9341V tiêu chuẩn không invert
 #define BOARD_LCD_RGB_ORDER         false   // RGB Order
+#define BOARD_LCD_ROTATION          0       // Portrait mode (240x320)
 #define BOARD_LCD_SPI_FREQ          40000000
 
 // --- Touch: FocalTech FT6336G (Capacitive I2C) ---
@@ -65,6 +66,9 @@
 #define BOARD_BOOT_PIN              0       // IO0 nút BOOT
 #define BOARD_RGB_LED_PIN           42      // IO42 là LED RGB đơn tuyến (WS2812)
 #define BOARD_BATTERY_ADC_PIN       9       // IO9 là BAT_ADC
+#define BOARD_BATTERY_DIVIDER_R1    100000.0f // Điện trở R1 cầu phân áp (100k)
+#define BOARD_BATTERY_DIVIDER_R2    100000.0f // Điện trở R2 cầu phân áp (100k)
+#define BOARD_BATTERY_CALIBRATED    false   // Hardware divider chưa được xác minh vật lý thực tế
 #define BOARD_UART_TX_PIN           43      // IO43 là TXD0
 #define BOARD_UART_RX_PIN           44      // IO44 là RXD0
 #define BOARD_HAS_LOCAL_CAMERA      0       // Không có cổng kết nối camera DVP vật lý

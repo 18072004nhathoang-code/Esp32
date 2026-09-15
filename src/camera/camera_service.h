@@ -27,6 +27,16 @@ CameraSourceType camera_service_get_source(void);
 bool camera_service_configure_network(const NetworkCameraProfile &profile);
 
 /**
+ * @brief Lưu cấu hình IP Camera hiện tại vào NVS
+ */
+bool camera_service_save_network_profile(void);
+
+/**
+ * @brief Lấy cấu hình IP Camera hiện tại
+ */
+const NetworkCameraProfile& camera_service_get_network_profile(void);
+
+/**
  * @brief Khởi chạy luồng bắt hình / phát video
  */
 bool camera_service_start(void);

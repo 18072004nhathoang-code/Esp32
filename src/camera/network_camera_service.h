@@ -40,6 +40,13 @@ public:
     // Tải ảnh trực tiếp qua HTTP Snapshot (hỗ trợ Content-Length và Chunked/Stream)
     int fetchHttpSnapshot(uint8_t *out_buf, size_t max_size);
 
+    // Lấy trạng thái runtime thật (NOT_CONFIGURED, CONNECTING, CONNECTED, ERROR, STOPPED)
+    CameraRuntimeState getRuntimeState() const;
+
+    // Lưu & Nạp cấu hình Camera từ NVS Flash (không lưu password dạng plaintext)
+    bool saveProfileToNVS();
+    bool loadProfileFromNVS();
+
     static const char* getVendorName(CameraVendorProfile vendor);
     static void urlEncode(const char *src, char *dst, size_t dst_len);
     static void sanitizeUrl(const char *src, char *dst, size_t dst_len);
@@ -49,6 +56,8 @@ private:
     bool _configured;
     bool _connected;
     bool _running;
+    CameraRuntimeState _runtime_state;
+    uint32_t _frame_sequence;
     NetworkCameraProfile _profile;
 
     char _onvif_snapshot_url[192];

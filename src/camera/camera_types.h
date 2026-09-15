@@ -83,6 +83,29 @@ inline const char* camera_feature_status_to_string(CameraFeatureStatus st)
     }
 }
 
+// Máy trạng thái runtime của Camera Service
+enum CameraRuntimeState
+{
+    CAM_STATE_NOT_CONFIGURED = 0,
+    CAM_STATE_CONNECTING,
+    CAM_STATE_CONNECTED,
+    CAM_STATE_ERROR,
+    CAM_STATE_STOPPED
+};
+
+inline const char* camera_runtime_state_to_string(CameraRuntimeState st)
+{
+    switch (st)
+    {
+        case CAM_STATE_CONNECTING: return "CONNECTING";
+        case CAM_STATE_CONNECTED:  return "CONNECTED";
+        case CAM_STATE_ERROR:      return "ERROR";
+        case CAM_STATE_STOPPED:    return "STOPPED";
+        case CAM_STATE_NOT_CONFIGURED:
+        default:                   return "NOT_CONFIGURED";
+    }
+}
+
 // Cấu trúc khung hình (Frame Buffer)
 struct CameraFrame
 {
@@ -92,6 +115,7 @@ struct CameraFrame
     size_t height;
     CameraPixelFormat format;
     uint32_t timestamp_ms;
+    uint32_t frame_id; // Sequence ID phân biệt frame mới
 };
 
 // Cấu hình Camera DVP cục bộ

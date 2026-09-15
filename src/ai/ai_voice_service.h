@@ -57,7 +57,12 @@ const char* ai_voice_get_state_text(void);
 int ai_voice_get_message_count(void);
 
 /**
- * @brief Lấy tin nhắn theo chỉ số index
+ * @brief Lấy bản sao an toàn của tin nhắn theo chỉ số index dưới khóa Mutex
+ */
+bool ai_voice_get_message_copy(int index, ChatMessage *out_msg);
+
+/**
+ * @brief Lấy tin nhắn theo chỉ số index (Deprecated / Non-thread-safe)
  */
 const ChatMessage* ai_voice_get_message(int index);
 

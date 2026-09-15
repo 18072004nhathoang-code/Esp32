@@ -9,6 +9,7 @@
 #define LGFX_USE_V1
 #include <LovyanGFX.hpp>
 #include "board_config.h"
+#include "shared_i2c_bus.h"
 
 // ==============================================================================
 // LỚP DRIVER TỐI ƯU LOVYANGFX (ESP32-S3 HIGH-SPEED DMA)
@@ -44,6 +45,16 @@ public:
     void waitDMA(void)
     {
         _bus_instance.wait();
+    }
+
+    bool getTouch(uint16_t *x, uint16_t *y, uint_fast8_t index = 0)
+    {
+        (void)index;
+#if (BOARD_TOUCH_CONTROLLER == TOUCH_CTRL_FT6336 || BOARD_TOUCH_CONTROLLER == TOUCH_CTRL_FT5X06)
+        return shared_i2c_touch_read(x, y);
+#else
+        return lgfx::LGFX_Device::getTouch(x, y, index);
+#endif
     }
 
     LGFX(void)
@@ -157,22 +168,8 @@ public:
         }
 #elif (BOARD_TOUCH_CONTROLLER == TOUCH_CTRL_FT6336 || BOARD_TOUCH_CONTROLLER == TOUCH_CTRL_FT5X06)
         {
-            // Cấu hình Cảm ứng điện dung FocalTech FT6336U / FT6336G (I2C)
-            auto cfg = _touch_instance.config();
-            cfg.x_min      = 0;
-            cfg.x_max      = BOARD_LCD_PANEL_WIDTH - 1;
-            cfg.y_min      = 0;
-            cfg.y_max      = BOARD_LCD_PANEL_HEIGHT - 1;
-            cfg.pin_int    = BOARD_TOUCH_INT;
-            cfg.bus_shared = false;
-            cfg.i2c_port   = 1;
-            cfg.i2c_addr   = BOARD_TOUCH_I2C_ADDR;
-            cfg.pin_sda    = BOARD_TOUCH_SDA;
-            cfg.pin_scl    = BOARD_TOUCH_SCL;
-            cfg.pin_rst    = BOARD_TOUCH_RST;
-            cfg.freq       = 400000;
-            _touch_instance.config(cfg);
-            _panel_instance.setTouch(&_touch_instance);
+            // Cảm ứng FT6336 được quản lý hoàn toàn và đồng bộ qua shared_i2c_bus
+            // (tránh xung đột I2C controller 1 và Wire trên cùng chân GPIO 16/15)
         }
 #endif
 

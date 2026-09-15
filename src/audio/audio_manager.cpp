@@ -5,8 +5,8 @@
  */
 
 #include "audio_manager.h"
+#include "shared_i2c_bus.h"
 #include <driver/i2s.h>
-#include <Wire.h>
 #include <esp_heap_caps.h>
 #include <math.h>
 
@@ -258,24 +258,19 @@ AudioOwner audio_get_current_owner(void)
  * ========================================================================= */
 static bool es8311_write_reg(uint8_t reg, uint8_t val)
 {
-    Wire.beginTransmission(AUDIO_ES8311_ADDR);
-    Wire.write(reg);
-    Wire.write(val);
-    return (Wire.endTransmission() == 0);
+    return shared_i2c_write_reg(AUDIO_ES8311_ADDR, reg, val);
 }
 
 static bool es8311_init_codec(void)
 {
-    Wire.begin(AUDIO_I2C_SDA, AUDIO_I2C_SCL, 100000);
-    Wire.beginTransmission(AUDIO_ES8311_ADDR);
-    if (Wire.endTransmission() != 0)
+    if (!shared_i2c_codec_is_detected())
     {
         Serial.println("[AUDIO] Không phát hiện chip ES8311 qua I2C. Chuyển sang Direct I2S Mode.");
         return false;
     }
 
     Serial.println("[AUDIO] Đã nhận diện chip Codec ES8311! Đang khởi tạo thanh ghi...");
-    // Khởi tạo cơ bản thanh ghi ES8311
+    // Khởi tạo cơ bản thanh ghi ES8311 qua Shared I2C Bus an toàn
     es8311_write_reg(0x00, 0x1F); // CSM on, reset
     es8311_write_reg(0x01, 0x30); // Clock manager
     es8311_write_reg(0x02, 0x00); // Clock inverted/pol

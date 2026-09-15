@@ -7,6 +7,7 @@
 #include "../os/wifi_manager.h"
 #include <HTTPClient.h>
 #include <WiFiClient.h>
+#include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,6 +19,7 @@ NetworkCameraService g_network_camera;
 
 NetworkCameraService::NetworkCameraService()
     : _configured(false), _connected(false), _running(false),
+      _runtime_state(CAM_STATE_NOT_CONFIGURED), _frame_sequence(0),
       _onvif_probed(false),
       _buf_front(nullptr), _buf_back(nullptr), _buf_capacity(NET_CAM_DEFAULT_BUF_CAP),
       _front_in_use(false), _frame_mutex(nullptr), _worker_task_handle(nullptr),
@@ -154,6 +156,7 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
     _profile = profile;
     _configured = (strlen(_profile.ip) > 0 || strlen(_profile.custom_url) > 0);
     _connected = false;
+    _runtime_state = _configured ? CAM_STATE_STOPPED : CAM_STATE_NOT_CONFIGURED;
 
     // Bảo mật: Tuyệt đối không log username/password dạng plaintext ra Serial
     uint16_t h_port = _profile.http_port > 0 ? _profile.http_port : 80;
@@ -189,6 +192,63 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
 
     _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
     return _configured;
+}
+
+CameraRuntimeState NetworkCameraService::getRuntimeState() const
+{
+    return _runtime_state;
+}
+
+bool NetworkCameraService::saveProfileToNVS()
+{
+    Preferences prefs;
+    if (!prefs.begin("netcam", false)) return false;
+
+    prefs.putString("name", _profile.name);
+    prefs.putString("ip", _profile.ip);
+    prefs.putUShort("http_port", _profile.http_port);
+    prefs.putUShort("rtsp_port", _profile.rtsp_port);
+    prefs.putUShort("onvif_port", _profile.onvif_port);
+    prefs.putUChar("vendor", (uint8_t)_profile.vendor);
+    prefs.putUChar("proto", (uint8_t)_profile.protocol);
+    prefs.putUChar("ch", _profile.channel);
+    prefs.putString("user", _profile.username);
+    // Lưu ý bảo mật: Mật khẩu không được lưu plaintext vào Flash
+    prefs.end();
+    Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS Flash (Credentials protected).");
+    return true;
+}
+
+bool NetworkCameraService::loadProfileFromNVS()
+{
+    Preferences prefs;
+    if (!prefs.begin("netcam", true)) return false;
+
+    String ip = prefs.getString("ip", "");
+    if (ip.length() == 0)
+    {
+        prefs.end();
+        return false;
+    }
+
+    String name = prefs.getString("name", "IP Cam");
+    strncpy(_profile.name, name.c_str(), sizeof(_profile.name) - 1);
+    strncpy(_profile.ip, ip.c_str(), sizeof(_profile.ip) - 1);
+    _profile.http_port = prefs.getUShort("http_port", 80);
+    _profile.rtsp_port = prefs.getUShort("rtsp_port", 554);
+    _profile.onvif_port = prefs.getUShort("onvif_port", 8000);
+    _profile.vendor = (CameraVendorProfile)prefs.getUChar("vendor", (uint8_t)CAM_VENDOR_GENERIC_ONVIF);
+    _profile.protocol = (CameraStreamProtocol)prefs.getUChar("proto", (uint8_t)CAM_PROTO_HTTP_SNAPSHOT);
+    _profile.channel = prefs.getUChar("ch", 1);
+    String user = prefs.getString("user", "admin");
+    strncpy(_profile.username, user.c_str(), sizeof(_profile.username) - 1);
+    _profile.password[0] = '\0'; // Mật khẩu để trống, bảo mật
+
+    prefs.end();
+    _configured = true;
+    _runtime_state = CAM_STATE_STOPPED;
+    Serial.printf("[NET_CAM] ✔ Đã nạp cấu hình IP Camera đã lưu từ NVS: %s (%s)\n", _profile.name, _profile.ip);
+    return true;
 }
 
 void NetworkCameraService::workerTaskEntry(void *param)
@@ -246,14 +306,17 @@ void NetworkCameraService::workerTask()
                             _buf_front = _buf_back;
                             _buf_back = tmp;
 
+                            _frame_sequence++;
                             _frame_front.buf = _buf_front;
                             _frame_front.len = (size_t)bytes;
                             _frame_front.width = real_w;
                             _frame_front.height = real_h;
                             _frame_front.format = CAM_PIXFORMAT_JPEG;
                             _frame_front.timestamp_ms = millis();
+                            _frame_front.frame_id = _frame_sequence;
 
                             _connected = true;
+                            _runtime_state = CAM_STATE_CONNECTED;
                             _snapshot_status = CAM_STATUS_READY;
                         }
                         xSemaphoreGive(_frame_mutex);
@@ -261,9 +324,10 @@ void NetworkCameraService::workerTask()
                 }
                 else
                 {
+                    _connected = false;
+                    _runtime_state = CAM_STATE_ERROR;
                     if (_snapshot_status != CAM_STATUS_READY)
                     {
-                        _connected = false;
                         _snapshot_status = CAM_STATUS_ERROR;
                     }
                 }
@@ -272,6 +336,10 @@ void NetworkCameraService::workerTask()
         else
         {
             _connected = false;
+            if (!_configured)
+            {
+                _runtime_state = CAM_STATE_NOT_CONFIGURED;
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(1500));
@@ -286,12 +354,14 @@ bool NetworkCameraService::start()
     if (!_configured)
     {
         Serial.println("[NET_CAM] ❌ Chưa cấu hình thông số IP Camera.");
+        _runtime_state = CAM_STATE_NOT_CONFIGURED;
         return false;
     }
 
     if (_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
     {
         _running = true;
+        _runtime_state = CAM_STATE_CONNECTING;
         if (_worker_task_handle == nullptr)
         {
             xTaskCreatePinnedToCore(
@@ -314,6 +384,7 @@ bool NetworkCameraService::start()
     else if (_profile.protocol == CAM_PROTO_MJPEG)
     {
         _connected = false;
+        _runtime_state = CAM_STATE_ERROR;
         _mjpeg_status = CAM_STATUS_NOT_IMPLEMENTED;
         Serial.println("[NET_CAM] ⚠️ Giao thức MJPEG chưa hoàn chỉnh -> Đánh dấu NOT_IMPLEMENTED");
         return false;
@@ -321,6 +392,7 @@ bool NetworkCameraService::start()
     else if (_profile.protocol == CAM_PROTO_RTSP)
     {
         _connected = false;
+        _runtime_state = CAM_STATE_ERROR;
         _rtsp_status = CAM_STATUS_NOT_IMPLEMENTED;
         Serial.println("[NET_CAM] ⚠️ Giao thức RTSP/H.264 chưa hoàn chỉnh -> Đánh dấu NOT_IMPLEMENTED");
         return false;
@@ -333,6 +405,7 @@ void NetworkCameraService::stop()
 {
     _running = false;
     _connected = false;
+    _runtime_state = CAM_STATE_STOPPED;
     Serial.println("[NET_CAM] ⏹ Đã dừng dịch vụ IP Camera.");
 }
 
@@ -571,6 +644,36 @@ int NetworkCameraService::fetchHttpSnapshot(uint8_t *out_buf, size_t max_size)
     if (httpCode == HTTP_CODE_OK)
     {
         int expected_len = http.getSize();
+        if (expected_len > (int)max_size)
+        {
+            if (expected_len <= NET_CAM_MAX_SAFETY_LIMIT)
+            {
+                size_t new_cap = (expected_len + 4095) & ~4095;
+                uint8_t *new_back = (uint8_t *)heap_caps_realloc(_buf_back, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                if (!new_back) new_back = (uint8_t *)realloc(_buf_back, new_cap);
+                if (new_back)
+                {
+                    _buf_back = new_back;
+                    out_buf = _buf_back;
+                    max_size = new_cap;
+                    _buf_capacity = new_cap;
+                    Serial.printf("[NET_CAM] 📈 Mở rộng buffer snapshot lên %u KB\n", (unsigned int)(new_cap / 1024));
+                }
+                else
+                {
+                    Serial.println("[NET_CAM] ❌ Thiếu RAM khi mở rộng snapshot buffer!");
+                    http.end();
+                    return -1;
+                }
+            }
+            else
+            {
+                Serial.printf("[NET_CAM] ❌ Frame quá lớn (%d bytes > 512KB limit) -> Hủy an toàn!\n", expected_len);
+                http.end();
+                return -1;
+            }
+        }
+
         WiFiClient *stream = http.getStreamPtr();
         if (stream)
         {
@@ -585,9 +688,27 @@ int NetworkCameraService::fetchHttpSnapshot(uint8_t *out_buf, size_t max_size)
                     size_t to_read = avail;
                     if (total + to_read > max_size)
                     {
-                        to_read = max_size - total;
+                        if (max_size < NET_CAM_MAX_SAFETY_LIMIT)
+                        {
+                            size_t new_cap = max_size * 2;
+                            if (new_cap > NET_CAM_MAX_SAFETY_LIMIT) new_cap = NET_CAM_MAX_SAFETY_LIMIT;
+                            uint8_t *new_back = (uint8_t *)heap_caps_realloc(_buf_back, new_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                            if (!new_back) new_back = (uint8_t *)realloc(_buf_back, new_cap);
+                            if (new_back)
+                            {
+                                _buf_back = new_back;
+                                out_buf = _buf_back;
+                                max_size = new_cap;
+                                _buf_capacity = new_cap;
+                            }
+                        }
+
+                        if (total + to_read > max_size)
+                        {
+                            to_read = max_size - total;
+                        }
                     }
-                    if (to_read == 0) break; // Đạt giới hạn an toàn max buffer
+                    if (to_read == 0) break; // Đạt giới hạn an toàn 512KB
 
                     int r = stream->readBytes(out_buf + total, to_read);
                     if (r > 0)

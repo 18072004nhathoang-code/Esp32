@@ -258,8 +258,11 @@ void ai_voice_app_update(void)
     {
         for (int i = last_msg_count; i < current_count; i++)
         {
-            const ChatMessage *msg = ai_voice_get_message(i);
-            if (msg) add_chat_bubble(msg);
+            ChatMessage msg;
+            if (ai_voice_get_message_copy(i, &msg))
+            {
+                add_chat_bubble(&msg);
+            }
         }
         last_msg_count = current_count;
     }

@@ -36,7 +36,30 @@ static bool is_active = false;
 static bool need_list_refresh = false;
 static std::vector<WiFiNetworkInfo> cached_scan_results;
 
-// Hàm chuẩn hóa và bảo vệ UTF-8 cho SSID
+// Kiểm tra codepoint có nằm trong các dải glyph được font hệ thống hỗ trợ
+static bool is_supported_codepoint(uint32_t cp)
+{
+    // ASCII printable
+    if (cp >= 0x20 && cp <= 0x7E) return true;
+    // Latin-1 Supplement (0xA0 - 0xFF)
+    if (cp >= 0xA0 && cp <= 0xFF) return true;
+    // Latin Extended-A (0x100 - 0x17F: Ă, Â, Đ, Ê, Ô, Ơ, Ư...)
+    if (cp >= 0x100 && cp <= 0x17F) return true;
+    // Latin Extended-B (0x1A0 - 0x1B0: Ơ, Ư...)
+    if (cp >= 0x1A0 && cp <= 0x1B0) return true;
+    // Vietnamese diacritics (0x1EA0 - 0x1EF9)
+    if (cp >= 0x1EA0 && cp <= 0x1EF9) return true;
+    // Punctuation & Dấu tiếng Việt (0x2010 - 0x2026)
+    if (cp >= 0x2010 && cp <= 0x2026) return true;
+    // Ký tự độ, middle dot (0xB0 - 0xB7)
+    if (cp >= 0x00B0 && cp <= 0x00B7) return true;
+    // Ký hiệu Đồng Việt Nam ₫ (0x20AB)
+    if (cp == 0x20AB) return true;
+
+    return false;
+}
+
+// Hàm chuẩn hóa và bảo vệ UTF-8 cho SSID: decode codepoint thực, loại bỏ emoji/CJK/unsupported
 static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
 {
     if (!raw_ssid || !safe_ssid || max_len == 0) return;
@@ -49,12 +72,14 @@ static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
     {
         uint8_t c = (uint8_t)raw_ssid[in_idx];
 
+        // Bỏ qua ký tự điều khiển ASCII
         if (c < 0x20 || c == 0x7F)
         {
             in_idx++;
             continue;
         }
 
+        // 1-byte ASCII
         if (c < 0x80)
         {
             safe_ssid[out_idx++] = (char)c;
@@ -62,12 +87,21 @@ static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
             continue;
         }
 
+        // 2-byte sequence
         if ((c & 0xE0) == 0xC0)
         {
             if (in_idx + 1 < raw_len && ((uint8_t)raw_ssid[in_idx + 1] & 0xC0) == 0x80)
             {
-                safe_ssid[out_idx++] = (char)c;
-                safe_ssid[out_idx++] = raw_ssid[in_idx + 1];
+                uint32_t cp = ((c & 0x1F) << 6) | ((uint8_t)raw_ssid[in_idx + 1] & 0x3F);
+                if (is_supported_codepoint(cp))
+                {
+                    safe_ssid[out_idx++] = (char)c;
+                    safe_ssid[out_idx++] = raw_ssid[in_idx + 1];
+                }
+                else
+                {
+                    safe_ssid[out_idx++] = '?';
+                }
                 in_idx += 2;
                 continue;
             }
@@ -76,15 +110,26 @@ static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
             continue;
         }
 
+        // 3-byte sequence
         if ((c & 0xF0) == 0xE0)
         {
             if (in_idx + 2 < raw_len && 
                 ((uint8_t)raw_ssid[in_idx + 1] & 0xC0) == 0x80 && 
                 ((uint8_t)raw_ssid[in_idx + 2] & 0xC0) == 0x80)
             {
-                safe_ssid[out_idx++] = (char)c;
-                safe_ssid[out_idx++] = raw_ssid[in_idx + 1];
-                safe_ssid[out_idx++] = raw_ssid[in_idx + 2];
+                uint32_t cp = ((c & 0x0F) << 12) |
+                              (((uint8_t)raw_ssid[in_idx + 1] & 0x3F) << 6) |
+                              ((uint8_t)raw_ssid[in_idx + 2] & 0x3F);
+                if (is_supported_codepoint(cp))
+                {
+                    safe_ssid[out_idx++] = (char)c;
+                    safe_ssid[out_idx++] = raw_ssid[in_idx + 1];
+                    safe_ssid[out_idx++] = raw_ssid[in_idx + 2];
+                }
+                else
+                {
+                    safe_ssid[out_idx++] = '?';
+                }
                 in_idx += 3;
                 continue;
             }
@@ -93,14 +138,25 @@ static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
             continue;
         }
 
+        // 4-byte sequence (Emoji, CJK supplementary -> thay bằng ?)
         if ((c & 0xF8) == 0xF0)
         {
-            if (in_idx + 3 < raw_len) in_idx += 4;
-            else in_idx++;
+            if (in_idx + 3 < raw_len &&
+                ((uint8_t)raw_ssid[in_idx + 1] & 0xC0) == 0x80 &&
+                ((uint8_t)raw_ssid[in_idx + 2] & 0xC0) == 0x80 &&
+                ((uint8_t)raw_ssid[in_idx + 3] & 0xC0) == 0x80)
+            {
+                in_idx += 4;
+            }
+            else
+            {
+                in_idx++;
+            }
             safe_ssid[out_idx++] = '?';
             continue;
         }
 
+        // Byte không hợp lệ
         safe_ssid[out_idx++] = '?';
         in_idx++;
     }

@@ -195,10 +195,26 @@ static void create_status_bar(void)
     lv_obj_align(lbl_wifi_icon, LV_ALIGN_RIGHT_MID, -20, 0);
 
     lbl_battery_pill = lv_label_create(right_cluster);
-    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_FULL);
-    lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_battery_pill, UI_FONT_10, 0);
-    lv_obj_align(lbl_battery_pill, LV_ALIGN_RIGHT_MID, 0, 0);
+    BatteryInfo init_bat = system_get_battery_info();
+    if (!init_bat.has_battery)
+    {
+        lv_obj_add_flag(lbl_battery_pill, LV_OBJ_FLAG_HIDDEN);
+    }
+    else
+    {
+        if (!init_bat.is_calibrated)
+        {
+            lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_EMPTY);
+            lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+        }
+        else
+        {
+            lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_FULL);
+            lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+        }
+        lv_obj_set_style_text_font(lbl_battery_pill, UI_FONT_10, 0);
+        lv_obj_align(lbl_battery_pill, LV_ALIGN_RIGHT_MID, 0, 0);
+    }
 }
 
 /* =========================================================================
@@ -785,14 +801,19 @@ static void open_about_app(void)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *desc = lv_label_create(card);
+    BatteryInfo bat = system_get_battery_info();
     lv_label_set_text_fmt(desc,
         "Phiên bản: Mini OS v3.0\n"
-        "Màn hình: 240x320 Portrait\n"
+        "Màn hình: %dx%d (%s)\n"
         "Đồ họa: LovyanGFX + LVGL 8\n"
         "Vi xử lý: ESP32-S3 Dual-Core\n"
         "Flash 16MB • PSRAM 8MB\n"
+        "Pin: %s\n"
         "Âm thanh: ES8311 Codec\n"
-        "Cảm ứng: FT6336 I2C");
+        "Cảm ứng: FT6336 I2C",
+        DISP_HOR_RES, DISP_VER_RES,
+        (BOARD_LCD_ROTATION == 0 ? "Portrait" : "Landscape"),
+        bat.status_str);
     lv_obj_set_style_text_color(desc, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(desc, UI_FONT_10, 0);
     lv_obj_align(desc, LV_ALIGN_CENTER, 0, 10);
@@ -998,6 +1019,37 @@ void ui_update_periodic(const SystemStats &stats)
     {
         bool pa_on = (audio_get_volume() > 0 && audio_is_pa_enabled());
         lv_obj_set_style_text_color(lbl_spk_icon, pa_on ? lv_color_hex(COLOR_ACCENT_AMBER) : lv_color_hex(COLOR_TEXT_MUTED), 0);
+    }
+
+    // 6b. Cập nhật icon Pin thực tế trên Status Bar
+    if (lbl_battery_pill)
+    {
+        BatteryInfo bat = system_get_battery_info();
+        if (!bat.has_battery)
+        {
+            lv_obj_add_flag(lbl_battery_pill, LV_OBJ_FLAG_HIDDEN);
+        }
+        else
+        {
+            lv_obj_clear_flag(lbl_battery_pill, LV_OBJ_FLAG_HIDDEN);
+            if (!bat.is_calibrated)
+            {
+                lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_EMPTY);
+                lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+            }
+            else
+            {
+                if (bat.percentage >= 80)
+                    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_FULL);
+                else if (bat.percentage >= 50)
+                    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_3);
+                else if (bat.percentage >= 20)
+                    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_2);
+                else
+                    lv_label_set_text(lbl_battery_pill, LV_SYMBOL_BATTERY_EMPTY);
+                lv_obj_set_style_text_color(lbl_battery_pill, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+            }
+        }
     }
 
     // 7. Cập nhật các app con
