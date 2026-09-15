@@ -68,12 +68,12 @@ static void wifi_service_task(void *pvParameters)
     if (wifi_manager_load_credentials(saved_ssid, saved_pass) && saved_ssid.length() > 0)
     {
         log_i("Tìm thấy thông tin WiFi trong NVS: %s, tiến hành tự động kết nối...", saved_ssid.c_str());
-        wifi_manager_connect(saved_ssid.c_str(), saved_pass.c_str());
+        wifi_manager_connect(saved_ssid.c_str(), saved_pass.c_str(), false); // false: Đã có trong NVS, không ghi lại
     }
     else if (strlen(DEFAULT_WIFI_SSID) > 0)
     {
         log_i("Tìm thấy DEFAULT_WIFI_SSID: %s, tiến hành kết nối...", DEFAULT_WIFI_SSID);
-        wifi_manager_connect(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS);
+        wifi_manager_connect(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS, false);
     }
 
     while (1)
@@ -97,6 +97,10 @@ static void wifi_service_task(void *pvParameters)
         {
             if (WiFi.status() == WL_CONNECTED)
             {
+                bool need_save = false;
+                char save_s[33] = {0};
+                char save_p[65] = {0};
+
                 lock_wifi();
                 current_state = WIFI_STATE_CONNECTED;
                 reconnect_backoff_ms = 2000; // Reset backoff timer
@@ -107,9 +111,17 @@ static void wifi_service_task(void *pvParameters)
                 if (should_save_credentials)
                 {
                     should_save_credentials = false;
-                    wifi_manager_save_credentials(target_ssid, target_pass);
+                    need_save = true;
+                    strncpy(save_s, target_ssid, sizeof(save_s) - 1);
+                    strncpy(save_p, target_pass, sizeof(save_p) - 1);
                 }
                 unlock_wifi();
+
+                // Lưu NVS Flash ngoài lock_wifi() -> Tuyệt đối không bao giờ deadlock giữa wifi_mutex và prefs_mutex
+                if (need_save)
+                {
+                    wifi_manager_save_credentials(save_s, save_p);
+                }
             }
             else if (millis() - connect_start_time > WIFI_CONNECT_TIMEOUT_MS)
             {
@@ -224,7 +236,7 @@ std::vector<WiFiNetworkInfo> wifi_manager_get_scan_results(void)
     return res;
 }
 
-bool wifi_manager_connect(const char *ssid, const char *pass)
+bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
 {
     if (ssid == nullptr || strlen(ssid) == 0) return false;
 
@@ -246,11 +258,12 @@ bool wifi_manager_connect(const char *ssid, const char *pass)
 
     connect_requested = true;
     current_state = WIFI_STATE_CONNECTING;
-    should_save_credentials = true; // Đánh dấu lưu NVS khi người dùng chủ động cấu hình
+    should_save_credentials = save_to_nvs; // Chỉ lưu NVS khi người dùng chủ động cấu hình
     unlock_wifi();
 
     return true;
 }
+
 
 void wifi_manager_disconnect(void)
 {

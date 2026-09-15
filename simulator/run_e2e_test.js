@@ -46,7 +46,7 @@ function assert(condition, message) {
 
 async function main() {
     console.log("==================================================================");
-    console.log("  TEST SUITE: DIYMORE ESP32-S3 3.5\" IPS DISPLAY (480x320)");
+    console.log("  TEST SUITE: ES3C28P ESP32-S3 2.8\" IPS DISPLAY (240x320 PORTRAIT)");
     console.log("==================================================================\n");
 
     if (!CHROME_PATH) {

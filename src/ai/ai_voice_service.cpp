@@ -49,9 +49,9 @@ static void ai_voice_task(void *pvParameters)
         {
             request_ai_processing = false;
             current_state = AI_STATE_PROCESSING;
-            Serial.println("[AI_VOICE] ⚡ Bắt đầu xử lý âm thanh: Chuyển giọng nói -> Văn bản (STT) & Gọi Gemini API...");
+            Serial.println("[AI_VOICE] ⚡ Bắt đầu xử lý âm thanh: Phản hồi giả lập Demo/Mock (Chưa kích hoạt kết nối Gemini API thật)...");
 
-            // Giả lập độ trễ kết nối API AI mạng (khoảng 1.2 giây)
+            // Giả lập độ trễ xử lý hội thoại (khoảng 1.2 giây)
             vTaskDelay(pdMS_TO_TICKS(1200));
 
             // Chọn câu hỏi và câu trả lời tương ứng
@@ -67,7 +67,7 @@ static void ai_voice_task(void *pvParameters)
 
             // 2. Thêm phản hồi của AI vào lịch sử chat
             ai_voice_add_message(false, ai_text);
-            Serial.printf("[AI_VOICE] 🤖 XiaoZhi AI: %s\n", ai_text);
+            Serial.printf("[AI_VOICE] 🤖 XiaoZhi AI (Demo/Mock): %s\n", ai_text);
 
             // 3. Chuyển sang trạng thái phát âm thanh qua Loa (TTS)
             current_state = AI_STATE_SPEAKING;
@@ -91,7 +91,7 @@ static void ai_voice_task(void *pvParameters)
 
 bool ai_voice_init(void)
 {
-    Serial.println("[AI_VOICE] Đang khởi tạo AI Voice Assistant Service...");
+    Serial.println("[AI_VOICE] Đang khởi tạo AI Voice Assistant Service (Demo/Mock)...");
 
     ai_mutex = xSemaphoreCreateMutex();
 
@@ -124,6 +124,8 @@ bool ai_voice_init(void)
     return true;
 }
 
+static bool recording_started_successfully = false;
+
 void ai_voice_start_recording(void)
 {
     if (current_state == AI_STATE_PROCESSING || current_state == AI_STATE_SPEAKING)
@@ -131,19 +133,34 @@ void ai_voice_start_recording(void)
         return; // Đang bận xử lý câu trước
     }
 
-    current_state = AI_STATE_LISTENING;
-    Serial.println("[AI_VOICE] 🎙️ Người dùng nhấn giữ nút Micro -> Bắt đầu thu âm I2S...");
+    recording_started_successfully = false;
+    Serial.println("[AI_VOICE] 🎙️ Người dùng nhấn giữ nút Micro -> Yêu cầu quyền Micro thu âm I2S...");
 
-    // Bắt đầu thu âm qua audio_manager vào bộ nhớ PSRAM
-    audio_start_recording(15);
+    // Bắt buộc kiểm tra return của audio_start_recording()
+    if (!audio_start_recording(15))
+    {
+        Serial.println("[AI_VOICE] ❌ Không thể chiếm quyền I2S Micro (Audio bus đang bận) -> Giữ IDLE!");
+        current_state = AI_STATE_IDLE;
+        return;
+    }
+
+    recording_started_successfully = true;
+    current_state = AI_STATE_LISTENING;
+    Serial.println("[AI_VOICE] ✔ Bắt đầu thu âm thành công!");
 }
 
 void ai_voice_stop_and_process(void)
 {
-    if (current_state != AI_STATE_LISTENING) return;
+    if (current_state != AI_STATE_LISTENING || !recording_started_successfully)
+    {
+        current_state = AI_STATE_IDLE;
+        recording_started_successfully = false;
+        return;
+    }
 
-    Serial.println("[AI_VOICE] 🛑 Nhả nút Micro -> Dừng thu âm và gửi luồng AI...");
+    Serial.println("[AI_VOICE] 🛑 Nhả nút Micro -> Dừng thu âm và gửi luồng AI Demo/Mock...");
     audio_stop_recording();
+    recording_started_successfully = false;
 
     request_ai_processing = true;
 }
@@ -158,12 +175,13 @@ const char* ai_voice_get_state_text(void)
     switch (current_state)
     {
         case AI_STATE_LISTENING:   return "Đang lắng nghe... (Nói vào Micro)";
-        case AI_STATE_PROCESSING:  return "Đang suy nghĩ (Google Gemini AI)...";
+        case AI_STATE_PROCESSING:  return "Đang suy nghĩ (Demo/Mock)...";
         case AI_STATE_SPEAKING:    return "Đang trả lời qua Loa ngoài...";
         case AI_STATE_IDLE:
-        default:                   return "Nhấn và Giữ nút Micro để Nói";
+        default:                   return "Nhấn và Giữ nút Micro để Nói (Demo)";
     }
 }
+
 
 int ai_voice_get_message_count(void)
 {

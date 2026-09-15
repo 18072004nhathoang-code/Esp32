@@ -49,6 +49,11 @@ void power_manager_update(void);
 void power_manager_wake(void);
 
 /**
+ * @brief Chuyển màn hình sang chế độ ngủ (Sleep) ngay lập tức
+ */
+void power_manager_sleep(void);
+
+/**
  * @brief Lấy trạng thái nguồn hiện tại
  */
 PowerState power_manager_get_state(void);

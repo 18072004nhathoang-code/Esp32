@@ -59,9 +59,10 @@ std::vector<WiFiNetworkInfo> wifi_manager_get_scan_results(void);
  * @brief Bắt đầu kết nối tới một mạng WiFi
  * @param ssid Tên mạng
  * @param pass Mật khẩu
+ * @param save_to_nvs Đánh dấu lưu vào Flash NVS khi kết nối thành công (mặc định true khi người dùng cấu hình)
  * @return true nếu lệnh kết nối được tiếp nhận
  */
-bool wifi_manager_connect(const char *ssid, const char *pass);
+bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs = true);
 
 /**
  * @brief Ngắt kết nối WiFi

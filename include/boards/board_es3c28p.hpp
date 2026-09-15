@@ -13,11 +13,11 @@
 #define BOARD_PROFILE_FLASH_MB      16
 #define BOARD_PROFILE_PSRAM_MB      8
 
-// --- Display: ILI9341V 240x320 (Xoay ngang 320x240) 4-wire SPI ---
+// --- Display: ILI9341V 240x320 Portrait 4-wire SPI ---
 #define BOARD_LCD_CONTROLLER        LCD_CTRL_ILI9341
 #define BOARD_LCD_BUS               LCD_BUS_SPI
-#define BOARD_LCD_WIDTH             320     // Landscape resolution
-#define BOARD_LCD_HEIGHT            240
+#define BOARD_LCD_WIDTH             240     // Portrait resolution
+#define BOARD_LCD_HEIGHT            320
 #define BOARD_LCD_PANEL_WIDTH       240     // Panel native resolution
 #define BOARD_LCD_PANEL_HEIGHT      320
 #define BOARD_LCD_MOSI              11

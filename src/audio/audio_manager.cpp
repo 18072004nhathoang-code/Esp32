@@ -34,8 +34,9 @@ static size_t waveform_head = 0;
 // FreeRTOS Task & Mutex
 static TaskHandle_t audio_task_handle = nullptr;
 static SemaphoreHandle_t audio_mutex = nullptr;
+static SemaphoreHandle_t audio_i2s_tx_mutex = nullptr; // Mutex độc quyền đường truyền TX i2s_write
 
-// Máy trạng thái phân quyền I2S phần cứng
+// Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
 static bool i2s_duplex_installed = false;
@@ -170,16 +171,17 @@ bool audio_request_ownership(AudioOwner requester)
         return true;
     }
 
+    // NGUYÊN TẮC BẮT BUỘC: Độc quyền thực sự (Exclusive Arbitration)
+    // Không cho SYSTEM, RECORDER, AI_VOICE, MUSIC ghi đè chủ sở hữu đang bận
+    if (current_audio_owner != AUDIO_OWNER_NONE)
+    {
+        xSemaphoreGive(audio_owner_mutex);
+        return false;
+    }
+
     // 1. Phân hệ MUSIC (ESP32-audioI2S) yêu cầu độc quyền I2S_NUM_0
     if (requester == AUDIO_OWNER_MUSIC)
     {
-        // Nếu hệ thống đang bận ghi âm hoặc AI Voice đang hội thoại -> từ chối
-        if (current_audio_owner == AUDIO_OWNER_RECORDER || current_audio_owner == AUDIO_OWNER_AI_VOICE || recording_active)
-        {
-            xSemaphoreGive(audio_owner_mutex);
-            return false;
-        }
-
         // Tạm dừng phát âm thanh hệ thống (nếu có)
         playback_active = false;
 
@@ -199,14 +201,8 @@ bool audio_request_ownership(AudioOwner requester)
         return true;
     }
 
-    // 2. Nếu MUSIC đang sở hữu I2S, các hệ thống khác (TONE, RECORDER, AI) KHÔNG được chiếm bus
-    if (current_audio_owner == AUDIO_OWNER_MUSIC)
-    {
-        xSemaphoreGive(audio_owner_mutex);
-        return false;
-    }
-
-    // 3. Đảm bảo I2S Duplex Driver của AudioManager đã sẵn sàng
+    // 2. Đối với các requester khác (SYSTEM, RECORDER, AI_VOICE):
+    // Đảm bảo I2S Duplex Driver của AudioManager đã sẵn sàng
     if (!i2s_duplex_installed)
     {
         if (!audio_install_duplex_driver())
@@ -214,18 +210,6 @@ bool audio_request_ownership(AudioOwner requester)
             xSemaphoreGive(audio_owner_mutex);
             return false;
         }
-    }
-
-    // 4. Phân xử giữa RECORDER và AI_VOICE
-    if (requester == AUDIO_OWNER_RECORDER && current_audio_owner == AUDIO_OWNER_AI_VOICE)
-    {
-        xSemaphoreGive(audio_owner_mutex);
-        return false;
-    }
-    if (requester == AUDIO_OWNER_AI_VOICE && recording_active)
-    {
-        xSemaphoreGive(audio_owner_mutex);
-        return false;
     }
 
     current_audio_owner = requester;
@@ -440,9 +424,17 @@ static void audio_background_task(void *pvParameters)
                     tx_buf[i * 2 + 1] = (int16_t)scaled; // Right
                 }
 
-                size_t bytes_written = 0;
-                i2s_write(I2S_NUM_0, tx_buf, to_play * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
-                playback_sample_idx += to_play;
+                if (audio_i2s_tx_mutex == nullptr)
+                {
+                    audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+                }
+                if (audio_i2s_tx_mutex && xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                {
+                    size_t bytes_written = 0;
+                    i2s_write(I2S_NUM_0, tx_buf, to_play * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
+                    xSemaphoreGive(audio_i2s_tx_mutex);
+                    playback_sample_idx += to_play;
+                }
             }
             else
             {
@@ -536,6 +528,16 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
     if (!is_initialized || freq_hz == 0 || duration_ms == 0) return;
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return;
 
+    if (audio_i2s_tx_mutex == nullptr)
+    {
+        audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+    }
+    if (xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(200)) != pdTRUE)
+    {
+        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        return;
+    }
+
     size_t total_samples = (AUDIO_SAMPLE_RATE * duration_ms) / 1000;
     const size_t CHUNK_SIZE = 128;
     int16_t buffer[CHUNK_SIZE * 2];
@@ -574,6 +576,7 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
         samples_generated += count;
     }
 
+    xSemaphoreGive(audio_i2s_tx_mutex);
     audio_release_ownership(AUDIO_OWNER_SYSTEM);
 }
 

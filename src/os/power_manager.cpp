@@ -61,6 +61,14 @@ void power_manager_wake(void)
     lvgl_port_set_brightness(user_active_brightness);
 }
 
+void power_manager_sleep(void)
+{
+    current_power_state = POWER_STATE_DISPLAY_SLEEP;
+    lvgl_port_set_brightness(POWER_BRIGHTNESS_SLEEP_DEFAULT);
+    rendering_paused = true;
+    Serial.println("[POWER] 💤 Buộc chuyển sang chế độ Sleep thủ công");
+}
+
 void power_manager_update(void)
 {
     uint32_t now = millis();

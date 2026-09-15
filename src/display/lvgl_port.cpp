@@ -155,8 +155,12 @@ bool lvgl_port_init(void)
         return false;
     }
 
-    // Xoay màn hình sang chế độ ngang (Landscape 320x240) chuẩn Mini OS
-    gfx.setRotation(1);
+    // Xoay màn hình sang chế độ dọc (Portrait 240x320) chuẩn Mini OS
+#if defined(BOARD_LCD_ROTATION)
+    gfx.setRotation(BOARD_LCD_ROTATION);
+#else
+    gfx.setRotation(0); // Mặc định Portrait (240x320)
+#endif
     
     // Thiết lập độ sáng ban đầu
     lvgl_port_set_brightness(current_brightness);

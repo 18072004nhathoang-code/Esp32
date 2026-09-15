@@ -12,12 +12,12 @@
 
 #include "../display/lvgl_port.h"
 
-// Kích thước khung hình bản đồ tương thích màn hình
+// Kích thước khung hình bản đồ tương thích màn hình 240x320 Portrait
 #ifndef MAP_CANVAS_WIDTH
-#define MAP_CANVAS_WIDTH  DISP_HOR_RES
+#define MAP_CANVAS_WIDTH  240
 #endif
 #ifndef MAP_CANVAS_HEIGHT
-#define MAP_CANVAS_HEIGHT (DISP_VER_RES - 54) // Trừ status bar (26/24px) và app header (28px)
+#define MAP_CANVAS_HEIGHT 270 // Chiếm toàn bộ vùng nội dung ứng dụng
 #endif
 
 // Tọa độ mặc định: Hà Nội (Hồ Hoàn Kiếm)

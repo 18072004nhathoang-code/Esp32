@@ -13,19 +13,22 @@
 
 NetworkCameraService g_network_camera;
 
-#define NET_CAM_MAX_JPEG_BUF (96 * 1024) // 96 KB trong PSRAM cho Snapshot JPEG
+#define NET_CAM_DEFAULT_BUF_CAP (256 * 1024) // 256 KB trong PSRAM cho Snapshot JPEG
+#define NET_CAM_MAX_SAFETY_LIMIT (512 * 1024) // Giới hạn an toàn tối đa 512 KB
 
 NetworkCameraService::NetworkCameraService()
     : _configured(false), _connected(false), _running(false),
-      _onvif_probed(false), _snapshot_jpeg_buf(nullptr), _snapshot_buf_size(NET_CAM_MAX_JPEG_BUF),
-      _frame_mutex(nullptr), _worker_task_handle(nullptr),
+      _onvif_probed(false),
+      _buf_front(nullptr), _buf_back(nullptr), _buf_capacity(NET_CAM_DEFAULT_BUF_CAP),
+      _front_in_use(false), _frame_mutex(nullptr), _worker_task_handle(nullptr),
       _snapshot_status(CAM_STATUS_NOT_IMPLEMENTED),
       _mjpeg_status(CAM_STATUS_NOT_IMPLEMENTED),
       _rtsp_status(CAM_STATUS_NOT_IMPLEMENTED),
       _onvif_status(CAM_STATUS_NOT_IMPLEMENTED)
 {
     memset(&_profile, 0, sizeof(_profile));
-    memset(&_current_frame, 0, sizeof(_current_frame));
+    memset(&_frame_front, 0, sizeof(_frame_front));
+    memset(&_frame_back, 0, sizeof(_frame_back));
     _onvif_snapshot_url[0] = '\0';
     _onvif_stream_url[0] = '\0';
 }
@@ -33,10 +36,15 @@ NetworkCameraService::NetworkCameraService()
 NetworkCameraService::~NetworkCameraService()
 {
     stop();
-    if (_snapshot_jpeg_buf)
+    if (_buf_front)
     {
-        free(_snapshot_jpeg_buf);
-        _snapshot_jpeg_buf = nullptr;
+        free(_buf_front);
+        _buf_front = nullptr;
+    }
+    if (_buf_back)
+    {
+        free(_buf_back);
+        _buf_back = nullptr;
     }
     if (_frame_mutex)
     {
@@ -69,15 +77,89 @@ void NetworkCameraService::urlEncode(const char *src, char *dst, size_t dst_len)
     dst[out_idx] = '\0';
 }
 
+void NetworkCameraService::sanitizeUrl(const char *src, char *dst, size_t dst_len)
+{
+    if (!src || !dst || dst_len == 0) return;
+    const char *scheme_end = strstr(src, "://");
+    const char *at_sign = strchr(src, '@');
+
+    if (scheme_end && at_sign && at_sign > scheme_end + 3)
+    {
+        // Có credential nằm giữa :// và @ -> Mask thành ***:***
+        size_t scheme_len = (scheme_end - src) + 3;
+        if (scheme_len < dst_len)
+        {
+            strncpy(dst, src, scheme_len);
+            dst[scheme_len] = '\0';
+            strncat(dst, "***:***", dst_len - strlen(dst) - 1);
+            strncat(dst, at_sign, dst_len - strlen(dst) - 1);
+            return;
+        }
+    }
+    strncpy(dst, src, dst_len - 1);
+    dst[dst_len - 1] = '\0';
+}
+
+bool NetworkCameraService::parseJpegDimensions(const uint8_t *buf, size_t len, size_t &width, size_t &height)
+{
+    width = 0;
+    height = 0;
+    if (!buf || len < 4) return false;
+    if (buf[0] != 0xFF || buf[1] != 0xD8) return false; // SOI kiểm tra
+
+    size_t idx = 2;
+    while (idx + 4 < len)
+    {
+        if (buf[idx] != 0xFF)
+        {
+            idx++;
+            continue;
+        }
+        uint8_t marker = buf[idx + 1];
+        // Bỏ qua padding 0xFF
+        if (marker == 0xFF || marker == 0x00)
+        {
+            idx += 2;
+            continue;
+        }
+        // SOF0 (Baseline), SOF1 (Extended), SOF2 (Progressive)
+        if (marker == 0xC0 || marker == 0xC1 || marker == 0xC2)
+        {
+            if (idx + 9 < len)
+            {
+                height = (buf[idx + 5] << 8) | buf[idx + 6];
+                width  = (buf[idx + 7] << 8) | buf[idx + 8];
+                return (width > 0 && height > 0);
+            }
+            return false;
+        }
+        // SOS (Start of Scan) hoặc EOI (End of Image) -> kết thúc phần header
+        if (marker == 0xDA || marker == 0xD9)
+        {
+            break;
+        }
+        // Độ dài phân đoạn marker
+        uint16_t block_len = (buf[idx + 2] << 8) | buf[idx + 3];
+        if (block_len < 2 || idx + 2 + block_len > len)
+        {
+            break;
+        }
+        idx += 2 + block_len;
+    }
+    return false;
+}
+
 bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
 {
     _profile = profile;
-    _configured = (strlen(_profile.ip) > 0);
+    _configured = (strlen(_profile.ip) > 0 || strlen(_profile.custom_url) > 0);
     _connected = false;
 
     // Bảo mật: Tuyệt đối không log username/password dạng plaintext ra Serial
-    Serial.printf("[NET_CAM] Cấu hình IP Camera: [%s] Hãng: %s IP: %s:%u Ch:%u (Credentials Masked)\n",
-                  _profile.name, getVendorName(_profile.vendor), _profile.ip, _profile.port, _profile.channel);
+    uint16_t h_port = _profile.http_port > 0 ? _profile.http_port : 80;
+    uint16_t r_port = _profile.rtsp_port > 0 ? _profile.rtsp_port : 554;
+    Serial.printf("[NET_CAM] Cấu hình IP Camera: [%s] Hãng: %s IP: %s (HTTP:%u, RTSP:%u, ONVIF:%u) Ch:%u [Credentials Protected]\n",
+                  _profile.name, getVendorName(_profile.vendor), _profile.ip, h_port, r_port, _profile.onvif_port, _profile.channel);
 
     if (_frame_mutex == nullptr)
     {
@@ -88,7 +170,8 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
     switch (_profile.protocol)
     {
         case CAM_PROTO_HTTP_SNAPSHOT:
-            _snapshot_status = CAM_STATUS_READY;
+            // Chỉ đánh dấu READY sau khi luồng fetch bắt được frame thành công
+            _snapshot_status = CAM_STATUS_PARTIAL_FALLBACK;
             _mjpeg_status = CAM_STATUS_NOT_IMPLEMENTED;
             _rtsp_status = CAM_STATUS_NOT_IMPLEMENTED;
             break;
@@ -104,7 +187,7 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
             break;
     }
 
-    _onvif_status = CAM_STATUS_PARTIAL_FALLBACK;
+    _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
     return _configured;
 }
 
@@ -122,40 +205,67 @@ void NetworkCameraService::workerTask()
     {
         if (wifi_manager_is_connected() && _configured)
         {
-            if (_snapshot_jpeg_buf == nullptr)
+            // Cấp phát ping-pong double buffer trong PSRAM nếu chưa có
+            if (_buf_front == nullptr)
             {
                 if (psramFound())
                 {
-                    _snapshot_jpeg_buf = (uint8_t *)heap_caps_malloc(_snapshot_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    _buf_front = (uint8_t *)heap_caps_malloc(_buf_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
-                if (!_snapshot_jpeg_buf)
+                if (!_buf_front) _buf_front = (uint8_t *)malloc(_buf_capacity);
+            }
+            if (_buf_back == nullptr)
+            {
+                if (psramFound())
                 {
-                    _snapshot_jpeg_buf = (uint8_t *)malloc(_snapshot_buf_size);
+                    _buf_back = (uint8_t *)heap_caps_malloc(_buf_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
+                if (!_buf_back) _buf_back = (uint8_t *)malloc(_buf_capacity);
             }
 
-            if (_snapshot_jpeg_buf)
+            if (_buf_back && _buf_front)
             {
-                int bytes = fetchHttpSnapshot(_snapshot_jpeg_buf, _snapshot_buf_size);
-                if (bytes > 200)
+                int bytes = fetchHttpSnapshot(_buf_back, _buf_capacity);
+                if (bytes >= 4 && _buf_back[0] == 0xFF && _buf_back[1] == 0xD8)
                 {
-                    if (_frame_mutex && xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                    // Trích xuất kích thước thực tế từ JPEG Header (SOF marker)
+                    size_t real_w = 0, real_h = 0;
+                    bool has_dim = parseJpegDimensions(_buf_back, (size_t)bytes, real_w, real_h);
+                    if (!has_dim)
                     {
-                        _current_frame.buf = _snapshot_jpeg_buf;
-                        _current_frame.len = (size_t)bytes;
-                        _current_frame.width = 480;
-                        _current_frame.height = 320;
-                        _current_frame.format = CAM_PIXFORMAT_JPEG;
-                        _current_frame.timestamp_ms = millis();
+                        real_w = 320;
+                        real_h = 240;
+                    }
+
+                    // Hoán đổi atomic back buffer sang front buffer an toàn
+                    if (_frame_mutex && xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                    {
+                        if (!_front_in_use)
+                        {
+                            uint8_t *tmp = _buf_front;
+                            _buf_front = _buf_back;
+                            _buf_back = tmp;
+
+                            _frame_front.buf = _buf_front;
+                            _frame_front.len = (size_t)bytes;
+                            _frame_front.width = real_w;
+                            _frame_front.height = real_h;
+                            _frame_front.format = CAM_PIXFORMAT_JPEG;
+                            _frame_front.timestamp_ms = millis();
+
+                            _connected = true;
+                            _snapshot_status = CAM_STATUS_READY;
+                        }
                         xSemaphoreGive(_frame_mutex);
                     }
-                    _connected = true;
-                    _snapshot_status = CAM_STATUS_READY;
                 }
                 else
                 {
-                    _connected = false;
-                    _snapshot_status = CAM_STATUS_ERROR;
+                    if (_snapshot_status != CAM_STATUS_READY)
+                    {
+                        _connected = false;
+                        _snapshot_status = CAM_STATUS_ERROR;
+                    }
                 }
             }
         }
@@ -195,8 +305,10 @@ bool NetworkCameraService::start()
             );
         }
         char masked_url[256];
-        buildStreamUrl(masked_url, sizeof(masked_url), true);
-        Serial.printf("[NET_CAM] Bắt đầu dịch vụ HTTP Snapshot: %s\n", masked_url);
+        buildSnapshotUrl(masked_url, sizeof(masked_url));
+        char sanitized_log[256];
+        sanitizeUrl(masked_url, sanitized_log, sizeof(sanitized_log));
+        Serial.printf("[NET_CAM] Bắt đầu dịch vụ HTTP Snapshot: %s\n", sanitized_log);
         return true;
     }
     else if (_profile.protocol == CAM_PROTO_MJPEG)
@@ -256,16 +368,25 @@ CameraFeatureStatus NetworkCameraService::getOnvifStatus() const
 
 CameraFrame* NetworkCameraService::getFrame(uint32_t timeout_ms)
 {
-    if (!_connected || _current_frame.buf == nullptr || _current_frame.len == 0)
+    if (!_connected || _frame_front.buf == nullptr || _frame_front.len == 0)
     {
         return nullptr;
     }
-    return &_current_frame;
+    if (_frame_mutex && xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)
+    {
+        _front_in_use = true;
+        return &_frame_front;
+    }
+    return nullptr;
 }
 
 void NetworkCameraService::returnFrame(CameraFrame *frame)
 {
-    // Dữ liệu bộ đệm được quản lý nội bộ trong PSRAM
+    if (frame && _front_in_use && _frame_mutex)
+    {
+        _front_in_use = false;
+        xSemaphoreGive(_frame_mutex);
+    }
 }
 
 void NetworkCameraService::buildStreamUrl(char *out_url, size_t max_len, bool mask_credential) const
@@ -274,13 +395,20 @@ void NetworkCameraService::buildStreamUrl(char *out_url, size_t max_len, bool ma
 
     if (strlen(_profile.custom_url) > 0)
     {
-        strncpy(out_url, _profile.custom_url, max_len - 1);
-        out_url[max_len - 1] = '\0';
+        if (mask_credential)
+        {
+            sanitizeUrl(_profile.custom_url, out_url, max_len);
+        }
+        else
+        {
+            strncpy(out_url, _profile.custom_url, max_len - 1);
+            out_url[max_len - 1] = '\0';
+        }
         return;
     }
 
     uint8_t ch = _profile.channel > 0 ? _profile.channel : 1;
-    uint16_t port = _profile.port > 0 ? _profile.port : 554;
+    uint16_t port = _profile.rtsp_port > 0 ? _profile.rtsp_port : 554;
 
     char encoded_user[48] = {0};
     char encoded_pass[48] = {0};
@@ -337,7 +465,7 @@ void NetworkCameraService::buildSnapshotUrl(char *out_url, size_t max_len) const
     }
 
     uint8_t ch = _profile.channel > 0 ? _profile.channel : 1;
-    uint16_t http_port = (_profile.port == 554 || _profile.port == 0) ? 80 : _profile.port;
+    uint16_t http_port = _profile.http_port > 0 ? _profile.http_port : 80;
 
     switch (_profile.vendor)
     {
@@ -365,9 +493,9 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
 {
     if (!_configured || !wifi_manager_is_connected()) return false;
 
-    uint16_t http_port = (_profile.port == 554 || _profile.port == 0) ? 80 : _profile.port;
+    uint16_t onvif_port = _profile.onvif_port > 0 ? _profile.onvif_port : 80;
     char probe_url[128];
-    snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service", _profile.ip, http_port);
+    snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service", _profile.ip, onvif_port);
 
     HTTPClient http;
     WiFiClient client;
@@ -384,7 +512,7 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
     int httpCode = http.POST(soap_req);
     if (httpCode == 200)
     {
-        _onvif_status = CAM_STATUS_READY;
+        _onvif_status = CAM_STATUS_PARTIAL_FALLBACK;
         _onvif_probed = true;
         if (out_service_url && max_len > 0)
         {
@@ -395,31 +523,30 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
         return true;
     }
 
-    _onvif_status = CAM_STATUS_PARTIAL_FALLBACK;
+    _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
     http.end();
     return false;
 }
 
 bool NetworkCameraService::onvifGetProfiles(char *out_profile_token, size_t max_len)
 {
-    if (out_profile_token && max_len > 0)
-    {
-        strncpy(out_profile_token, "Profile_1", max_len - 1);
-        out_profile_token[max_len - 1] = '\0';
-    }
-    return true;
+    // Chưa parse SOAP XML GetProfiles thật -> không trả success giả
+    _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
+    return false;
 }
 
 bool NetworkCameraService::onvifGetSnapshotUri(const char *profile_token, char *out_uri, size_t max_len)
 {
-    buildSnapshotUrl(out_uri, max_len);
-    return true;
+    // Chưa parse SOAP XML GetSnapshotUri thật -> không trả success giả
+    _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
+    return false;
 }
 
 bool NetworkCameraService::onvifGetStreamUri(const char *profile_token, char *out_uri, size_t max_len)
 {
-    buildStreamUrl(out_uri, max_len, false);
-    return true;
+    // Chưa parse SOAP XML GetStreamUri thật -> không trả success giả
+    _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
+    return false;
 }
 
 int NetworkCameraService::fetchHttpSnapshot(uint8_t *out_buf, size_t max_size)
@@ -443,11 +570,46 @@ int NetworkCameraService::fetchHttpSnapshot(uint8_t *out_buf, size_t max_size)
 
     if (httpCode == HTTP_CODE_OK)
     {
-        int len = http.getSize();
-        if (len > 0 && (size_t)len <= max_size)
+        int expected_len = http.getSize();
+        WiFiClient *stream = http.getStreamPtr();
+        if (stream)
         {
-            WiFiClient *stream = http.getStreamPtr();
-            bytesRead = stream->readBytes(out_buf, len);
+            size_t total = 0;
+            uint32_t start_ms = millis();
+            // Đọc an toàn hỗ trợ cả Content-Length > 0 và chunked/stream (expected_len == -1)
+            while ((http.connected() || stream->available()) && (millis() - start_ms < 4000))
+            {
+                size_t avail = stream->available();
+                if (avail > 0)
+                {
+                    size_t to_read = avail;
+                    if (total + to_read > max_size)
+                    {
+                        to_read = max_size - total;
+                    }
+                    if (to_read == 0) break; // Đạt giới hạn an toàn max buffer
+
+                    int r = stream->readBytes(out_buf + total, to_read);
+                    if (r > 0)
+                    {
+                        total += r;
+                        // Kiểm tra nếu đã nhận đủ marker EOI kết thúc ảnh JPEG (0xFF, 0xD9)
+                        if (total >= 4 && out_buf[total - 2] == 0xFF && out_buf[total - 1] == 0xD9)
+                        {
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    if (expected_len > 0 && total >= (size_t)expected_len) break;
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+            }
+            if (total > 0)
+            {
+                bytesRead = (int)total;
+            }
         }
     }
     http.end();
@@ -466,4 +628,5 @@ const char* NetworkCameraService::getVendorName(CameraVendorProfile vendor)
         default:                   return "ONVIF Generic";
     }
 }
+
 

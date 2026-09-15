@@ -376,11 +376,11 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_pos(map_canvas, 0, 0);
     lv_obj_set_size(map_canvas, MAP_CANVAS_WIDTH, MAP_CANVAS_HEIGHT);
 
-    // 4. FLOATING HUD: Nút chuyển đổi kiểu bản đồ (Roadmap / Satellite) góc trên trái
+    // 4. FLOATING HUD TOP: Nút chuyển đổi kiểu bản đồ (Roadmap / Satellite)
     hud_type_btn = lv_btn_create(parent);
-    lv_obj_set_size(hud_type_btn, 115, 28);
-    lv_obj_set_pos(hud_type_btn, 10, 8);
-    lv_obj_set_style_radius(hud_type_btn, 14, 0);
+    lv_obj_set_size(hud_type_btn, 38, 24);
+    lv_obj_set_pos(hud_type_btn, 6, 6);
+    lv_obj_set_style_radius(hud_type_btn, 8, 0);
     lv_obj_set_style_bg_color(hud_type_btn, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(hud_type_btn, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_type_btn, lv_color_hex(0x00F2FE), 0);
@@ -389,16 +389,16 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(hud_type_btn, btn_toggle_type_cb, LV_EVENT_CLICKED, nullptr);
 
     hud_lbl_type = lv_label_create(hud_type_btn);
-    lv_label_set_text(hud_lbl_type, "🛣️ Đường Phố");
+    lv_label_set_text(hud_lbl_type, "🛣️");
     lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00E676), 0);
-    lv_obj_set_style_text_font(hud_lbl_type, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hud_lbl_type, &lv_font_montserrat_10, 0);
     lv_obj_center(hud_lbl_type);
 
-    // 5. FLOATING HUD: Tiêu đề vị trí & Mức Zoom
+    // 5. FLOATING HUD TOP: Tiêu đề vị trí & Mức Zoom (Giữa)
     hud_city_pill = lv_obj_create(parent);
-    lv_obj_set_size(hud_city_pill, 195, 28);
-    lv_obj_set_pos(hud_city_pill, 132, 8);
-    lv_obj_set_style_radius(hud_city_pill, 14, 0);
+    lv_obj_set_size(hud_city_pill, 146, 24);
+    lv_obj_set_pos(hud_city_pill, 48, 6);
+    lv_obj_set_style_radius(hud_city_pill, 8, 0);
     lv_obj_set_style_bg_color(hud_city_pill, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(hud_city_pill, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_city_pill, lv_color_hex(0x2D3748), 0);
@@ -409,14 +409,31 @@ void map_app_open(lv_obj_t *parent)
     hud_lbl_city = lv_label_create(hud_city_pill);
     lv_label_set_text_fmt(hud_lbl_city, "📍 %s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
     lv_obj_set_style_text_color(hud_lbl_city, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(hud_lbl_city, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hud_lbl_city, &lv_font_montserrat_10, 0);
     lv_obj_center(hud_lbl_city);
 
-    // 6. CỤM NÚT ZOOM [+] VÀ [-] Ở GÓC TRÊN PHẢI
+    // Nút chuyển địa điểm tiếp theo (Phải)
+    lv_obj_t *btn_next_city = lv_btn_create(parent);
+    lv_obj_set_size(btn_next_city, 34, 24);
+    lv_obj_set_pos(btn_next_city, 198, 6);
+    lv_obj_set_style_radius(btn_next_city, 8, 0);
+    lv_obj_set_style_bg_color(btn_next_city, lv_color_hex(0x0A0E17), 0);
+    lv_obj_set_style_bg_opa(btn_next_city, LV_OPA_80, 0);
+    lv_obj_set_style_border_color(btn_next_city, lv_color_hex(0x00F2FE), 0);
+    lv_obj_set_style_border_width(btn_next_city, 1, 0);
+    lv_obj_add_event_cb(btn_next_city, btn_next_city_cb, LV_EVENT_CLICKED, nullptr);
+
+    lv_obj_t *l_nc = lv_label_create(btn_next_city);
+    lv_label_set_text(l_nc, LV_SYMBOL_NEXT);
+    lv_obj_set_style_text_color(l_nc, lv_color_hex(0x00F2FE), 0);
+    lv_obj_set_style_text_font(l_nc, &lv_font_montserrat_10, 0);
+    lv_obj_center(l_nc);
+
+    // 6. CỤM NÚT FLOATING ZOOM [+] VÀ [-] (Góc phải)
     lv_obj_t *btn_zin = lv_btn_create(parent);
-    lv_obj_set_size(btn_zin, 34, 28);
-    lv_obj_set_pos(btn_zin, 386, 8);
-    lv_obj_set_style_radius(btn_zin, 8, 0);
+    lv_obj_set_size(btn_zin, 32, 32);
+    lv_obj_set_pos(btn_zin, 200, 42);
+    lv_obj_set_style_radius(btn_zin, 16, 0);
     lv_obj_set_style_bg_color(btn_zin, lv_color_hex(0x161B26), 0);
     lv_obj_set_style_bg_opa(btn_zin, LV_OPA_80, 0);
     lv_obj_set_style_border_color(btn_zin, lv_color_hex(0x00F2FE), 0);
@@ -428,9 +445,9 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_center(l_zin);
 
     lv_obj_t *btn_zout = lv_btn_create(parent);
-    lv_obj_set_size(btn_zout, 34, 28);
-    lv_obj_set_pos(btn_zout, 426, 8);
-    lv_obj_set_style_radius(btn_zout, 8, 0);
+    lv_obj_set_size(btn_zout, 32, 32);
+    lv_obj_set_pos(btn_zout, 200, 80);
+    lv_obj_set_style_radius(btn_zout, 16, 0);
     lv_obj_set_style_bg_color(btn_zout, lv_color_hex(0x161B26), 0);
     lv_obj_set_style_bg_opa(btn_zout, LV_OPA_80, 0);
     lv_obj_set_style_border_color(btn_zout, lv_color_hex(0x00F2FE), 0);
@@ -441,10 +458,10 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_color(l_zout, lv_color_hex(0x00F2FE), 0);
     lv_obj_center(l_zout);
 
-    // 7. CỤM NÚT ĐIỀU HƯỚNG 4 HƯỚNG D-PAD (PAN) GÓC DƯỚI PHẢI
+    // 7. CỤM NÚT ĐIỀU HƯỚNG D-PAD (PAN) GÓC DƯỚI PHẢI
     auto create_dpad_btn = [&](lv_coord_t x, lv_coord_t y, const char *sym, uintptr_t dir) {
         lv_obj_t *btn = lv_btn_create(parent);
-        lv_obj_set_size(btn, 30, 26);
+        lv_obj_set_size(btn, 26, 22);
         lv_obj_set_pos(btn, x, y);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x121824), 0);
@@ -459,16 +476,16 @@ void map_app_open(lv_obj_t *parent)
         return btn;
     };
 
-    create_dpad_btn(410, 160, LV_SYMBOL_UP, 1);    // Lên (Bắc)
-    create_dpad_btn(374, 192, LV_SYMBOL_LEFT, 3);  // Trái (Tây)
-    create_dpad_btn(410, 224, LV_SYMBOL_DOWN, 2);  // Xuống (Nam)
-    create_dpad_btn(446, 192, LV_SYMBOL_RIGHT, 4); // Phải (Đông)
+    create_dpad_btn(196, 172, LV_SYMBOL_UP, 1);    // Lên
+    create_dpad_btn(168, 196, LV_SYMBOL_LEFT, 3);  // Trái
+    create_dpad_btn(196, 220, LV_SYMBOL_DOWN, 2);  // Xuống
+    create_dpad_btn(212, 196, LV_SYMBOL_RIGHT, 4); // Phải
 
-    // 8. FLOATING HUD: Trạng thái nguồn dữ liệu (Cache SD / Google Static API) góc dưới trái
+    // 8. FLOATING HUD BOTTOM: Trạng thái nguồn dữ liệu góc dưới trái
     hud_source_pill = lv_obj_create(parent);
-    lv_obj_set_size(hud_source_pill, 185, 26);
-    lv_obj_set_pos(hud_source_pill, 10, 228);
-    lv_obj_set_style_radius(hud_source_pill, 13, 0);
+    lv_obj_set_size(hud_source_pill, 150, 22);
+    lv_obj_set_pos(hud_source_pill, 6, 242);
+    lv_obj_set_style_radius(hud_source_pill, 6, 0);
     lv_obj_set_style_bg_color(hud_source_pill, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(hud_source_pill, LV_OPA_80, 0);
     lv_obj_set_style_border_color(hud_source_pill, lv_color_hex(0x00E676), 0);
@@ -477,17 +494,10 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(hud_source_pill, LV_OBJ_FLAG_SCROLLABLE);
 
     hud_lbl_source = lv_label_create(hud_source_pill);
-    lv_label_set_text(hud_lbl_source, "💾 Đang nạp SD Cache...");
+    lv_label_set_text(hud_lbl_source, "💾 Nạp SD Cache...");
     lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
-    lv_obj_set_style_text_font(hud_lbl_source, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(hud_lbl_source, &lv_font_montserrat_10, 0);
     lv_obj_center(hud_lbl_source);
-
-    // Tọa độ vĩ độ, kinh độ
-    hud_coord_lbl = lv_label_create(parent);
-    lv_label_set_text_fmt(hud_coord_lbl, "%.4f, %.4f", cur_lat, cur_lon);
-    lv_obj_set_pos(hud_coord_lbl, 204, 233);
-    lv_obj_set_style_text_color(hud_coord_lbl, lv_color_hex(0x718096), 0);
-    lv_obj_set_style_text_font(hud_coord_lbl, &lv_font_montserrat_12, 0);
 
     // Kích hoạt nạp bản đồ ban đầu (Hà Nội, Z15, Roadmap)
     trigger_map_reload();

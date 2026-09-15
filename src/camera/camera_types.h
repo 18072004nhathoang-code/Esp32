@@ -131,7 +131,9 @@ struct NetworkCameraProfile
     CameraStreamProtocol protocol;
     char name[32];
     char ip[48];
-    uint16_t port;
+    uint16_t http_port;
+    uint16_t rtsp_port;
+    uint16_t onvif_port;
     char username[32];
     char password[32];
     uint8_t channel;

@@ -27,9 +27,48 @@ static MusicPlayerState player_state = {
     .volume = 80
 };
 
-// Cờ lệnh đa luồng giữa Core 1 (UI) và Core 0 (Audio Task)
-static volatile bool cmd_request_play = false;
-static char pending_filepath[128] = {0};
+// Các lệnh điều khiển phát nhạc đa luồng gửi qua FreeRTOS Queue
+enum MusicCmdType
+{
+    MUSIC_CMD_NONE = 0,
+    MUSIC_CMD_PLAY_INDEX,
+    MUSIC_CMD_PAUSE,
+    MUSIC_CMD_RESUME,
+    MUSIC_CMD_TOGGLE_PLAY,
+    MUSIC_CMD_NEXT,
+    MUSIC_CMD_PREV,
+    MUSIC_CMD_STOP,
+    MUSIC_CMD_SEEK,
+    MUSIC_CMD_SET_VOLUME
+};
+
+struct MusicCommand
+{
+    MusicCmdType type;
+    int track_idx;
+    uint32_t param;
+    char filepath[128];
+};
+
+static QueueHandle_t music_cmd_queue = nullptr;
+
+/* Hàm hỗ trợ dừng và dọn dẹp Audio engine nội bộ trên Core 0 */
+static void internal_stop_audio_locked(void)
+{
+    if (audio)
+    {
+        if (storage_lock(200))
+        {
+            audio->stopSong();
+            storage_unlock();
+        }
+        delete audio;
+        audio = nullptr;
+    }
+    player_state.is_playing = false;
+    player_state.is_paused = false;
+    player_state.current_time_sec = 0;
+}
 
 /* FreeRTOS Task chạy riêng biệt trên CORE 0 giải mã MP3 liên tục */
 static void music_audio_task(void *pvParameters)
@@ -39,104 +78,178 @@ static void music_audio_task(void *pvParameters)
 
     while (true)
     {
-        // 1. Kiểm tra nếu có lệnh yêu cầu phát bài mới từ Core 1
-        if (cmd_request_play)
+        // 1. Nhận và xử lý các lệnh từ FreeRTOS Queue theo thứ tự (không bao giờ bị race condition)
+        MusicCommand cmd;
+        while (music_cmd_queue && xQueueReceive(music_cmd_queue, &cmd, 0) == pdTRUE)
         {
-            cmd_request_play = false;
-
-            // Kiểm tra file có tồn tại trên thẻ SD trước với khóa SPI bus
-            bool file_exists = false;
-            if (storage_lock(1000))
+            switch (cmd.type)
             {
-                file_exists = storage_get_fs().exists(pending_filepath);
-                storage_unlock();
-            }
-
-            if (!file_exists)
-            {
-                Serial.printf("[MUSIC_AUDIO] ❌ Tệp %s không tồn tại trên thẻ SD -> Hủy phát nhạc!\n", pending_filepath);
-                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                case MUSIC_CMD_PLAY_INDEX:
                 {
-                    if (audio)
+                    int idx = cmd.track_idx;
+                    if (idx < 0 || idx >= total_tracks_found) break;
+
+                    player_state.current_track_idx = idx;
+                    player_state.total_duration_sec = playlist[idx].duration_sec;
+                    player_state.current_time_sec = 0;
+
+                    // Kiểm tra file có tồn tại trên thẻ SD trước với khóa storage
+                    bool file_exists = false;
+                    if (storage_lock(500))
                     {
-                        delete audio;
-                        audio = nullptr;
+                        file_exists = storage_get_fs().exists(cmd.filepath);
+                        storage_unlock();
                     }
-                    player_state.is_playing = false;
-                    player_state.is_paused = false;
-                    xSemaphoreGive(audio_mutex);
-                }
-                audio_release_ownership(AUDIO_OWNER_MUSIC);
-            }
-            else
-            {
-                // File tồn tại -> yêu cầu quyền I2S độc quyền
-                if (audio_request_ownership(AUDIO_OWNER_MUSIC))
-                {
-                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+
+                    if (!file_exists)
                     {
-                        Serial.printf("[MUSIC_AUDIO] Core 0 mở tệp hợp lệ: %s\n", pending_filepath);
-
-                        // Mở loa ngoài qua chân PA (Active LOW trên DIYMORE)
-                        pinMode(AUDIO_PA_PIN, OUTPUT);
-                        digitalWrite(AUDIO_PA_PIN, 0);
-
-                        // Tái tạo đối tượng Audio động sau khi AudioManager đã nhả I2S
-                        if (audio)
+                        Serial.printf("[MUSIC_AUDIO] ❌ Tệp %s không tồn tại trên thẻ SD -> Hủy phát!\n", cmd.filepath);
+                        if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                         {
-                            delete audio;
-                            audio = nullptr;
+                            internal_stop_audio_locked();
+                            xSemaphoreGive(audio_mutex);
                         }
-
-                        audio = new Audio();
-                        if (audio)
+                        audio_release_ownership(AUDIO_OWNER_MUSIC);
+                    }
+                    else
+                    {
+                        if (audio_request_ownership(AUDIO_OWNER_MUSIC))
                         {
-                            audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
-
-                            uint8_t scaled_vol = (player_state.volume * 21) / 100;
-                            audio->setVolume(scaled_vol);
-
-                            // Kết nối FS với khóa bảo vệ bus SPI
-                            bool connected = false;
-                            if (storage_lock(1000))
+                            if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
                             {
-                                connected = audio->connecttoFS(storage_get_fs(), pending_filepath);
-                                storage_unlock();
-                            }
+                                // Mở loa ngoài qua chân PA
+                                pinMode(AUDIO_PA_PIN, OUTPUT);
+                                digitalWrite(AUDIO_PA_PIN, 0);
 
-                            if (connected)
-                            {
-                                player_state.is_playing = true;
-                                player_state.is_paused = false;
-                                Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", pending_filepath);
+                                internal_stop_audio_locked();
+
+                                audio = new Audio();
+                                if (audio)
+                                {
+                                    audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
+                                    uint8_t scaled_vol = (player_state.volume * 21) / 100;
+                                    audio->setVolume(scaled_vol);
+
+                                    // Kết nối FS với khóa bảo vệ storage (Thứ tự khóa: audio_mutex TRƯỚC, storage_lock SAU -> Zero Deadlock)
+                                    bool connected = false;
+                                    if (storage_lock(1000))
+                                    {
+                                        connected = audio->connecttoFS(storage_get_fs(), cmd.filepath);
+                                        storage_unlock();
+                                    }
+
+                                    if (connected)
+                                    {
+                                        player_state.is_playing = true;
+                                        player_state.is_paused = false;
+                                        Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", cmd.filepath);
+                                    }
+                                    else
+                                    {
+                                        Serial.printf("[MUSIC_AUDIO] ❌ connecttoFS() thất bại cho tệp %s\n", cmd.filepath);
+                                        internal_stop_audio_locked();
+                                        audio_release_ownership(AUDIO_OWNER_MUSIC);
+                                    }
+                                }
+                                else
+                                {
+                                    audio_release_ownership(AUDIO_OWNER_MUSIC);
+                                }
+                                xSemaphoreGive(audio_mutex);
                             }
                             else
                             {
-                                Serial.printf("[MUSIC_AUDIO] ❌ connecttoFS() thất bại cho tệp %s\n", pending_filepath);
-                                delete audio;
-                                audio = nullptr;
-                                player_state.is_playing = false;
-                                player_state.is_paused = false;
                                 audio_release_ownership(AUDIO_OWNER_MUSIC);
                             }
                         }
                         else
                         {
-                            player_state.is_playing = false;
-                            player_state.is_paused = false;
-                            audio_release_ownership(AUDIO_OWNER_MUSIC);
+                            Serial.println("[MUSIC_AUDIO] ⚠️ Không lấy được quyền sở hữu I2S cho MUSIC");
+                        }
+                    }
+                }
+                break;
+
+                case MUSIC_CMD_PAUSE:
+                {
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                    {
+                        if (audio && player_state.is_playing && !player_state.is_paused)
+                        {
+                            audio->pauseResume();
+                            player_state.is_paused = true;
+                            Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng phát nhạc");
                         }
                         xSemaphoreGive(audio_mutex);
                     }
-                    else
+                }
+                break;
+
+                case MUSIC_CMD_RESUME:
+                {
+                    if (audio_request_ownership(AUDIO_OWNER_MUSIC))
                     {
-                        audio_release_ownership(AUDIO_OWNER_MUSIC);
+                        if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                        {
+                            if (audio && player_state.is_paused)
+                            {
+                                audio->pauseResume();
+                                player_state.is_paused = false;
+                                player_state.is_playing = true;
+                                Serial.println("[MUSIC_AUDIO] ▶ Đã tiếp tục phát nhạc");
+                            }
+                            xSemaphoreGive(audio_mutex);
+                        }
                     }
                 }
-                else
+                break;
+
+                case MUSIC_CMD_STOP:
                 {
-                    Serial.println("[MUSIC_AUDIO] ⚠️ Không lấy được quyền sở hữu I2S cho MUSIC");
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
+                    {
+                        internal_stop_audio_locked();
+                        xSemaphoreGive(audio_mutex);
+                    }
+                    audio_release_ownership(AUDIO_OWNER_MUSIC);
+                    Serial.println("[MUSIC_AUDIO] ⏹ Đã dừng phát nhạc");
                 }
+                break;
+
+                case MUSIC_CMD_SEEK:
+                {
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                    {
+                        if (audio)
+                        {
+                            if (storage_lock(200))
+                            {
+                                audio->setAudioPlayPosition(cmd.param);
+                                storage_unlock();
+                            }
+                        }
+                        player_state.current_time_sec = cmd.param;
+                        xSemaphoreGive(audio_mutex);
+                    }
+                }
+                break;
+
+                case MUSIC_CMD_SET_VOLUME:
+                {
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                    {
+                        if (audio)
+                        {
+                            uint8_t scaled_vol = (cmd.param * 21) / 100;
+                            audio->setVolume(scaled_vol);
+                        }
+                        xSemaphoreGive(audio_mutex);
+                    }
+                }
+                break;
+
+                default:
+                    break;
             }
         }
 
@@ -149,7 +262,7 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio != nullptr && player_state.is_playing && !player_state.is_paused)
                     {
-                        // Bảo vệ đọc dữ liệu thẻ SD qua storage lock
+                        // Khóa storage bảo vệ đọc SPI/SD trong suốt chu kỳ loop
                         if (storage_lock(50))
                         {
                             audio->loop();
@@ -170,7 +283,7 @@ static void music_audio_task(void *pvParameters)
             }
             else
             {
-                // Tạm thời bị nhường quyền cho system tone hoặc AI voice
+                // Nhường quyền cho task khác
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
         }
@@ -181,6 +294,7 @@ static void music_audio_task(void *pvParameters)
     }
 }
 
+
 /* Khởi tạo phân hệ Music Player */
 bool music_player_init(void)
 {
@@ -189,6 +303,10 @@ bool music_player_init(void)
     if (!audio_mutex)
     {
         audio_mutex = xSemaphoreCreateMutex();
+    }
+    if (!music_cmd_queue)
+    {
+        music_cmd_queue = xQueueCreate(16, sizeof(MusicCommand));
     }
 
     // Mở IC khuếch đại PA
@@ -342,14 +460,18 @@ bool music_player_play_index(int index)
 {
     if (index < 0 || index >= total_tracks_found) return false;
 
-    player_state.current_track_idx = index;
-    player_state.total_duration_sec = playlist[index].duration_sec;
-    player_state.current_time_sec = 0;
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_PLAY_INDEX;
+    cmd.track_idx = index;
+    strncpy(cmd.filepath, playlist[index].filepath, sizeof(cmd.filepath) - 1);
 
-    strncpy(pending_filepath, playlist[index].filepath, sizeof(pending_filepath) - 1);
-    cmd_request_play = true;
+    if (music_cmd_queue)
+    {
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
+    }
 
-    Serial.printf("[MUSIC_PLAYER] ▶ Yêu cầu phát bài [%d]: %s\n", index + 1, playlist[index].title);
+    Serial.printf("[MUSIC_PLAYER] ▶ Đã gửi lệnh phát bài [%d]: %s\n", index + 1, playlist[index].title);
     return true;
 }
 
@@ -388,74 +510,56 @@ void music_player_prev(void)
 
 void music_player_pause(void)
 {
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_PAUSE;
+    if (music_cmd_queue)
     {
-        if (audio)
-        {
-            audio->pauseResume();
-        }
-        player_state.is_paused = true;
-        xSemaphoreGive(audio_mutex);
-        Serial.println("[MUSIC_PLAYER] ⏸ Tạm dừng phát nhạc");
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
     }
+    player_state.is_paused = true;
+    Serial.println("[MUSIC_PLAYER] ⏸ Gửi lệnh tạm dừng phát nhạc");
 }
 
 void music_player_resume(void)
 {
-    if (audio_request_ownership(AUDIO_OWNER_MUSIC))
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_RESUME;
+    if (music_cmd_queue)
     {
-        if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
-        {
-            if (audio)
-            {
-                audio->pauseResume();
-                player_state.is_paused = false;
-                player_state.is_playing = true;
-            }
-            else
-            {
-                // Nếu chưa có đối tượng Audio, khởi động lại bài hát hiện tại
-                xSemaphoreGive(audio_mutex);
-                music_player_play_index(player_state.current_track_idx);
-                return;
-            }
-            xSemaphoreGive(audio_mutex);
-            Serial.println("[MUSIC_PLAYER] ▶ Tiếp tục phát nhạc");
-        }
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
     }
+    player_state.is_paused = false;
+    Serial.println("[MUSIC_PLAYER] ▶ Gửi lệnh tiếp tục phát nhạc");
 }
 
 void music_player_stop(void)
 {
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_STOP;
+    if (music_cmd_queue)
     {
-        if (audio)
-        {
-            audio->stopSong();
-            delete audio;
-            audio = nullptr;
-        }
-        player_state.is_playing = false;
-        player_state.is_paused = false;
-        player_state.current_time_sec = 0;
-        xSemaphoreGive(audio_mutex);
-        audio_release_ownership(AUDIO_OWNER_MUSIC);
-        Serial.println("[MUSIC_PLAYER] ⏹ Dừng phát nhạc & giải phóng I2S driver");
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
     }
+    player_state.is_playing = false;
+    player_state.is_paused = false;
+    Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
 }
 
 void music_player_seek(uint32_t sec)
 {
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_SEEK;
+    cmd.param = sec;
+    if (music_cmd_queue)
     {
-        if (audio)
-        {
-            audio->setAudioPlayPosition(sec);
-        }
-        player_state.current_time_sec = sec;
-        xSemaphoreGive(audio_mutex);
-        Serial.printf("[MUSIC_PLAYER] ⏩ Tua tới giây %u\n", sec);
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
     }
+    player_state.current_time_sec = sec;
+    Serial.printf("[MUSIC_PLAYER] ⏩ Gửi lệnh tua tới giây %u\n", sec);
 }
 
 void music_player_set_volume(uint8_t vol_percent)
@@ -463,17 +567,17 @@ void music_player_set_volume(uint8_t vol_percent)
     if (vol_percent > 100) vol_percent = 100;
     player_state.volume = vol_percent;
 
-    uint8_t scaled_vol = (vol_percent * 21) / 100;
-    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    MusicCommand cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type = MUSIC_CMD_SET_VOLUME;
+    cmd.param = vol_percent;
+    if (music_cmd_queue)
     {
-        if (audio)
-        {
-            audio->setVolume(scaled_vol);
-        }
-        xSemaphoreGive(audio_mutex);
+        xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50));
     }
     Serial.printf("[MUSIC_PLAYER] 🔊 Đặt âm lượng: %d%%\n", vol_percent);
 }
+
 
 uint8_t music_player_get_volume(void)
 {

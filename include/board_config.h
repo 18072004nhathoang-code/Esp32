@@ -64,15 +64,23 @@
 #endif
 
 // ==============================================================================
-// EXPORT COMMON MACROS TO MATCH EXISTING CODEBASE
+// CORE DISPLAY RESOLUTION (PORTRAIT 240x320)
 // ==============================================================================
 
+#ifndef SCREEN_WIDTH
+#define SCREEN_WIDTH            240
+#endif
+
+#ifndef SCREEN_HEIGHT
+#define SCREEN_HEIGHT           320
+#endif
+
 #ifndef DISP_HOR_RES
-#define DISP_HOR_RES            BOARD_LCD_WIDTH
+#define DISP_HOR_RES            SCREEN_WIDTH
 #endif
 
 #ifndef DISP_VER_RES
-#define DISP_VER_RES            BOARD_LCD_HEIGHT
+#define DISP_VER_RES            SCREEN_HEIGHT
 #endif
 
 #ifndef AUDIO_I2S_BCLK
