@@ -131,10 +131,14 @@ void ai_voice_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(main_container, LV_OBJ_FLAG_SCROLLABLE);
 
     // =========================================================================
-    // 1. KHUNG HỘI THOẠI BONG BÓNG CHAT (480x200)
     // =========================================================================
+    // 1. KHUNG HỘI THOẠI BONG BÓNG CHAT
+    // =========================================================================
+    lv_coord_t b_bar_h = (DISP_VER_RES <= 240) ? 52 : 64;
+    lv_coord_t chat_h = (DISP_VER_RES - 54) - b_bar_h;
+
     chat_container = lv_obj_create(main_container);
-    lv_obj_set_size(chat_container, 480, 202);
+    lv_obj_set_size(chat_container, DISP_HOR_RES, chat_h);
     lv_obj_align(chat_container, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(chat_container, lv_color_hex(0x0A0D14), 0);
     lv_obj_set_style_border_width(chat_container, 0, 0);
@@ -153,10 +157,10 @@ void ai_voice_app_open(lv_obj_t *parent)
     last_msg_count = count;
 
     // =========================================================================
-    // 2. KHUNG ĐIỀU KHIỂN ĐÁY (480x64): NÚT PUSH-TO-TALK, SÓNG ÂM VÀ STATUS
+    // 2. KHUNG ĐIỀU KHIỂN ĐÁY: NÚT PUSH-TO-TALK, SÓNG ÂM VÀ STATUS
     // =========================================================================
     bottom_bar = lv_obj_create(main_container);
-    lv_obj_set_size(bottom_bar, 480, 64);
+    lv_obj_set_size(bottom_bar, DISP_HOR_RES, b_bar_h);
     lv_obj_align(bottom_bar, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(bottom_bar, lv_color_hex(0x111622), 0);
     lv_obj_set_style_border_color(bottom_bar, lv_color_hex(0x1F2937), 0);

@@ -9,9 +9,15 @@
 #include <Arduino.h>
 #include <lvgl.h>
 
-// Kích thước chuẩn hiển thị toàn màn hình 3.5" (Landscape 480x320)
-#define MAP_TILE_WIDTH  480
-#define MAP_TILE_HEIGHT 320
+#include "../display/lvgl_port.h"
+
+// Kích thước chuẩn hiển thị toàn màn hình (Landscape DISP_HOR_RES x DISP_VER_RES)
+#ifndef MAP_TILE_WIDTH
+#define MAP_TILE_WIDTH  DISP_HOR_RES
+#endif
+#ifndef MAP_TILE_HEIGHT
+#define MAP_TILE_HEIGHT DISP_VER_RES
+#endif
 
 #if __has_include("secrets.h")
 #include "secrets.h"

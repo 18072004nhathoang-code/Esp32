@@ -12,12 +12,23 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 
-// Độ phân giải hiển thị chuẩn Mini OS trên màn hình 3.5" IPS (Landscape 480x320)
-#define DISP_HOR_RES 480
-#define DISP_VER_RES 320
+// Độ phân giải hiển thị lấy tự động từ Hardware Profile thông qua board_config.h
+#ifndef DISP_HOR_RES
+#define DISP_HOR_RES BOARD_LCD_WIDTH
+#endif
 
-// Số dòng cho mỗi DMA Buffer (480 * 30 * 2 = 28.8 KB trong Internal SRAM)
-#define DISP_BUF_LINES 30
+#ifndef DISP_VER_RES
+#define DISP_VER_RES BOARD_LCD_HEIGHT
+#endif
+
+// Số dòng cho mỗi DMA Buffer (Internal SRAM)
+#ifndef DISP_BUF_LINES
+#if (DISP_HOR_RES <= 320)
+#define DISP_BUF_LINES 40   // 320 * 40 * 2 = 25.6 KB
+#else
+#define DISP_BUF_LINES 30   // 480 * 30 * 2 = 28.8 KB
+#endif
+#endif
 
 // Đối tượng phần cứng hiển thị LovyanGFX
 extern LGFX gfx;

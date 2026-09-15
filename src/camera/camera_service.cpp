@@ -4,6 +4,7 @@
  */
 
 #include "camera_service.h"
+#include "board_config.h"
 
 static CameraSourceType active_source = CAM_SOURCE_LOCAL_DVP;
 static char status_text_buffer[64] = "Chưa kết nối Camera";
@@ -12,6 +13,7 @@ bool camera_service_init(void)
 {
     Serial.println("[CAMERA] Khởi tạo hệ thống quản lý Camera đa nguồn...");
 
+#if defined(BOARD_HAS_LOCAL_CAMERA) && (BOARD_HAS_LOCAL_CAMERA == 1)
     // Cấu hình thử Camera DVP cục bộ
     LocalCameraConfig local_cfg;
     memset(&local_cfg, 0, sizeof(local_cfg));
@@ -27,6 +29,11 @@ bool camera_service_init(void)
         active_source = CAM_SOURCE_NETWORK_STREAM;
         snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
     }
+#else
+    active_source = CAM_SOURCE_NETWORK_STREAM;
+    snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
+    Serial.println("[CAMERA] Board không có local DVP camera -> Chuyển hoàn toàn sang Network Camera (IP Cam).");
+#endif
 
     return true;
 }

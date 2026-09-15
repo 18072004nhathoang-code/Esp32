@@ -132,22 +132,26 @@ static void theme_color_event_cb(lv_event_t *e)
     theme_accent = lv_color_hex(color_val);
 }
 
-/* 1. TẠO THANH TRẠNG THÁI TOP DYNAMIC STATUS BAR (480x26) */
+/* 1. TẠO THANH TRẠNG THÁI TOP DYNAMIC STATUS BAR */
 static void create_status_bar(void)
 {
     status_bar = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(status_bar, 480, 26);
+    lv_obj_set_size(status_bar, DISP_HOR_RES, 26);
     lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(status_bar, 0, 0);
     lv_obj_set_style_border_width(status_bar, 0, 0);
     lv_obj_set_style_bg_color(status_bar, lv_color_hex(0x0A0D14), 0); // Obsidian Dark
     lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_hor(status_bar, 10, 0);
+    lv_obj_set_style_pad_hor(status_bar, 6, 0);
     lv_obj_set_style_pad_ver(status_bar, 2, 0);
 
-    // Bên trái: Huy hiệu phát sáng "● S3 3.5\" PRO MAX"
+    // Bên trái: Huy hiệu phát sáng
     lv_obj_t *lbl_os = lv_label_create(status_bar);
+#if (DISP_HOR_RES <= 320)
+    lv_label_set_text(lbl_os, "● S3 2.8\"");
+#else
     lv_label_set_text(lbl_os, "● S3 3.5\" PRO MAX");
+#endif
     lv_obj_set_style_text_color(lbl_os, lv_color_hex(0x00F2FE), 0);
     lv_obj_set_style_text_font(lbl_os, &lv_font_montserrat_12, 0);
     lv_obj_align(lbl_os, LV_ALIGN_LEFT_MID, 0, 0);
@@ -161,7 +165,7 @@ static void create_status_bar(void)
 
     // Bên phải: Cụm thông tin phần cứng cao cấp (Battery 100% ⚡, Speaker, WiFi 4-Bar, RAM Pill)
     lv_obj_t *right_cluster = lv_obj_create(status_bar);
-    lv_obj_set_size(right_cluster, 145, 22);
+    lv_obj_set_size(right_cluster, 132, 22);
     lv_obj_align(right_cluster, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_opa(right_cluster, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(right_cluster, 0, 0);
@@ -180,14 +184,14 @@ static void create_status_bar(void)
     lv_label_set_text(lbl_wifi_icon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(lbl_wifi_icon, lv_color_hex(0x718096), 0);
     lv_obj_set_style_text_font(lbl_wifi_icon, &lv_font_montserrat_12, 0);
-    lv_obj_align(lbl_wifi_icon, LV_ALIGN_LEFT_MID, 36, 0);
+    lv_obj_align(lbl_wifi_icon, LV_ALIGN_LEFT_MID, 34, 0);
 
     // Speaker Icon (Loa ngoài)
     lbl_spk_icon = lv_label_create(right_cluster);
     lv_label_set_text(lbl_spk_icon, LV_SYMBOL_VOLUME_MAX);
     lv_obj_set_style_text_color(lbl_spk_icon, lv_color_hex(0xFFB300), 0);
     lv_obj_set_style_text_font(lbl_spk_icon, &lv_font_montserrat_12, 0);
-    lv_obj_align(lbl_spk_icon, LV_ALIGN_LEFT_MID, 60, 0);
+    lv_obj_align(lbl_spk_icon, LV_ALIGN_LEFT_MID, 56, 0);
 
     // Pin 100% ⚡
     lbl_battery_pill = lv_label_create(right_cluster);
@@ -201,7 +205,7 @@ static void create_status_bar(void)
 static void create_app_squircle(lv_obj_t *parent, const char *symbol, const char *title, const char *subtitle, lv_color_t accent, uintptr_t app_id, int x, int y)
 {
     lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, 140, 120);
+    lv_obj_set_size(btn, 140, 114);
     lv_obj_set_pos(btn, x, y);
     lv_obj_set_style_radius(btn, 16, 0); // iOS Squircle Curve
     lv_obj_set_style_bg_color(btn, lv_color_hex(0x161B26), 0);
@@ -216,7 +220,7 @@ static void create_app_squircle(lv_obj_t *parent, const char *symbol, const char
 
     // Icon Biểu tượng ứng dụng với vòng nền gradient mờ
     lv_obj_t *icon_box = lv_obj_create(btn);
-    lv_obj_set_size(icon_box, 42, 42);
+    lv_obj_set_size(icon_box, 40, 40);
     lv_obj_align(icon_box, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_radius(icon_box, 12, 0);
     lv_obj_set_style_bg_color(icon_box, accent, 0);
@@ -246,21 +250,45 @@ static void create_app_squircle(lv_obj_t *parent, const char *symbol, const char
     lv_obj_align(lbl_sub, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
-/* 3. TẠO MÀN HÌNH DESKTOP LAUNCHER PRO MAX (LƯỚI 3 CỘT x 2 HÀNG CHO 3.5" IPS) */
+/* 3. TẠO MÀN HÌNH DESKTOP LAUNCHER */
 static void create_desktop(void)
 {
     desktop_view = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(desktop_view, 480, 294);
+    lv_obj_set_size(desktop_view, DISP_HOR_RES, DISP_VER_RES - 26);
     lv_obj_align(desktop_view, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(desktop_view, 0, 0);
     lv_obj_set_style_border_width(desktop_view, 0, 0);
     lv_obj_set_style_bg_color(desktop_view, lv_color_hex(0x0A0D14), 0);
     
-    // Cho phép cuộn dọc mượt mà trên màn hình 3.5" IPS
+    // Cho phép cuộn dọc mượt mà
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(desktop_view, 0, 0);
     lv_obj_set_style_pad_bottom(desktop_view, 16, 0);
 
+#if (DISP_HOR_RES <= 320)
+    // Lưới 2 Cột cho màn hình 2.8" (320x240)
+    // Cột 1: x = 14, Cột 2: x = 166 (Thẻ 140x114)
+    // Hàng 1 (y = 12)
+    create_app_squircle(desktop_view, LV_SYMBOL_CHARGE,   "System",        "Dual Core 240M",  lv_color_hex(0x00F2FE), APP_SYSTEM,   14, 12);
+    create_app_squircle(desktop_view, LV_SYMBOL_GPS,      "Maps Pro",      "WGS84 Vector",    lv_color_hex(0xFF3B30), APP_MAP,      166, 12);
+
+    // Hàng 2 (y = 132)
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "Music Player",  "SD Card MP3",     lv_color_hex(0x9D4EDD), APP_MUSIC,    14, 132);
+    create_app_squircle(desktop_view, LV_SYMBOL_PLAY,     "Voice & Mic",   "XiaoZhi AI",      lv_color_hex(0x00F2FE), APP_AUDIO,    166, 132);
+
+    // Hàng 3 (y = 252)
+    create_app_squircle(desktop_view, LV_SYMBOL_WIFI,     "WiFi Hub",      "2.4GHz Scanner",  lv_color_hex(0x00E676), APP_WIFI,     14, 252);
+    create_app_squircle(desktop_view, LV_SYMBOL_SETTINGS, "Settings",      "Control Center",  lv_color_hex(0xFFB300), APP_SETTINGS, 166, 252);
+
+    // Hàng 4 (y = 372)
+    create_app_squircle(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",       "Compass & Info",  lv_color_hex(0x3A86FF), APP_TOOLS,    14, 372);
+    create_app_squircle(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",      "XiaoZhi (Demo)",  lv_color_hex(0x00F2FE), APP_AI_VOICE, 166, 372);
+
+    // Hàng 5 (y = 492)
+    create_app_squircle(desktop_view, LV_SYMBOL_LIST,     "About",         "Mini OS v2.5",    lv_color_hex(0x9D4EDD), APP_ABOUT,    14, 492);
+    create_app_squircle(desktop_view, LV_SYMBOL_IMAGE,    "Camera",        "IP Cam / RTSP",   lv_color_hex(0xFF006E), APP_CAMERA,   166, 492);
+#else
+    // Lưới 3 Cột cho màn hình 3.5" (480x320)
     // Hàng 1 (y = 16)
     create_app_squircle(desktop_view, LV_SYMBOL_CHARGE,   "System",        "Dual Core 240M",  lv_color_hex(0x00F2FE), APP_SYSTEM,   15, 16);
     create_app_squircle(desktop_view, LV_SYMBOL_GPS,      "Maps Pro",      "WGS84 Vector",    lv_color_hex(0xFF3B30), APP_MAP,      170, 16);
@@ -278,15 +306,16 @@ static void create_desktop(void)
 
     // Hàng 4 (y = 418)
     create_app_squircle(desktop_view, LV_SYMBOL_IMAGE,    "Camera",        "DVP / RTSP",      lv_color_hex(0xFF006E), APP_CAMERA,   15, 418);
+#endif
 }
 
-/* 4. KHUNG CỬA SỔ ỨNG DỤNG PRO MAX (MODAL WINDOW 480x294) */
+/* 4. KHUNG CỬA SỔ ỨNG DỤNG (MODAL WINDOW) */
 static void ensure_app_window(void)
 {
     if (app_window != nullptr) return;
 
     app_window = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(app_window, 480, 294);
+    lv_obj_set_size(app_window, DISP_HOR_RES, DISP_VER_RES - 26);
     lv_obj_align(app_window, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(app_window, 0, 0);
     lv_obj_set_style_border_width(app_window, 0, 0);
@@ -296,7 +325,7 @@ static void ensure_app_window(void)
 
     // Thanh tiêu đề App Kính mờ
     lv_obj_t *header = lv_obj_create(app_window);
-    lv_obj_set_size(header, 480, 28);
+    lv_obj_set_size(header, DISP_HOR_RES, 28);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
     lv_obj_set_style_bg_color(header, lv_color_hex(0x121824), 0);
@@ -324,7 +353,7 @@ static void ensure_app_window(void)
 
     // Khung chứa nội dung ứng dụng
     app_content_container = lv_obj_create(app_window);
-    lv_obj_set_size(app_content_container, 480, 266);
+    lv_obj_set_size(app_content_container, DISP_HOR_RES, DISP_VER_RES - 26 - 28);
     lv_obj_align(app_content_container, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_color(app_content_container, lv_color_hex(0x0A0D14), 0);
     lv_obj_set_style_border_width(app_content_container, 0, 0);
@@ -382,8 +411,81 @@ static void open_system_monitor_app(void)
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_style_pad_all(app_content_container, 6, 0);
 
+#if (DISP_HOR_RES <= 320)
+    // Khung trên: Dual Arc Speedometers cho 320x240
+    arc_cpu = lv_arc_create(app_content_container);
+    lv_obj_set_size(arc_cpu, 64, 64);
+    lv_obj_set_pos(arc_cpu, 4, 4);
+    lv_arc_set_rotation(arc_cpu, 135);
+    lv_arc_set_bg_angles(arc_cpu, 0, 270);
+    lv_arc_set_range(arc_cpu, 0, 100);
+    lv_arc_set_value(arc_cpu, 35);
+    lv_obj_set_style_arc_color(arc_cpu, lv_color_hex(0x00F2FE), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc_cpu, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc_cpu, lv_color_hex(0x1F2937), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc_cpu, 5, LV_PART_MAIN);
+    lv_obj_clear_flag(arc_cpu, LV_OBJ_FLAG_CLICKABLE);
+
+    lbl_cpu_arc_val = lv_label_create(arc_cpu);
+    lv_label_set_text(lbl_cpu_arc_val, "35%\nCPU");
+    lv_obj_set_style_text_align(lbl_cpu_arc_val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl_cpu_arc_val, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_cpu_arc_val, &lv_font_montserrat_10, 0);
+    lv_obj_center(lbl_cpu_arc_val);
+
+    arc_ram = lv_arc_create(app_content_container);
+    lv_obj_set_size(arc_ram, 64, 64);
+    lv_obj_set_pos(arc_ram, 72, 4);
+    lv_arc_set_rotation(arc_ram, 135);
+    lv_arc_set_bg_angles(arc_ram, 0, 270);
+    lv_arc_set_range(arc_ram, 0, 100);
+    lv_arc_set_value(arc_ram, 28);
+    lv_obj_set_style_arc_color(arc_ram, lv_color_hex(0x00E676), LV_PART_INDICATOR);
+    lv_obj_set_style_arc_width(arc_ram, 5, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(arc_ram, lv_color_hex(0x1F2937), LV_PART_MAIN);
+    lv_obj_set_style_arc_width(arc_ram, 5, LV_PART_MAIN);
+    lv_obj_clear_flag(arc_ram, LV_OBJ_FLAG_CLICKABLE);
+
+    lbl_ram_arc_val = lv_label_create(arc_ram);
+    lv_label_set_text(lbl_ram_arc_val, "28%\nRAM");
+    lv_obj_set_style_text_align(lbl_ram_arc_val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl_ram_arc_val, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(lbl_ram_arc_val, &lv_font_montserrat_10, 0);
+    lv_obj_center(lbl_ram_arc_val);
+
+    lv_obj_t *telemetry_box = lv_obj_create(app_content_container);
+    lv_obj_set_size(telemetry_box, 164, 64);
+    lv_obj_set_pos(telemetry_box, 142, 4);
+    lv_obj_set_style_radius(telemetry_box, 8, 0);
+    lv_obj_set_style_bg_color(telemetry_box, lv_color_hex(0x161B26), 0);
+    lv_obj_set_style_border_color(telemetry_box, lv_color_hex(0x2D3748), 0);
+    lv_obj_set_style_border_width(telemetry_box, 1, 0);
+    lv_obj_set_style_pad_all(telemetry_box, 4, 0);
+    lv_obj_clear_flag(telemetry_box, LV_OBJ_FLAG_SCROLLABLE);
+
+    lbl_temp_chip = lv_label_create(telemetry_box);
+    lv_label_set_text(lbl_temp_chip, "🔥 Temp: 41.8 °C");
+    lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(0x00E676), 0);
+    lv_obj_set_style_text_font(lbl_temp_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_pos(lbl_temp_chip, 2, 2);
+
+    lbl_psram_chip = lv_label_create(telemetry_box);
+    lv_label_set_text(lbl_psram_chip, "💾 PSRAM: 1.1/8.0M");
+    lv_obj_set_style_text_color(lbl_psram_chip, lv_color_hex(0x00F2FE), 0);
+    lv_obj_set_style_text_font(lbl_psram_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_pos(lbl_psram_chip, 2, 20);
+
+    lbl_uptime_chip = lv_label_create(telemetry_box);
+    lv_label_set_text(lbl_uptime_chip, "⏱ Uptime: 00:01:25");
+    lv_obj_set_style_text_color(lbl_uptime_chip, lv_color_hex(0xA0AEC0), 0);
+    lv_obj_set_style_text_font(lbl_uptime_chip, &lv_font_montserrat_10, 0);
+    lv_obj_set_pos(lbl_uptime_chip, 2, 38);
+
+    chart_system = lv_chart_create(app_content_container);
+    lv_obj_set_size(chart_system, 308, 108);
+    lv_obj_set_pos(chart_system, 4, 72);
+#else
     // Khung trên: Dual Arc Speedometers (Đồng hồ tốc độ vòng tròn lớn 84x84)
-    // ARC 1: CPU LOAD (Trái)
     arc_cpu = lv_arc_create(app_content_container);
     lv_obj_set_size(arc_cpu, 84, 84);
     lv_obj_set_pos(arc_cpu, 18, 6);
@@ -404,7 +506,6 @@ static void open_system_monitor_app(void)
     lv_obj_set_style_text_font(lbl_cpu_arc_val, &lv_font_montserrat_14, 0);
     lv_obj_center(lbl_cpu_arc_val);
 
-    // ARC 2: RAM UTILIZATION (Phải)
     arc_ram = lv_arc_create(app_content_container);
     lv_obj_set_size(arc_ram, 84, 84);
     lv_obj_set_pos(arc_ram, 120, 6);
@@ -425,7 +526,6 @@ static void open_system_monitor_app(void)
     lv_obj_set_style_text_font(lbl_ram_arc_val, &lv_font_montserrat_14, 0);
     lv_obj_center(lbl_ram_arc_val);
 
-    // Khung Telemetry bên cạnh Arc (242x84)
     lv_obj_t *telemetry_box = lv_obj_create(app_content_container);
     lv_obj_set_size(telemetry_box, 246, 84);
     lv_obj_set_pos(telemetry_box, 222, 6);
@@ -454,12 +554,12 @@ static void open_system_monitor_app(void)
     lv_obj_set_style_text_font(lbl_uptime_chip, &lv_font_montserrat_12, 0);
     lv_obj_set_pos(lbl_uptime_chip, 4, 52);
 
-    // Khung dưới: REAL-TIME SCROLLING LINE CHART (Biểu đồ sóng thời gian thực 456x156)
     chart_system = lv_chart_create(app_content_container);
     lv_obj_set_size(chart_system, 456, 156);
     lv_obj_set_pos(chart_system, 12, 98);
+#endif
     lv_chart_set_type(chart_system, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(chart_system, 32); // 32 mẫu lịch sử cho màn hình 3.5"
+    lv_chart_set_point_count(chart_system, 32);
     lv_chart_set_range(chart_system, LV_CHART_AXIS_PRIMARY_Y, 0, 100);
     lv_chart_set_div_line_count(chart_system, 4, 6);
     lv_obj_set_style_bg_color(chart_system, lv_color_hex(0x111622), 0);
@@ -470,7 +570,6 @@ static void open_system_monitor_app(void)
     ser_cpu = lv_chart_add_series(chart_system, lv_color_hex(0x00F2FE), LV_CHART_AXIS_PRIMARY_Y);
     ser_ram = lv_chart_add_series(chart_system, lv_color_hex(0x00E676), LV_CHART_AXIS_PRIMARY_Y);
 
-    // Khởi tạo các điểm ban đầu cho chart
     for (int i = 0; i < 32; i++)
     {
         lv_chart_set_next_value(chart_system, ser_cpu, 25 + (i % 15));
@@ -543,7 +642,7 @@ static void open_settings_app(void)
 
     // Card 1: Điều khiển độ sáng màn hình LCD PWM
     lv_obj_t *card_bright = lv_obj_create(app_content_container);
-    lv_obj_set_size(card_bright, 460, 95);
+    lv_obj_set_size(card_bright, DISP_HOR_RES - 20, (DISP_VER_RES <= 240) ? 75 : 95);
     lv_obj_align(card_bright, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(card_bright, 12, 0);
     lv_obj_set_style_bg_color(card_bright, lv_color_hex(0x161B26), 0);
@@ -554,11 +653,11 @@ static void open_settings_app(void)
     lbl_brightness_val = lv_label_create(card_bright);
     lv_label_set_text(lbl_brightness_val, "☀️ Độ sáng Màn hình IPS PWM: 85%");
     lv_obj_set_style_text_color(lbl_brightness_val, lv_color_hex(0xFFB300), 0);
-    lv_obj_set_style_text_font(lbl_brightness_val, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(lbl_brightness_val, &lv_font_montserrat_12, 0);
     lv_obj_align(lbl_brightness_val, LV_ALIGN_TOP_LEFT, 0, 0);
 
     slider_brightness = lv_slider_create(card_bright);
-    lv_obj_set_size(slider_brightness, 420, 16);
+    lv_obj_set_size(slider_brightness, DISP_HOR_RES - 60, 16);
     lv_obj_align(slider_brightness, LV_ALIGN_BOTTOM_MID, 0, -6);
     lv_slider_set_range(slider_brightness, 10, 100);
     lv_slider_set_value(slider_brightness, 85, LV_ANIM_OFF);
@@ -568,7 +667,7 @@ static void open_settings_app(void)
 
     // Card 2: Bộ chọn màu chủ đề Theme Accent Color
     lv_obj_t *card_theme = lv_obj_create(app_content_container);
-    lv_obj_set_size(card_theme, 460, 115);
+    lv_obj_set_size(card_theme, DISP_HOR_RES - 20, (DISP_VER_RES <= 240) ? 80 : 115);
     lv_obj_align(card_theme, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(card_theme, 12, 0);
     lv_obj_set_style_bg_color(card_theme, lv_color_hex(0x161B26), 0);
@@ -579,27 +678,28 @@ static void open_settings_app(void)
     lv_obj_t *theme_title = lv_label_create(card_theme);
     lv_label_set_text(theme_title, "🎨 Màu Chủ Đề Accent Giao Diện:");
     lv_obj_set_style_text_color(theme_title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(theme_title, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(theme_title, &lv_font_montserrat_12, 0);
     lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    auto create_color_pill = [&](int x, uint32_t hex, const char *txt) {
+    int pill_w = (DISP_HOR_RES - 60) / 4;
+    auto create_color_pill = [&](int idx, uint32_t hex, const char *txt) {
         lv_obj_t *b = lv_btn_create(card_theme);
-        lv_obj_set_size(b, 95, 34);
-        lv_obj_set_pos(b, x, 32);
+        lv_obj_set_size(b, pill_w, 28);
+        lv_obj_set_pos(b, 6 + idx * (pill_w + 6), (DISP_VER_RES <= 240) ? 26 : 32);
         lv_obj_set_style_radius(b, 8, 0);
         lv_obj_set_style_bg_color(b, lv_color_hex(hex), 0);
         lv_obj_add_event_cb(b, theme_color_event_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)hex);
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_color(l, lv_color_hex(0x0A0D14), 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_10, 0);
         lv_obj_center(l);
     };
 
-    create_color_pill(10,  0x00F2FE, "Cyan Pro");
-    create_color_pill(118, 0x00E676, "Emerald");
-    create_color_pill(226, 0xFF3B30, "Neon Red");
-    create_color_pill(334, 0x9D4EDD, "Purple OS");
+    create_color_pill(0, 0x00F2FE, "Cyan");
+    create_color_pill(1, 0x00E676, "Green");
+    create_color_pill(2, 0xFF3B30, "Red");
+    create_color_pill(3, 0x9D4EDD, "Purple");
 }
 
 /* =========================================================================
@@ -615,7 +715,7 @@ static void open_tools_app(void)
     lv_obj_set_style_pad_all(app_content_container, 10, 0);
 
     lv_obj_t *compass_card = lv_obj_create(app_content_container);
-    lv_obj_set_size(compass_card, 460, 246);
+    lv_obj_set_size(compass_card, DISP_HOR_RES - 20, DISP_VER_RES - 74);
     lv_obj_center(compass_card);
     lv_obj_set_style_radius(compass_card, 12, 0);
     lv_obj_set_style_bg_color(compass_card, lv_color_hex(0x161B26), 0);
@@ -623,22 +723,22 @@ static void open_tools_app(void)
     lv_obj_set_style_border_width(compass_card, 1, 0);
 
     lv_obj_t *t = lv_label_create(compass_card);
-    lv_label_set_text(t, "🧭 La Bàn Kỹ Thuật Số & Cảm Biến IMU 6-Axis");
+    lv_label_set_text(t, "🧭 La Bàn Kỹ Thuật Số & Cảm Biến IMU");
     lv_obj_set_style_text_color(t, lv_color_hex(0x3A86FF), 0);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
-    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_12, 0);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 4);
 
     lbl_compass_val = lv_label_create(compass_card);
-    lv_label_set_text(lbl_compass_val, "Hướng la bàn: 180.5° Nam (South)\nĐộ lệch từ trường: +1.2° | Cường độ: 48.2 µT");
+    lv_label_set_text(lbl_compass_val, "Hướng: 180.5° Nam (South)\nĐộ lệch từ trường: +1.2° | 48.2 µT");
     lv_obj_set_style_text_color(lbl_compass_val, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(lbl_compass_val, &lv_font_montserrat_14, 0);
-    lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -18);
+    lv_obj_set_style_text_font(lbl_compass_val, &lv_font_montserrat_12, 0);
+    lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -14);
 
     lbl_pitch_val = lv_label_create(compass_card);
-    lv_label_set_text(lbl_pitch_val, "Góc nghiêng (Pitch/Roll): 0.2° | -0.5°\nGia tốc kế: [X: 0.02, Y: -0.01, Z: 9.81 m/s²]\nÁp suất khí quyển: 1013.25 hPa • Độ cao ước tính: 12 m");
+    lv_label_set_text(lbl_pitch_val, "Pitch/Roll: 0.2° | -0.5°\nGia tốc: [X: 0.02, Y: -0.01, Z: 9.81 m/s²]\nÁp suất: 1013.25 hPa • Độ cao: 12 m");
     lv_obj_set_style_text_color(lbl_pitch_val, lv_color_hex(0x718096), 0);
-    lv_obj_set_style_text_font(lbl_pitch_val, &lv_font_montserrat_12, 0);
-    lv_obj_align(lbl_pitch_val, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_style_text_font(lbl_pitch_val, &lv_font_montserrat_10, 0);
+    lv_obj_align(lbl_pitch_val, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 /* =========================================================================
@@ -654,7 +754,7 @@ static void open_about_app(void)
     lv_obj_set_style_pad_all(app_content_container, 10, 0);
 
     lv_obj_t *card = lv_obj_create(app_content_container);
-    lv_obj_set_size(card, 460, 246);
+    lv_obj_set_size(card, DISP_HOR_RES - 20, DISP_VER_RES - 74);
     lv_obj_center(card);
     lv_obj_set_style_radius(card, 12, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x161B26), 0);
@@ -662,23 +762,26 @@ static void open_about_app(void)
     lv_obj_set_style_border_width(card, 1, 0);
 
     lv_obj_t *title = lv_label_create(card);
-    lv_label_set_text(title, "✨ DIYMORE ESP32-S3 3.5\" IPS Mini OS Pro Max");
+    lv_label_set_text(title, "✨ " BOARD_PROFILE_NAME " Mini OS");
     lv_obj_set_style_text_color(title, lv_color_hex(0x9D4EDD), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_12, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *desc = lv_label_create(card);
-    lv_label_set_text(desc, 
-        "Hệ điều hành: Mini OS Pro Max v2.5 (Build 2026)\n"
-        "Phần cứng: DIYMORE ESP32-S3 3.5\" IPS (XiaoZhi AI Native)\n"
-        "Màn hình: 3.5 inch IPS 480x320 Pixels (Driver ST7796 SPI 40MHz DMA)\n"
-        "Cảm ứng: Điện dung đa điểm I2C (Capacitive Touch FT6336U/GT911)\n"
-        "Vi xử lý: ESP32-S3 Dual-Core LX7 @ 240MHz (Core 0 Net / Core 1 LVGL)\n"
-        "Bộ nhớ: 16MB Flash + 8MB Octal OPI PSRAM (qio_opi)\n"
-        "Bản đồ: Google Maps Dual-Engine + TJpgDec Hardware JPEG Downloader");
+    lv_label_set_text_fmt(desc, 
+        "Hệ điều hành: Mini OS Pro Max v2.5\n"
+        "Phần cứng: %s\n"
+        "Màn hình: %dx%d Pixels (40MHz DMA)\n"
+        "Cảm ứng: I2C (FocalTech FT6336)\n"
+        "Vi xử lý: ESP32-S3 Dual-Core @ 240MHz\n"
+        "Bộ nhớ: 16MB Flash + 8MB PSRAM\n"
+        "Lưu trữ: %s",
+        BOARD_PROFILE_NAME,
+        DISP_HOR_RES, DISP_VER_RES,
+        (BOARD_SD_INTERFACE == SD_IF_SPI) ? "MicroSD SPI (FSPI)" : "MicroSD SDMMC 4-bit");
     lv_obj_set_style_text_color(desc, lv_color_hex(0xCBD5E0), 0);
-    lv_obj_set_style_text_font(desc, &lv_font_montserrat_12, 0);
-    lv_obj_align(desc, LV_ALIGN_CENTER, 0, 16);
+    lv_obj_set_style_text_font(desc, &lv_font_montserrat_10, 0);
+    lv_obj_align(desc, LV_ALIGN_CENTER, 0, 12);
 }
 
 /* =========================================================================
@@ -738,7 +841,7 @@ static void open_camera_app(void)
     lv_obj_set_style_pad_all(app_content_container, 10, 0);
 
     lv_obj_t *card = lv_obj_create(app_content_container);
-    lv_obj_set_size(card, 460, 246);
+    lv_obj_set_size(card, DISP_HOR_RES - 20, DISP_VER_RES - 74);
     lv_obj_center(card);
     lv_obj_set_style_radius(card, 12, 0);
     lv_obj_set_style_bg_color(card, lv_color_hex(0x161B26), 0);
@@ -748,8 +851,8 @@ static void open_camera_app(void)
     lv_obj_t *title = lv_label_create(card);
     lv_label_set_text(title, LV_SYMBOL_IMAGE " Camera Sensor Subsystem");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFF006E), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_12, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *desc = lv_label_create(card);
     lv_label_set_text_fmt(desc,

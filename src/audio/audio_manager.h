@@ -7,17 +7,36 @@
 #pragma once
 
 #include <Arduino.h>
+#include "board_config.h"
 
-// Định nghĩa chân phần cứng chuẩn DIYMORE / XiaoZhi AI ES3C35P
-#define AUDIO_I2S_BCLK      18  // Bit Clock
-#define AUDIO_I2S_WS        21  // Word Select / LRCK
-#define AUDIO_I2S_DOUT      15  // Data Out (Loa Speaker qua IC khuếch đại)
-#define AUDIO_I2S_DIN       16  // Data In (Microphone MEMS thu âm)
-#define AUDIO_I2S_MCLK      17  // Master Clock cho Codec ES8311
-#define AUDIO_PA_PIN        1   // Power Amplifier Enable (Active LOW: 0 = Mở loa, 1 = Tắt loa)
-#define AUDIO_I2C_SDA       38  // I2C SDA điều khiển ES8311
-#define AUDIO_I2C_SCL       39  // I2C SCL điều khiển ES8311
-#define AUDIO_ES8311_ADDR   0x18
+// Định nghĩa chân phần cứng Audio (lấy từ board profile thông qua board_config.h)
+#ifndef AUDIO_I2S_BCLK
+#define AUDIO_I2S_BCLK      BOARD_AUDIO_I2S_BCLK
+#endif
+#ifndef AUDIO_I2S_WS
+#define AUDIO_I2S_WS        BOARD_AUDIO_I2S_WS
+#endif
+#ifndef AUDIO_I2S_DOUT
+#define AUDIO_I2S_DOUT      BOARD_AUDIO_I2S_DOUT
+#endif
+#ifndef AUDIO_I2S_DIN
+#define AUDIO_I2S_DIN       BOARD_AUDIO_I2S_DIN
+#endif
+#ifndef AUDIO_I2S_MCLK
+#define AUDIO_I2S_MCLK      BOARD_AUDIO_I2S_MCLK
+#endif
+#ifndef AUDIO_PA_PIN
+#define AUDIO_PA_PIN        BOARD_AUDIO_PA_PIN
+#endif
+#ifndef AUDIO_I2C_SDA
+#define AUDIO_I2C_SDA       BOARD_AUDIO_I2C_SDA
+#endif
+#ifndef AUDIO_I2C_SCL
+#define AUDIO_I2C_SCL       BOARD_AUDIO_I2C_SCL
+#endif
+#ifndef AUDIO_ES8311_ADDR
+#define AUDIO_ES8311_ADDR   BOARD_AUDIO_ES8311_ADDR
+#endif
 
 // Tần số lấy mẫu âm thanh chuẩn cho AI & Voice (16kHz, 16-bit Mono)
 #define AUDIO_SAMPLE_RATE       16000

@@ -9,25 +9,7 @@
 
 #include <Arduino.h>
 #include <FS.h>
-#include <SD.h>
-#include <SPI.h>
-
-// Cấu hình chân kết nối thẻ nhớ MicroSD (Tương thích bo mạch ESP32-S3 3.5" IPS)
-#ifndef SD_CS_PIN
-#define SD_CS_PIN 42
-#endif
-
-#ifndef SD_MOSI_PIN
-#define SD_MOSI_PIN 11
-#endif
-
-#ifndef SD_MISO_PIN
-#define SD_MISO_PIN 13
-#endif
-
-#ifndef SD_SCK_PIN
-#define SD_SCK_PIN 12
-#endif
+#include "../storage/storage_manager.h"
 
 // Thư mục lưu trữ bản đồ trên thẻ MicroSD
 #define SD_MAPS_DIR "/maps"

@@ -6,10 +6,9 @@
 
 #include "music_player.h"
 #include "audio_manager.h"
-#include "../apps/sd_map_cache.h"
-#include "../display/spi_bus_guard.h"
+#include "board_config.h"
+#include "../storage/storage_manager.h"
 #include <Audio.h>
-#include <SD.h>
 #include <FS.h>
 
 static Audio *audio = nullptr;
@@ -47,10 +46,10 @@ static void music_audio_task(void *pvParameters)
 
             // Kiểm tra file có tồn tại trên thẻ SD trước với khóa SPI bus
             bool file_exists = false;
-            if (spi_bus_lock(1000))
+            if (storage_lock(1000))
             {
-                file_exists = SD.exists(pending_filepath);
-                spi_bus_unlock();
+                file_exists = storage_get_fs().exists(pending_filepath);
+                storage_unlock();
             }
 
             if (!file_exists)
@@ -99,10 +98,10 @@ static void music_audio_task(void *pvParameters)
 
                             // Kết nối FS với khóa bảo vệ bus SPI
                             bool connected = false;
-                            if (spi_bus_lock(1000))
+                            if (storage_lock(1000))
                             {
-                                connected = audio->connecttoFS(SD, pending_filepath);
-                                spi_bus_unlock();
+                                connected = audio->connecttoFS(storage_get_fs(), pending_filepath);
+                                storage_unlock();
                             }
 
                             if (connected)
@@ -150,11 +149,11 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio != nullptr && player_state.is_playing && !player_state.is_paused)
                     {
-                        // Bảo vệ đọc dữ liệu thẻ SD qua SPI bus guard
-                        if (spi_bus_lock(50))
+                        // Bảo vệ đọc dữ liệu thẻ SD qua storage lock
+                        if (storage_lock(50))
                         {
                             audio->loop();
-                            spi_bus_unlock();
+                            storage_unlock();
                         }
 
                         uint32_t cur = audio->getAudioCurrentTime();
@@ -229,23 +228,23 @@ void music_player_scan_sd(void)
     total_tracks_found = 0;
 
     // Đảm bảo thẻ MicroSD đã sẵn sàng
-    if (!sd_map_cache_is_available())
+    if (!storage_is_available())
     {
-        sd_map_cache_init();
+        storage_init();
     }
 
-    // Kiểm tra thư mục /music với khóa bảo vệ bus SPI
-    if (sd_map_cache_is_available())
+    // Kiểm tra thư mục /music với khóa bảo vệ bus
+    if (storage_is_available())
     {
-        if (spi_bus_lock(1000))
+        if (storage_lock(1000))
         {
-            if (!SD.exists(MUSIC_DIR))
+            if (!storage_get_fs().exists(MUSIC_DIR))
             {
                 Serial.printf("[MUSIC_PLAYER] Tạo thư mục nhạc: %s\n", MUSIC_DIR);
-                SD.mkdir(MUSIC_DIR);
+                storage_get_fs().mkdir(MUSIC_DIR);
             }
 
-            File dir = SD.open(MUSIC_DIR);
+            File dir = storage_get_fs().open(MUSIC_DIR);
             if (dir && dir.isDirectory())
             {
                 File file = dir.openNextFile();
@@ -279,7 +278,7 @@ void music_player_scan_sd(void)
                 }
                 dir.close();
             }
-            spi_bus_unlock();
+            storage_unlock();
         }
     }
 

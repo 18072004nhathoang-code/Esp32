@@ -1,79 +1,54 @@
 /**
  * @file sd_map_cache.cpp
  * @brief Triển khai phân hệ bộ nhớ đệm bản đồ trên thẻ MicroSD FAT32 cho ESP32-S3
+ * Đã tích hợp trừu tượng hóa qua storage_manager (hỗ trợ SDMMC trên ES3C28P & SPI trên DIYMORE)
  */
 
 #include "sd_map_cache.h"
 #include "../display/lvgl_port.h"
-#include "../display/spi_bus_guard.h"
-
-static bool sd_initialized = false;
-static SPIClass sd_spi(FSPI); // FSPI (SPI2_HOST) dùng chung GPIO 11/12/13
+#include "../storage/storage_manager.h"
 
 static bool sd_acquire_bus(uint32_t timeout_ms = 1000)
 {
-    return spi_bus_lock(timeout_ms);
+    return storage_lock(timeout_ms);
 }
 
 static void sd_release_bus(void)
 {
-    spi_bus_unlock();
+    storage_unlock();
 }
 
 bool sd_map_cache_init(void)
 {
-    if (sd_initialized) return true;
-    if (!sd_acquire_bus()) return false;
+    if (storage_is_available()) return true;
 
     Serial.println("[SD_CACHE] Đang khởi tạo thẻ nhớ MicroSD FAT32...");
-
-    // Cấu hình các chân SPI cho thẻ MicroSD
-    sd_spi.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-
-    // Thử kết nối SD ở tần số 20MHz
-    if (!SD.begin(SD_CS_PIN, sd_spi, 20000000))
+    if (!storage_init())
     {
-        // Thử lại ở tần số 10MHz nếu thẻ chậm hoặc đường dây dài
-        if (!SD.begin(SD_CS_PIN, sd_spi, 10000000))
-        {
-            Serial.println("[SD_CACHE] ⚠️ Không tìm thấy thẻ nhớ MicroSD hoặc khởi tạo thất bại!");
-            Serial.println("[SD_CACHE] -> Hệ thống sẽ hoạt động ở chế độ trực tiếp qua mạng (Direct Streaming).");
-            sd_initialized = false;
-            sd_release_bus();
-            return false;
-        }
-    }
-
-    uint8_t cardType = SD.cardType();
-    if (cardType == CARD_NONE)
-    {
-        Serial.println("[SD_CACHE] ⚠️ Không có thẻ nhớ trong khe cắm!");
-        sd_initialized = false;
-        sd_release_bus();
+        Serial.println("[SD_CACHE] ⚠️ Không tìm thấy thẻ nhớ MicroSD hoặc khởi tạo thất bại!");
+        Serial.println("[SD_CACHE] -> Hệ thống sẽ hoạt động ở chế độ trực tiếp qua mạng (Direct Streaming).");
         return false;
     }
 
-    uint64_t cardSize = SD.cardSize() / (1024 * 1024);
-    Serial.printf("[SD_CACHE] ✔ Thẻ MicroSD sẵn sàng: %llu MB FAT32\n", cardSize);
+    if (!sd_acquire_bus()) return false;
 
     // Kiểm tra và tạo thư mục /maps nếu chưa có
-    if (!SD.exists(SD_MAPS_DIR))
+    if (!storage_get_fs().exists(SD_MAPS_DIR))
     {
         Serial.printf("[SD_CACHE] Tạo thư mục lưu trữ bản đồ: %s\n", SD_MAPS_DIR);
-        if (!SD.mkdir(SD_MAPS_DIR))
+        if (!storage_get_fs().mkdir(SD_MAPS_DIR))
         {
             Serial.println("[SD_CACHE] ⚠️ Không thể tạo thư mục /maps!");
         }
     }
 
-    sd_initialized = true;
     sd_release_bus();
     return true;
 }
 
 bool sd_map_cache_is_available(void)
 {
-    return sd_initialized;
+    return storage_is_available();
 }
 
 void sd_map_cache_get_filename(char *out_path, size_t max_len, double lat, double lon, int zoom, const char *maptype)
@@ -85,13 +60,13 @@ void sd_map_cache_get_filename(char *out_path, size_t max_len, double lat, doubl
 
 bool sd_map_cache_exists(double lat, double lon, int zoom, const char *maptype)
 {
-    if (!sd_initialized) return false;
+    if (!storage_is_available()) return false;
     if (!sd_acquire_bus(200)) return false;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
 
-    bool exists = SD.exists(filepath);
+    bool exists = storage_get_fs().exists(filepath);
     sd_release_bus();
 
     if (exists)
@@ -107,13 +82,13 @@ bool sd_map_cache_exists(double lat, double lon, int zoom, const char *maptype)
 
 int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uint8_t *out_buf, size_t max_size)
 {
-    if (!sd_initialized || !out_buf || max_size == 0) return -1;
+    if (!storage_is_available() || !out_buf || max_size == 0) return -1;
     if (!sd_acquire_bus(500)) return -1;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
 
-    File file = SD.open(filepath, FILE_READ);
+    File file = storage_get_fs().open(filepath, FILE_READ);
     if (!file)
     {
         Serial.printf("[SD_CACHE] ❌ Không thể mở tệp đọc: %s\n", filepath);
@@ -140,13 +115,13 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
 
 bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, const uint8_t *in_buf, size_t size)
 {
-    if (!sd_initialized || !in_buf || size == 0) return false;
+    if (!storage_is_available() || !in_buf || size == 0) return false;
     if (!sd_acquire_bus(500)) return false;
 
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
 
-    File file = SD.open(filepath, FILE_WRITE);
+    File file = storage_get_fs().open(filepath, FILE_WRITE);
     if (!file)
     {
         Serial.printf("[SD_CACHE] ❌ Không thể mở tệp ghi: %s\n", filepath);
@@ -173,9 +148,5 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
 
 uint64_t sd_map_cache_get_free_mb(void)
 {
-    if (!sd_initialized) return 0;
-    if (!sd_acquire_bus(200)) return 0;
-    uint64_t free_mb = (SD.totalBytes() - SD.usedBytes()) / (1024 * 1024);
-    sd_release_bus();
-    return free_mb;
+    return storage_get_free_mb();
 }

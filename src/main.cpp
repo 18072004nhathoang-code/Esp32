@@ -5,10 +5,12 @@
  */
 
 #include <Arduino.h>
+#include "board_config.h"
 #include "display/lvgl_port.h"
 #include "ui/ui_manager.h"
 #include "os/system_info.h"
 #include "os/wifi_manager.h"
+#include "storage/storage_manager.h"
 #include "audio/audio_manager.h"
 #include "audio/music_player.h"
 #include "ai/ai_voice_service.h"
@@ -22,76 +24,104 @@ void setup()
     delay(1000); // Đợi ổn định cổng USB
 
     Serial.println("\n=======================================================");
-    Serial.println(" DIYMORE ESP32-S3 3.5\" IPS MINI OS (XiaoZhi AI Native) ");
+    Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
 
-    // In thông tin bộ nhớ thực tế nhận diện được
+    // In thông tin phần cứng nhận diện thực tế
     SystemStats init_stats = system_get_stats();
-    Serial.printf("[SYSTEM] Tần số CPU: %u MHz\n", init_stats.cpu_freq_mhz);
-    Serial.printf("[SYSTEM] Flash Chip: %u MB\n", init_stats.flash_size_mb);
-    Serial.printf("[SYSTEM] Total SRAM: %u KB (Free: %u KB)\n", init_stats.total_heap / 1024, init_stats.free_heap / 1024);
-    Serial.printf("[SYSTEM] Total PSRAM: %u MB (Free: %u MB)\n", init_stats.total_psram / (1024 * 1024), init_stats.free_psram / (1024 * 1024));
-    Serial.printf("[SYSTEM] Nhiệt độ khởi động: %.1f °C\n", init_stats.core_temp_c);
+    Serial.printf("[BOOT] MCU: %s @ %u MHz\n", BOARD_PROFILE_MCU, init_stats.cpu_freq_mhz);
+    Serial.printf("[BOOT] Flash: %u MB (Target: %d MB) | PSRAM: %u MB (Target: %d MB)\n",
+                  init_stats.flash_size_mb, BOARD_PROFILE_FLASH_MB,
+                  init_stats.total_psram / (1024 * 1024), BOARD_PROFILE_PSRAM_MB);
+    Serial.printf("[BOOT] Total SRAM: %u KB (Free: %u KB)\n", init_stats.total_heap / 1024, init_stats.free_heap / 1024);
+    Serial.printf("[BOOT] Temperature: %.1f °C\n", init_stats.core_temp_c);
+    Serial.printf("[HW] Board Profile: %s\n", BOARD_PROFILE_NAME);
 
-    // 2. Khởi tạo tầng đồ họa tăng tốc LovyanGFX + LVGL 8 qua FreeRTOS (Core 1)
+    // 2. [LCD] Khởi tạo tầng đồ họa LovyanGFX + LVGL 8 (Core 1)
+    Serial.printf("[LCD] Panel: %s | Resolution: %dx%d | Bus: SPI 40MHz DMA\n",
+#if (BOARD_LCD_CONTROLLER == LCD_CTRL_ILI9341)
+                  "ILI9341V (2.8\" IPS)",
+#elif (BOARD_LCD_CONTROLLER == LCD_CTRL_ST7796)
+                  "ST7796 (3.5\" IPS)",
+#else
+                  "Generic LCD",
+#endif
+                  DISP_HOR_RES, DISP_VER_RES);
+
     if (!lvgl_port_init())
     {
-        Serial.println("[ERROR] Khởi tạo đồ họa thất bại! Vui lòng kiểm tra cấu hình chân trong LGFX_Config.hpp");
+        Serial.println("[LCD] ❌ Khởi tạo đồ họa thất bại! Vui lòng kiểm tra cấu hình chân!");
         while (1) { delay(1000); }
     }
+    Serial.println("[LCD] Status: Ready (LVGL 8.3 + LovyanGFX DMA)");
 
-    // 3. Khởi tạo dịch vụ mạng WiFi chạy nền trên Core 0
-    Serial.println("[SYSTEM] Khởi tạo WiFi Manager Service trên Core 0...");
-    wifi_manager_init();
+    // 3. [TOUCH] Thông tin cảm ứng
+    Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (SDA:%d, SCL:%d)\n",
+                  BOARD_TOUCH_I2C_ADDR, BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
+    Serial.println("[TOUCH] Status: Ready");
 
-    // 4. Khởi tạo hệ thống Âm thanh I2S Duplex (Mic MEMS & Loa ngoài) trên Core 0
-    Serial.println("[SYSTEM] Khởi tạo I2S Audio Manager Service trên Core 0...");
+    // 4. [SD] Khởi tạo phân hệ lưu trữ thẻ nhớ MicroSD qua HAL storage_manager
+    Serial.printf("[SD] Interface: %s\n",
+                  (BOARD_SD_INTERFACE == SD_IF_SPI) ? "SPI (FSPI)" : "SDMMC 4-bit (Hardware Host)");
+    bool sd_ok = storage_init();
+    if (sd_ok)
+    {
+        Serial.printf("[SD] Status: Ready (%llu MB FAT32)\n", storage_get_total_mb());
+    }
+    else
+    {
+        Serial.println("[SD] Status: ⚠️ Not Detected / Degraded Mode (Thẻ SD không sẵn sàng, hệ thống chạy Safe Mode)");
+    }
+
+    // 5. [AUDIO] Khởi tạo hệ thống Âm thanh I2S Duplex (Mic MEMS & Loa ngoài) trên Core 0
+    Serial.printf("[AUDIO] Codec: ES8311 | I2S (BCLK:%d, WS:%d, DOUT:%d, DIN:%d, MCLK:%d, PA:%d)\n",
+                  AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT, AUDIO_I2S_DIN, AUDIO_I2S_MCLK, AUDIO_PA_PIN);
     bool audio_ok = audio_manager_init();
     if (audio_ok)
     {
+        Serial.println("[AUDIO] Status: Ready");
         audio_play_sound_effect(FX_CHIME); // Âm thanh khởi động Mini OS
     }
     else
     {
-        Serial.println("[SYSTEM] ❌ Audio Manager khởi tạo thất bại! Tạm tắt các chức năng âm thanh.");
+        Serial.println("[AUDIO] Status: ⚠️ Audio Manager thất bại! Tiếp tục ở chế độ âm thanh giới hạn.");
     }
 
-    // 4b. Khởi tạo Music Player (ESP32-audioI2S & FreeRTOS Core 0)
-    Serial.println("[SYSTEM] Khởi tạo Music Player Service trên Core 0...");
+    // 5b. Khởi tạo Music Player (ESP32-audioI2S & FreeRTOS Core 0)
     bool music_ok = music_player_init();
     if (!music_ok)
     {
-        Serial.println("[SYSTEM] ❌ Music Player khởi tạo thất bại! Vui lòng kiểm tra thẻ nhớ SD.");
+        Serial.println("[MUSIC] Status: ⚠️ Music Player degraded (Chưa nạp được danh sách nhạc thẻ nhớ).");
     }
 
-    // 4c. Khởi tạo AI Voice Assistant Service (Core 0)
-    Serial.println("[SYSTEM] Khởi tạo AI Voice Assistant Service trên Core 0...");
+    // 5c. Khởi tạo AI Voice Assistant Service (Core 0)
     bool ai_voice_ok = ai_voice_init();
     if (!ai_voice_ok)
     {
-        Serial.println("[SYSTEM] ❌ AI Voice Service khởi tạo thất bại!");
+        Serial.println("[AI] Status: ⚠️ AI Voice Service khởi tạo thất bại!");
     }
 
-    // 4d. Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
-    Serial.println("[SYSTEM] Khởi tạo Camera Service đa nguồn...");
+    // 6. [WIFI] Khởi tạo dịch vụ mạng WiFi chạy nền trên Core 0
+    Serial.println("[WIFI] Khởi tạo WiFi Manager Service trên Core 0...");
+    wifi_manager_init();
+    Serial.println("[WIFI] Status: Ready");
+
+    // 7. [CAMERA] Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
     bool camera_ok = camera_service_init();
-    if (!camera_ok)
-    {
-        Serial.println("[SYSTEM] ❌ Camera Service khởi tạo thất bại!");
-    }
+    Serial.printf("[CAMERA] Status: %s\n", camera_service_get_status_text());
 
-    // 5. Khởi tạo Desktop và các App hệ thống
+    // 8. Khởi tạo Desktop và các App hệ thống
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
     ui_init();
 
-    // 6. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
+    // 9. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
     if (!wifi_manager_has_saved_credentials())
     {
-        Serial.println("[SYSTEM] Chưa tìm thấy mạng WiFi trong NVS Flash! Tự động chuyển sang WiFi Settings App...");
+        Serial.println("[SYSTEM] Chưa tìm thấy mạng WiFi trong NVS Flash! Tự động mở WiFi Settings App...");
         ui_open_wifi_app();
     }
 
-    // 7. Khởi tạo Module Quản lý Nguồn & Tiết kiệm Năng lượng (Inactivity Timer 60s/120s & Touch to Wake)
+    // 10. Khởi tạo Module Quản lý Nguồn & Tiết kiệm Năng lượng
     Serial.println("[SYSTEM] Khởi tạo Power Manager (60s Dimming -> 120s Sleep)...");
     power_manager_init();
 

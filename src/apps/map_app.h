@@ -10,9 +10,15 @@
 #include <Arduino.h>
 #include <lvgl.h>
 
-// Kích thước khung hình bản đồ trên màn hình 480x320
-#define MAP_CANVAS_WIDTH  480
-#define MAP_CANVAS_HEIGHT 266 // Chiều cao hiển thị trong App Container (trừ status bar 26px và header 28px)
+#include "../display/lvgl_port.h"
+
+// Kích thước khung hình bản đồ tương thích màn hình
+#ifndef MAP_CANVAS_WIDTH
+#define MAP_CANVAS_WIDTH  DISP_HOR_RES
+#endif
+#ifndef MAP_CANVAS_HEIGHT
+#define MAP_CANVAS_HEIGHT (DISP_VER_RES - 54) // Trừ status bar (26/24px) và app header (28px)
+#endif
 
 // Tọa độ mặc định: Hà Nội (Hồ Hoàn Kiếm)
 #define MAP_DEFAULT_LAT   21.0285
