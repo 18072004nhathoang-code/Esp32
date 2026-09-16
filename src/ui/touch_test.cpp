@@ -121,7 +121,7 @@ static void finish_target(void)
     lv_obj_set_style_text_color(lbl_instruction,
                                 lv_color_hex(ok ? COLOR_ACCENT_GREEN : COLOR_ACCENT_RED), 0);
     lv_label_set_text_fmt(lbl_instruction, ok ? "VALID  RMS %.1f  Max %.1f px"
-                                               : "FAILED  RMS %.1f  Max %.1f px - Reset",
+                                               : "FAILED  RMS %.1f  Max %.1f px - Reset Calibration",
                           last_rms, last_max);
 }
 
@@ -146,12 +146,12 @@ void ui_touch_test_open(lv_obj_t *parent)
     targets[4].x = SCREEN_WIDTH / 2; targets[4].y = APP_CONTENT_HEIGHT / 2;
 
     lv_obj_t *reset_btn = lv_btn_create(parent);
-    lv_obj_set_size(reset_btn, 64, 32);
+    lv_obj_set_size(reset_btn, 132, 32);
     lv_obj_align(reset_btn, LV_ALIGN_TOP_MID, 0, 2);
     lv_obj_set_style_bg_color(reset_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_add_event_cb(reset_btn, reset_button_cb, LV_EVENT_CLICKED, nullptr);
     lv_obj_t *reset_label = lv_label_create(reset_btn);
-    lv_label_set_text(reset_label, "Reset");
+    lv_label_set_text(reset_label, "Reset Calibration");
     lv_obj_set_style_text_font(reset_label, UI_FONT_BUTTON, 0);
     lv_obj_center(reset_label);
 

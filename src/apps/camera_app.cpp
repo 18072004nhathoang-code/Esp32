@@ -340,7 +340,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *m_hdr = lv_label_create(cfg_modal);
     lv_label_set_text(m_hdr, LV_SYMBOL_SETTINGS " Cấu Hình IP Cam");
     lv_obj_set_style_text_color(m_hdr, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(m_hdr, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(m_hdr, UI_FONT_TITLE, 0);
     lv_obj_align(m_hdr, LV_ALIGN_TOP_LEFT, 4, 4);
 
     // Nút Đóng modal (Touch target >= 32x32)
@@ -438,7 +438,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_save = lv_label_create(btn_save_connect);
     lv_label_set_text(lbl_save, LV_SYMBOL_SAVE " Lưu & Kết Nối");
     lv_obj_set_style_text_color(lbl_save, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_save, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_save, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_save);
 
     // 5. BÀN PHÍM ẢO TOÀN CHIỀU RỘNG (MẶC ĐỊNH ẨN)

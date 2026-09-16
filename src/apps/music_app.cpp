@@ -366,7 +366,7 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_t *pl_title = lv_label_create(pl_header);
     lv_label_set_text(pl_title, LV_SYMBOL_DIRECTORY " Danh Sách /music");
     lv_obj_set_style_text_color(pl_title, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(pl_title, UI_FONT_14, 0);
+    lv_obj_set_style_text_font(pl_title, UI_FONT_TITLE, 0);
     lv_obj_align(pl_title, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *btn_close_pl = lv_btn_create(pl_header);

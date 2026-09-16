@@ -867,7 +867,7 @@ static void open_about_app(void)
     lv_obj_t *title = lv_label_create(card);
     lv_label_set_text(title, "ESP32-S3 Mini OS");
     lv_obj_set_style_text_color(title, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(title, UI_FONT_14, 0);
+    lv_obj_set_style_text_font(title, UI_FONT_TITLE, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
     lv_obj_t *desc = lv_label_create(card);
