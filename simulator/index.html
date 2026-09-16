@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ES3C28P ESP32-S3 2.8" IPS (320x240 Landscape Flipped) • Mini OS Simulator</title>
+    <title>ES3C28P ESP32-S3 2.8" IPS (240x320 Portrait) • Mini OS Simulator</title>
     <style>
         * {
             box-sizing: border-box;
@@ -45,7 +45,7 @@
             color: #8b949e;
         }
 
-        /* Khung bo mạch DIYMORE ESP32-S3 3.5" IPS (Matte Black PCB Mockup) */
+        /* Khung bo mạch ES3C28P 2.8" portrait. */
         .board-frame {
             background: linear-gradient(145deg, #131722 0%, #1c2230 100%);
             border-radius: 26px;
@@ -53,6 +53,7 @@
             box-shadow: 0 25px 70px rgba(0, 0, 0, 0.9), inset 0 2px 4px rgba(255, 255, 255, 0.15);
             border: 2px solid #263044;
             position: relative;
+            width: 416px;
         }
 
         .board-label {
@@ -80,17 +81,19 @@
             50% { opacity: 0.4; transform: scale(0.85); }
         }
 
-        /* Màn hình 2.8" IPS Landscape Flipped (320x240 scale 1.5x = 480x360) */
+        /* Logical UI 240x320 portrait, scale 1.5x = 360x480. */
         .display-bezel {
             background: #000;
             padding: 8px;
             border-radius: 14px;
             box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.9), 0 2px 5px rgba(255, 255, 255, 0.2);
+            width: 376px;
+            margin: 0 auto;
         }
 
         .lcd-screen {
-            width: 480px;
-            height: 360px;
+            width: 360px;
+            height: 480px;
             background: #0a0d14;
             border-radius: 8px;
             position: relative;
@@ -100,7 +103,7 @@
             transition: filter 0.2s ease;
         }
 
-        /* Status Bar PRO MAX (480x26px scale 1.5x = 720x40px) */
+        /* Status bar scaled from the 240px logical width. */
         .status-bar {
             height: 40px;
             background: #0a0d14;
@@ -164,13 +167,13 @@
             gap: 2px;
         }
 
-        /* Desktop Workspace PRO MAX (Lưới 4 Cột x 2 Hàng vừa vặn màn hình 3.5" IPS) */
+        /* Portrait desktop: 3 columns and 3 rows. */
         .desktop {
             flex: 1;
             padding: 12px;
             overflow-y: auto;
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(3, 1fr);
             gap: 10px;
             background: #0a0d14;
         }
@@ -298,8 +301,8 @@
         }
 
         #mapCanvas {
-            width: 720px;
-            height: 400px;
+            width: 360px;
+            height: 440px;
             display: block;
         }
 
@@ -1091,19 +1094,39 @@
 
         .log-pass { color: #00e676; font-weight: 600; }
         .log-info { color: #00F2FE; }
+
+        /* Portrait overrides for the logical 240x320 simulator. */
+        .board-label { justify-content: center; text-align: center; }
+        .board-label > div { display: none !important; }
+        .status-bar { padding: 0 7px; font-size: 11px; }
+        .os-logo { font-size: 11px; max-width: 72px; }
+        .os-cluster { gap: 5px; }
+        .power-pill, .ram-pill, #spkIcon, .battery-pill { display: none !important; }
+        .desktop { padding: 8px; gap: 7px; }
+        .app-squircle { height: 122px; padding: 9px; }
+        .window-body { overflow-y: auto; }
+        .wifi-body, .music-body { flex-direction: column; padding: 8px; gap: 8px; overflow-y: auto; }
+        .wifi-left-col, .music-left-col { width: 100%; min-height: 170px; }
+        .wifi-right-col, .music-right-col { width: 100%; min-height: 220px; }
+        .floating-pill-top { left: 90px; max-width: 180px; overflow: hidden; white-space: nowrap; }
+        .floating-controls-right { top: 52px; right: 8px; flex-direction: column; }
+        .floating-pill-bottom { max-width: 170px; overflow: hidden; white-space: nowrap; }
+        .system-body { padding: 8px; gap: 8px; overflow-y: auto; }
+        .arc-svg { width: 82px; height: 82px; }
+        .chart-container { min-height: 190px; }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <h1>✨ DIYMORE ESP32-S3 3.5" IPS Smart Display</h1>
-        <p>Hệ điều hành Mini OS Pro Max trên màn hình 3.5" IPS (480x320) • Cảm ứng điện dung I2C • LVGL 8.3 & LovyanGFX</p>
+        <h1>✨ ES3C28P ESP32-S3 2.8" IPS</h1>
+        <p>Mini OS 240x320 Portrait • FT6336G • ILI9341V • LVGL 8.3 & LovyanGFX</p>
     </div>
 
-    <!-- KHUNG BO MẠCH DIYMORE ESP32-S3 3.5" IPS (XIAOZHI AI) -->
+    <!-- KHUNG BO MẠCH ES3C28P ESP32-S3 2.8" IPS -->
     <div class="board-frame">
         <div class="board-label">
-            <span>DIYMORE ESP32-S3 3.5" IPS Display (XiaoZhi AI Native)</span>
+            <span>ES3C28P 2.8" • ILI9341V • 16MB Flash + 8MB OPI PSRAM</span>
             <div style="display:flex; align-items:center; gap:10px;">
                 <span style="font-size:10.5px; color:#a0aec0;">🎙️ MEMS Mic (G16) • 🔊 Speaker (G15) • Codec ES8311</span>
                 <span style="font-size:10.5px; color:#cbd5e0;">ST7796 IPS • 16M+8M</span>
@@ -1116,7 +1139,7 @@
                 
                 <!-- 1. STATUS BAR PRO MAX -->
                 <div class="status-bar">
-                    <div class="os-logo">● S3 3.5" PRO MAX</div>
+                    <div class="os-logo">● S3 MINI OS</div>
                     <div class="os-clock" id="clockText">00:00:00</div>
                     <div class="os-cluster">
                         <div class="power-pill" id="powerPill" style="font-size:10px; padding:2px 6px; border-radius:10px; background:#1e293b; color:#00F2FE; border:1px solid #334155;" title="Power Manager">⚡ 100% (0s)</div>
@@ -1127,7 +1150,7 @@
                     </div>
                 </div>
 
-                <!-- 2. DESKTOP LAUNCHER PRO MAX (LƯỚI 4 CỘT x 2 HÀNG - VỪA VẶN MÀN HÌNH) -->
+                <!-- 2. DESKTOP LAUNCHER PORTRAIT (3 CỘT x 3 HÀNG) -->
                 <div class="desktop" id="desktopView">
                     <!-- Tile 1: Music Player (NỔI BẬT HÀNG ĐẦU TIÊN!) -->
                     <div class="app-squircle" style="border-color:#9D4EDD; background:linear-gradient(145deg, #1b162b, #111622);" onclick="openApp('music')">
@@ -1519,11 +1542,11 @@
                         <!-- ABOUT OS PRO MAX -->
                         <div class="settings-body" id="aboutAppView" style="display:none;">
                             <div class="settings-card" style="border-color:#9D4EDD; padding:24px;">
-                                <div style="font-size:18px; font-weight:700; color:#9D4EDD; margin-bottom:10px;">✨ DIYMORE ESP32-S3 3.5" IPS Mini OS PRO MAX</div>
+                                <div style="font-size:18px; font-weight:700; color:#9D4EDD; margin-bottom:10px;">✨ ES3C28P 2.8" Mini OS</div>
                                 <div style="font-size:13px; color:#cbd5e0; line-height:1.8;">
                                     • <b>Hệ điều hành:</b> Mini OS Pro Max v2.5 (Build 2026)<br>
-                                    • <b>Phần cứng:</b> DIYMORE ESP32-S3 3.5" IPS (XiaoZhi AI Native)<br>
-                                    • <b>Màn hình:</b> 3.5 inch IPS 480x320 Pixels (ST7796 SPI 40MHz DMA)<br>
+                                    • <b>Phần cứng:</b> ES3C28P ESP32-S3 N16R8<br>
+                                    • <b>Màn hình:</b> 2.8 inch IPS 240x320 Portrait Flipped (ILI9341V SPI 40MHz DMA)<br>
                                     • <b>Cảm ứng:</b> Điện dung đa điểm I2C (Capacitive Touch FT6336U/GT911)<br>
                                     • <b>Vi xử lý:</b> ESP32-S3 Dual-Core LX7 @ 240MHz (Core 0/1 Isolation)<br>
                                     • <b>Bộ nhớ:</b> 16MB Flash • 8MB Octal OPI PSRAM • 512KB SRAM<br>
@@ -1828,7 +1851,7 @@
             } else {
                 if (dot) dot.innerText = "🌐";
                 if (txt) {
-                    txt.innerText = "Google API (Downloaded 480x320 & Saved SD)";
+                    txt.innerText = "Google API (Downloaded 240x320 & Saved SD)";
                     txt.style.color = "#00F2FE";
                 }
                 if (pill) pill.style.borderColor = "#00F2FE";
@@ -2740,7 +2763,7 @@
             await sleep(400);
 
             // Test 1: Top Bar
-            logMessage('pass', 'Top Dynamic Status Bar: Logo ● S3 3.5" PRO MAX, Uptime, RAM Pill, Speaker Icon, WiFi hoạt động chuẩn xác');
+            logMessage('pass', 'Top Dynamic Status Bar: Logo ● S3 MINI OS, Uptime, Speaker Icon, WiFi hoạt động chuẩn xác');
             await sleep(300);
 
             // Test 2: Mở Google Maps Pro Max
@@ -2865,7 +2888,7 @@
             await sleep(400);
             closeApp();
             await sleep(300);
-            logMessage('pass', 'Sensors & About: Hiển thị đầy đủ thông số DIYMORE 3.5" IPS v2.5 Pro Max');
+            logMessage('pass', 'Sensors & About: Hiển thị đầy đủ thông số ES3C28P 2.8" portrait');
 
             // Test 10: Power Manager (Inactivity Timer & Touch to Wake)
             logMessage('info', 'Kiểm tra Module Quản lý Nguồn (Power Manager)...');

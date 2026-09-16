@@ -1,7 +1,7 @@
 /**
  * @file ui_manager.cpp
- * @brief Giao diện hệ điều hành Mini OS cho màn hình 320x240 Landscape Flipped
- * Phong cách TikTok / Modern Mobile OS: Dynamic Status Bar, Grid 3 Cột, Floating Bottom Dock,
+ * @brief Giao diện hệ điều hành Mini OS responsive, tối ưu 240x320 portrait.
+ * Phong cách TikTok / Modern Mobile OS: Dynamic Status Bar, Grid 3 cột, Floating Bottom Dock,
  * Card bo góc Squircle, Dark Mode Obsidian và chuyển cảnh mượt mà.
  */
 
@@ -228,16 +228,16 @@ static void create_status_bar(void)
 }
 
 /* =========================================================================
- * 2. TẠO APP ICON SQUIRCLE CHO GRID 4 CỘT (320x240 LANDSCAPE)
+ * 2. TẠO APP ICON SQUIRCLE CHO GRID 3 CỘT PORTRAIT
  * ========================================================================= */
 static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const char *title, lv_color_t accent, uintptr_t app_id, int col, int row)
 {
-    int col_width = SCREEN_WIDTH / 4;
+    int col_width = SCREEN_WIDTH / 3;
     int x = col * col_width + (col_width - 66) / 2;
-    int y = 8 + row * 76;
+    int y = 6 + row * 64;
 
     lv_obj_t *container = lv_obj_create(parent);
-    lv_obj_set_size(container, 66, 72);
+    lv_obj_set_size(container, 66, 62);
     lv_obj_set_pos(container, x, y);
     lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(container, 0, 0);
@@ -295,7 +295,7 @@ static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t ac
 }
 
 /* =========================================================================
- * 4. TẠO MÀN HÌNH HOME DESKTOP VÀ DOCK NỔI (320x240 LANDSCAPE)
+ * 4. TẠO MÀN HÌNH HOME PORTRAIT VÀ DOCK NỔI
  * ========================================================================= */
 static void create_desktop(void)
 {
@@ -308,22 +308,20 @@ static void create_desktop(void)
     lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(desktop_view, 0, 0);
 
-    // GRID 4 CỘT x 2 HÀNG (8 Ứng dụng đầy đủ)
-    // Hàng 0:
+    // Grid 3 cột x 3 hàng; dock luôn nằm dưới và không chồng nội dung.
     create_grid_app_icon(desktop_view, LV_SYMBOL_CHARGE,   "System",    lv_color_hex(COLOR_ACCENT_CYAN),   APP_SYSTEM,     0, 0);
     create_grid_app_icon(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",  lv_color_hex(COLOR_ACCENT_CYAN),   APP_AI_VOICE,   1, 0);
     create_grid_app_icon(desktop_view, LV_SYMBOL_PLAY,     "Voice Lab", lv_color_hex(COLOR_ACCENT_BLUE),   APP_AUDIO,      2, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_SETTINGS, "Settings",  lv_color_hex(COLOR_ACCENT_AMBER),  APP_SETTINGS,   3, 0);
-
-    // Hàng 1:
-    create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,      0, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,      1, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,      2, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch Test",lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_TEST, 3, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_SETTINGS, "Settings",  lv_color_hex(COLOR_ACCENT_AMBER),  APP_SETTINGS,   0, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,      1, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,      2, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,      0, 2);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch Test",lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_TEST, 1, 2);
 
     // 5. FLOATING BOTTOM DOCK (Chứa 4 app hay dùng: WiFi, Music, Maps, Camera)
     dock_bar = lv_obj_create(desktop_view);
-    lv_obj_set_size(dock_bar, 232, 44);
+    const int dock_width = SCREEN_WIDTH - 12;
+    lv_obj_set_size(dock_bar, dock_width, 44);
     lv_obj_align(dock_bar, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_obj_set_style_radius(dock_bar, 22, 0);
     lv_obj_set_style_bg_color(dock_bar, lv_color_hex(COLOR_DOCK_BG), 0);
@@ -333,15 +331,15 @@ static void create_desktop(void)
     lv_obj_set_style_pad_all(dock_bar, 0, 0);
     lv_obj_clear_flag(dock_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 4 App Icons trong Dock (cách đều: x = 16, 70, 124, 178)
-    create_dock_icon(dock_bar, LV_SYMBOL_WIFI,  lv_color_hex(COLOR_ACCENT_GREEN),  APP_WIFI,   16);
-    create_dock_icon(dock_bar, LV_SYMBOL_AUDIO, lv_color_hex(COLOR_ACCENT_PURPLE), APP_MUSIC,  70);
-    create_dock_icon(dock_bar, LV_SYMBOL_GPS,   lv_color_hex(COLOR_ACCENT_RED),    APP_MAP,    124);
-    create_dock_icon(dock_bar, LV_SYMBOL_IMAGE, lv_color_hex(0xFF006E),            APP_CAMERA, 178);
+    const int dock_gap = (dock_width - 4 * DOCK_ICON_BOX_SIZE) / 5;
+    create_dock_icon(dock_bar, LV_SYMBOL_WIFI,  lv_color_hex(COLOR_ACCENT_GREEN),  APP_WIFI,   dock_gap);
+    create_dock_icon(dock_bar, LV_SYMBOL_AUDIO, lv_color_hex(COLOR_ACCENT_PURPLE), APP_MUSIC,  dock_gap * 2 + DOCK_ICON_BOX_SIZE);
+    create_dock_icon(dock_bar, LV_SYMBOL_GPS,   lv_color_hex(COLOR_ACCENT_RED),    APP_MAP,    dock_gap * 3 + DOCK_ICON_BOX_SIZE * 2);
+    create_dock_icon(dock_bar, LV_SYMBOL_IMAGE, lv_color_hex(0xFF006E),            APP_CAMERA, dock_gap * 4 + DOCK_ICON_BOX_SIZE * 3);
 }
 
 /* =========================================================================
- * 5. KHUNG CỬA SỔ ỨNG DỤNG (MODAL WINDOW CHO 320x240 LANDSCAPE)
+ * 5. KHUNG CỬA SỔ ỨNG DỤNG RESPONSIVE
  * ========================================================================= */
 static void ensure_app_window(void)
 {
@@ -371,7 +369,7 @@ static void ensure_app_window(void)
     lv_label_set_text(app_title_lbl, "App");
     lv_obj_align(app_title_lbl, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_set_style_text_color(app_title_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(app_title_lbl, UI_FONT_14, 0);
+    lv_obj_set_style_text_font(app_title_lbl, UI_FONT_TITLE, 0);
 
     // Nút đóng app (X) tối thiểu >=32x32 hit area
     lv_obj_t *close_btn = lv_btn_create(header);
@@ -669,7 +667,7 @@ static void open_settings_app(void)
     lv_obj_align(lbl_diag_t, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *btn_touch_test = lv_btn_create(card_diag);
-    lv_obj_set_size(btn_touch_test, 134, 32);
+    lv_obj_set_size(btn_touch_test, (SCREEN_WIDTH - 28) / 2, 34);
     lv_obj_align(btn_touch_test, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     lv_obj_set_style_radius(btn_touch_test, 6, 0);
     lv_obj_set_style_bg_color(btn_touch_test, lv_color_hex(0x1F2A38), 0);
@@ -680,11 +678,11 @@ static void open_settings_app(void)
     lv_obj_t *lbl_tt = lv_label_create(btn_touch_test);
     lv_label_set_text(lbl_tt, LV_SYMBOL_EDIT " Test Cảm Ứng");
     lv_obj_set_style_text_color(lbl_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_tt, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_tt, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_tt);
 
     lv_obj_t *btn_color_test = lv_btn_create(card_diag);
-    lv_obj_set_size(btn_color_test, 134, 32);
+    lv_obj_set_size(btn_color_test, (SCREEN_WIDTH - 28) / 2, 34);
     lv_obj_align(btn_color_test, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     lv_obj_set_style_radius(btn_color_test, 6, 0);
     lv_obj_set_style_bg_color(btn_color_test, lv_color_hex(0x1F2A38), 0);
@@ -695,7 +693,7 @@ static void open_settings_app(void)
     lv_obj_t *lbl_ct = lv_label_create(btn_color_test);
     lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Test Màu");
     lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(lbl_ct, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_ct, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_ct);
 }
 
@@ -813,7 +811,7 @@ static void open_tools_app(void)
 
     // Nút mở Touch Diagnostic Test
     lv_obj_t *btn_tt = lv_btn_create(compass_card);
-    lv_obj_set_size(btn_tt, 134, 32);
+    lv_obj_set_size(btn_tt, (SCREEN_WIDTH - 28) / 2, 34);
     lv_obj_align(btn_tt, LV_ALIGN_BOTTOM_LEFT, 0, -4);
     lv_obj_set_style_bg_color(btn_tt, lv_color_hex(0x1F2937), 0);
     lv_obj_set_style_border_color(btn_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
@@ -825,12 +823,12 @@ static void open_tools_app(void)
     lv_obj_t *lbl_tt = lv_label_create(btn_tt);
     lv_label_set_text(lbl_tt, LV_SYMBOL_EDIT " Test Cảm Ứng");
     lv_obj_set_style_text_color(lbl_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_tt, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_tt, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_tt);
 
     // Nút mở Color Self-Test
     lv_obj_t *btn_ct = lv_btn_create(compass_card);
-    lv_obj_set_size(btn_ct, 134, 32);
+    lv_obj_set_size(btn_ct, (SCREEN_WIDTH - 28) / 2, 34);
     lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
     lv_obj_set_style_bg_color(btn_ct, lv_color_hex(0x1F2937), 0);
     lv_obj_set_style_border_color(btn_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
@@ -842,7 +840,7 @@ static void open_tools_app(void)
     lv_obj_t *lbl_ct = lv_label_create(btn_ct);
     lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Test Màu");
     lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(lbl_ct, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_ct, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_ct);
 }
 
@@ -884,7 +882,7 @@ static void open_about_app(void)
         "Âm thanh: ES8311 Codec\n"
         "Cảm ứng: FT6336 (Shared Bus)",
         DISP_HOR_RES, DISP_VER_RES,
-        (BOARD_LCD_ROTATION == 3 ? "Landscape Flipped" : (BOARD_LCD_ROTATION == 1 ? "Landscape" : "Portrait")),
+        display_orientation_name(BOARD_LCD_ROTATION),
         bat.status_str);
     lv_obj_set_style_text_color(desc, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(desc, UI_FONT_12, 0);
@@ -897,7 +895,7 @@ static void open_about_app(void)
 static void open_touch_test_app(void)
 {
     ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Touch Diagnostic Test");
+    lv_label_set_text(app_title_lbl, "Touch Calibration");
     lv_obj_clean(app_content_container);
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);

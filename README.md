@@ -13,7 +13,7 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 
 1. **ES3C28P 2.8" IPS HMI (Mặc định)**:
    - Bo mạch thông minh chuyên dụng trợ lý ảo AI (Xiaozhi/ChatGPT, Cheap Black Display).
-   - Màn hình 2.8 inch IPS panel native 240x320, hiển thị ở chế độ **Landscape Flipped 320x240** (`BOARD_LCD_ROTATION 3`) cho không gian điều khiển ngang tối ưu.
+   - Màn hình 2.8 inch IPS panel native/logical **240x320 Portrait Flipped** (`BOARD_LCD_ROTATION 2`).
    - Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`) với cơ chế ánh xạ ma trận xoay phần cứng sang logic hiển thị, tích hợp màn hình chẩn đoán **Touch Test 5 điểm**.
    - Thẻ nhớ MicroSD kết nối qua **SDMMC / SDIO chuyên dụng** (không chia sẻ bus với màn hình).
    - Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
@@ -23,16 +23,16 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
    - Bo mạch cũ hỗ trợ biên dịch và tương thích HAL (`pio run -e esp32-s3-mini-os`).
    - Màn hình 3.5 inch IPS ST7796 (480x320), cảm ứng điện dung FT6336U.
    - Thẻ nhớ MicroSD kết nối qua SPI Bus dùng chung (FSPI) được bảo vệ bằng `spi_bus_guard`.
-   - *Lưu ý*: UI layout hiện tại được tập trung tối ưu hóa cho ES3C28P (320x240 Landscape Flipped), trên bo mạch DIYMORE UI hiển thị thông qua responsive scaling.
+   - *Lưu ý*: UI được tối ưu cho ES3C28P 240x320 Portrait Flipped; rotation của DIYMORE vẫn giữ nguyên.
 
 ```text
 +-------------------------------------------------------------------------------+
-|             Mini OS Desktop & Application Layer (320x240 Landscape Flipped)   |
+|             Mini OS Desktop & Application Layer (240x320 Portrait Flipped)    |
 | [Status Bar] [System Monitor] [Google Maps] [Music Player] [XiaoZhi AI Voice] |
 |          [WiFi Settings] [Control Center] [Power Manager] [Camera IP]         |
 +-------------------------------------------------------------------------------+
 |                     LVGL 8.3.11 High-Level Graphics Engine                    |
-|      (Be Vietnam Pro SemiBold Typography, 320x240 Landscape, Fast 60 FPS)    |
+|      (Be Vietnam Pro SemiBold Typography, 240x320 Portrait, Fast 60 FPS)     |
 +-------------------------------------------------------------------------------+
 |                 FreeRTOS Multi-Tasking & Thread-Safe Porting                  |
 |  - Core 1: LVGL GUI Engine (Priority 4, 12KB Stack, Mutex Protected)          |
@@ -41,7 +41,7 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 |  - Core 0: Storage Manager (Unified SDMMC / SPI SD Hardware Abstraction)      |
 +-------------------------------------------------------------------------------+
 |              Hardware Abstraction Layer (include/board_config.h)               |
-|  - board_es3c28p.hpp       : ILI9341V (320x240 Landscape Flipped) + FT6336G   |
+|  - board_es3c28p.hpp       : ILI9341V (240x320 Portrait Flipped) + FT6336G    |
 |  - board_diymore_s3_35.hpp : ST7796 (Landscape HAL)         + FT6336U + SPI   |
 +-------------------------------------------------------------------------------+
 |       Hardware: ESP32-S3-WROOM-1 N16R8 (Dual-Core LX7 @ 240MHz, 16M/8M OPI)   |
@@ -187,7 +187,7 @@ pio device monitor -b 115200
    - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
 8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
 9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc (`UI_FONT_SMALL` 12px, `UI_FONT_BODY` 14px, `UI_FONT_BUTTON` 14px, `UI_FONT_TITLE` 16px), không phụ thuộc font runtime ngoài.
-10. **Touch Architecture & Calibration Tool (Touch Test)**: Cảm ứng FT6336G chia sẻ bus phần cứng an toàn qua `shared_i2c_bus` với critical section đồng bộ snapshot. Hệ thống hỗ trợ bộ cờ hiệu chuẩn (`BOARD_TOUCH_SWAP_XY`, `BOARD_TOUCH_INVERT_X`, `BOARD_TOUCH_INVERT_Y`) và ma trận chuyển đổi tọa độ theo hướng quay màn hình (`BOARD_LCD_ROTATION 3` - Landscape Flipped: `mapped_x = PANEL_HEIGHT - 1 - raw_y; mapped_y = raw_x;`). Đi kèm ứng dụng **Touch Test** chạy timer 25ms (40Hz), tính toán tọa độ container local chuẩn xác (`local_x = mapped_x - a.x1`, `local_y = mapped_y - a.y1`), hiển thị trực tiếp crosshair bám sát ngón tay và 5 điểm hiệu chuẩn (TL, TR, BL, BR, Center) để xác thực độ chính xác cảm ứng theo thời gian thực.
+10. **Touch Architecture & Calibration Tool**: FT6336G raw → validation → affine calibration → clamp → LVGL. Wizard 5 điểm lấy mẫu ổn định, giải least-squares, chỉ lưu NVS `touch_cal` khi RMS ≤ 8 px và max ≤ 12 px. Khi chưa có calibration, rotation 2 dùng `x=239-raw_x`, `y=319-raw_y`. Touch Test chạy 40 Hz và dùng tọa độ local của container cho crosshair.
 
 
 ---

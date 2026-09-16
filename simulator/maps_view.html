@@ -75,7 +75,7 @@
             50% { opacity: 0.4; transform: scale(0.85); }
         }
 
-        /* Màn hình TFT 2.8" tỷ lệ chuẩn (320x240 scale 2x = 640x480) */
+        /* Logical UI 240x320 portrait, scale 2x = 480x640. */
         .display-bezel {
             background: #000;
             padding: 8px;
@@ -84,8 +84,8 @@
         }
 
         .lcd-screen {
-            width: 640px;
-            height: 480px;
+            width: 480px;
+            height: 640px;
             background: #0f1117;
             border-radius: 4px;
             position: relative;
@@ -444,7 +444,7 @@
 
     <div class="header">
         <h1>⚡ ESP32-S3 2.8" Touch Display Mini OS Simulator & Test Suite</h1>
-        <p>Mô phỏng 1:1 giao diện LVGL 8.3 + LovyanGFX độ phân giải 320x240 (Phóng to 2x)</p>
+        <p>Mô phỏng giao diện LVGL 8.3 + LovyanGFX logical 240x320 portrait (Phóng to 2x)</p>
     </div>
 
     <!-- Khung bo mạch phần cứng -->

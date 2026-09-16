@@ -54,7 +54,7 @@ bool camera_service_start(void);
 /**
  * @brief Dừng luồng bắt hình
  */
-void camera_service_stop(void);
+bool camera_service_stop(uint32_t timeout_ms = 2000);
 
 /**
  * @brief Lấy khung hình mới nhất

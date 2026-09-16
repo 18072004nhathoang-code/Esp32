@@ -13,13 +13,13 @@
 #define BOARD_PROFILE_FLASH_MB      16
 #define BOARD_PROFILE_PSRAM_MB      8
 
-// --- Display: ILI9341V Native 240x320 -> Logical 320x240 Landscape Flipped ---
+// --- Display: ILI9341V native/logical 240x320, portrait flipped ---
 #define BOARD_LCD_CONTROLLER        LCD_CTRL_ILI9341
 #define BOARD_LCD_BUS               LCD_BUS_SPI
 #define BOARD_LCD_PANEL_WIDTH       240     // Panel native resolution width
 #define BOARD_LCD_PANEL_HEIGHT      320     // Panel native resolution height
-#define BOARD_LCD_WIDTH             320     // Logical LVGL resolution width
-#define BOARD_LCD_HEIGHT            240     // Logical LVGL resolution height
+#define BOARD_LCD_WIDTH             240     // Logical LVGL resolution width
+#define BOARD_LCD_HEIGHT            320     // Logical LVGL resolution height
 #define BOARD_LCD_MOSI              11
 #define BOARD_LCD_MISO              13
 #define BOARD_LCD_SCK               12
@@ -29,7 +29,8 @@
 #define BOARD_LCD_BL                45      // IO45 điều khiển đèn nền LCD Backlight
 #define BOARD_LCD_INVERT            false   // ILI9341V tiêu chuẩn không invert
 #define BOARD_LCD_RGB_ORDER         false   // RGB Order
-#define BOARD_LCD_ROTATION          3       // Landscape Flipped (320x240)
+#define BOARD_LCD_SWAP_BYTES        false   // Chỉ thay đổi sau khi xác nhận bằng Display Diagnostic
+#define BOARD_LCD_ROTATION          2       // Portrait Flipped (240x320)
 #define BOARD_LCD_SPI_FREQ          40000000
 
 // --- Touch: FocalTech FT6336G (Capacitive I2C) ---

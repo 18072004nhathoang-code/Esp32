@@ -1,6 +1,6 @@
 /**
  * @file ui_theme.h
- * @brief Common layout metrics, typography, and palette for ESP32-S3 Mini OS 320x240 Landscape Flipped UI
+ * @brief Common layout metrics, typography, and palette for the responsive Mini OS UI.
  */
 
 #pragma once

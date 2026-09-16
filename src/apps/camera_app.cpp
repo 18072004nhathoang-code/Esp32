@@ -1,6 +1,6 @@
 /**
  * @file camera_app.cpp
- * @brief Giao diện ứng dụng Camera & RTSP Streamer: Tối ưu cho màn hình 320x240 Landscape Flipped
+ * @brief Giao diện Camera & RTSP Streamer responsive, tối ưu 240x320 portrait.
  */
 
 #include "camera_app.h"
@@ -189,7 +189,7 @@ static void kb_event_cb(lv_event_t *e)
 }
 
 /* =========================================================================
- * KHỞI TẠO GIAO DIỆN CAMERA 320x240 LANDSCAPE FLIPPED
+ * KHỞI TẠO GIAO DIỆN CAMERA PORTRAIT
  * ========================================================================= */
 void camera_app_open(lv_obj_t *parent)
 {
@@ -203,10 +203,11 @@ void camera_app_open(lv_obj_t *parent)
     last_fps_calc_time = millis();
     last_frame_time_ms = millis();
 
-    // 1. TÍNH TOÁN KÍCH THƯỚC ĐÁP ỨNG CHO KHUNG HÌNH (Responsive Canvas)
-    uint16_t toolbar_w = (SCREEN_WIDTH > 320) ? 96 : 84;
-    canvas_w = SCREEN_WIDTH - toolbar_w - 12;
-    canvas_h = APP_CONTENT_HEIGHT - 6;
+    // Preview phía trên, điều khiển và telemetry xếp dọc bên dưới.
+    const bool portrait = SCREEN_WIDTH <= SCREEN_HEIGHT;
+    uint16_t toolbar_w = portrait ? (SCREEN_WIDTH - 4) : 96;
+    canvas_w = portrait ? (SCREEN_WIDTH - 4) : (SCREEN_WIDTH - toolbar_w - 12);
+    canvas_h = portrait ? 148 : (APP_CONTENT_HEIGHT - 6);
 
     // CẤP PHÁT BỘ ĐỆM CANVAS TRONG PSRAM
     if (!cam_canvas_buf)
@@ -226,22 +227,24 @@ void camera_app_open(lv_obj_t *parent)
         }
     }
 
-    // 2. VÙNG KHUNG HÌNH CAMERA ƯU TIÊN LỚN BÊN TRÁI
+    // 2. Preview full-width phía trên.
     cam_canvas = lv_canvas_create(parent);
     if (cam_canvas_buf)
     {
         lv_canvas_set_buffer(cam_canvas, cam_canvas_buf, canvas_w, canvas_h, LV_IMG_CF_TRUE_COLOR);
     }
     lv_obj_set_size(cam_canvas, canvas_w, canvas_h);
-    lv_obj_align(cam_canvas, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_align(cam_canvas, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_LEFT_MID,
+                 portrait ? 0 : 4, 0);
     lv_obj_set_style_border_color(cam_canvas, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_border_width(cam_canvas, 1, 0);
     lv_obj_set_style_radius(cam_canvas, 8, 0);
 
-    // 3. TOOLBAR ĐIỀU KHIỂN DỌC BÊN PHẢI (84x188)
+    // 3. Toolbar portrait bên dưới preview.
     toolbar_box = lv_obj_create(parent);
-    lv_obj_set_size(toolbar_box, toolbar_w, canvas_h);
-    lv_obj_align(toolbar_box, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_set_size(toolbar_box, toolbar_w, portrait ? (APP_CONTENT_HEIGHT - canvas_h - 4) : canvas_h);
+    lv_obj_align(toolbar_box, portrait ? LV_ALIGN_BOTTOM_MID : LV_ALIGN_RIGHT_MID,
+                 portrait ? 0 : -4, 0);
     lv_obj_set_style_bg_color(toolbar_box, lv_color_hex(COLOR_CARD_BG), 0);
     lv_obj_set_style_border_color(toolbar_box, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_border_width(toolbar_box, 1, 0);
@@ -249,13 +252,14 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(toolbar_box, 4, 0);
     lv_obj_clear_flag(toolbar_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    uint16_t btn_w = toolbar_w - 10;
+    uint16_t btn_w = portrait ? ((toolbar_w - 16) / 3) : (toolbar_w - 10);
 
     // Nút Snapshot (36px height)
     btn_snap = lv_btn_create(toolbar_box);
     lv_obj_set_size(btn_snap, btn_w, 36);
     lv_obj_set_ext_click_area(btn_snap, 4);
-    lv_obj_align(btn_snap, LV_ALIGN_TOP_MID, 0, 2);
+    if (portrait) lv_obj_set_pos(btn_snap, 2, 2);
+    else lv_obj_align(btn_snap, LV_ALIGN_TOP_MID, 0, 2);
     lv_obj_set_style_radius(btn_snap, 6, 0);
     lv_obj_set_style_bg_color(btn_snap, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_add_event_cb(btn_snap, btn_snap_cb, LV_EVENT_CLICKED, nullptr);
@@ -263,14 +267,15 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_snap = lv_label_create(btn_snap);
     lv_label_set_text(lbl_snap, LV_SYMBOL_REFRESH " Chụp");
     lv_obj_set_style_text_color(lbl_snap, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_snap, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_snap, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_snap);
 
     // Nút Cấu hình (36px height)
     btn_cfg = lv_btn_create(toolbar_box);
     lv_obj_set_size(btn_cfg, btn_w, 36);
     lv_obj_set_ext_click_area(btn_cfg, 4);
-    lv_obj_align(btn_cfg, LV_ALIGN_TOP_MID, 0, 42);
+    if (portrait) lv_obj_set_pos(btn_cfg, btn_w + 6, 2);
+    else lv_obj_align(btn_cfg, LV_ALIGN_TOP_MID, 0, 42);
     lv_obj_set_style_radius(btn_cfg, 6, 0);
     lv_obj_set_style_bg_color(btn_cfg, lv_color_hex(0x1F2A3D), 0);
     lv_obj_set_style_border_color(btn_cfg, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
@@ -280,14 +285,15 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_cfg = lv_label_create(btn_cfg);
     lv_label_set_text(lbl_cfg, LV_SYMBOL_SETTINGS " Cài");
     lv_obj_set_style_text_color(lbl_cfg, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_cfg, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_cfg, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_cfg);
 
     // Nút Dừng (36px height)
     btn_disconnect = lv_btn_create(toolbar_box);
     lv_obj_set_size(btn_disconnect, btn_w, 36);
     lv_obj_set_ext_click_area(btn_disconnect, 4);
-    lv_obj_align(btn_disconnect, LV_ALIGN_TOP_MID, 0, 82);
+    if (portrait) lv_obj_set_pos(btn_disconnect, btn_w * 2 + 10, 2);
+    else lv_obj_align(btn_disconnect, LV_ALIGN_TOP_MID, 0, 82);
     lv_obj_set_style_radius(btn_disconnect, 6, 0);
     lv_obj_set_style_bg_color(btn_disconnect, lv_color_hex(0x281B24), 0);
     lv_obj_set_style_border_color(btn_disconnect, lv_color_hex(COLOR_ACCENT_RED), 0);
@@ -297,22 +303,22 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_dis = lv_label_create(btn_disconnect);
     lv_label_set_text(lbl_dis, LV_SYMBOL_POWER " Dừng");
     lv_obj_set_style_text_color(lbl_dis, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(lbl_dis, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_dis, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_dis);
 
     // Dòng thông số thực tế (FPS, Kích thước, Dung lượng, Latency dạng multiline gọn)
     lbl_metrics = lv_label_create(toolbar_box);
     lv_label_set_text(lbl_metrics, "FPS 0.0\n0x0\n0 KB\n0 ms");
-    lv_obj_set_width(lbl_metrics, btn_w);
+    lv_obj_set_width(lbl_metrics, portrait ? (toolbar_w - 12) : btn_w);
     lv_obj_set_style_text_color(lbl_metrics, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(lbl_metrics, UI_FONT_12, 0);
-    lv_obj_align(lbl_metrics, LV_ALIGN_TOP_MID, 0, 122);
+    lv_obj_align(lbl_metrics, LV_ALIGN_TOP_MID, 0, portrait ? 42 : 122);
     lv_obj_set_style_text_align(lbl_metrics, LV_TEXT_ALIGN_CENTER, 0);
 
     // Dòng trạng thái kết nối & Nguồn Camera
     lbl_cam_status = lv_label_create(toolbar_box);
     lv_label_set_text(lbl_cam_status, "READY");
-    lv_obj_set_width(lbl_cam_status, btn_w);
+    lv_obj_set_width(lbl_cam_status, portrait ? (toolbar_w - 12) : btn_w);
     lv_obj_set_style_text_color(lbl_cam_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_cam_status, UI_FONT_12, 0);
     lv_obj_align(lbl_cam_status, LV_ALIGN_BOTTOM_MID, 0, -2);
@@ -437,7 +443,7 @@ void camera_app_open(lv_obj_t *parent)
 
     // 5. BÀN PHÍM ẢO TOÀN CHIỀU RỘNG (MẶC ĐỊNH ẨN)
     cam_keyboard = lv_keyboard_create(parent);
-    lv_obj_set_size(cam_keyboard, SCREEN_WIDTH - 4, 128);
+    lv_obj_set_size(cam_keyboard, SCREEN_WIDTH - 4, 118);
     lv_obj_align(cam_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_add_event_cb(cam_keyboard, kb_event_cb, LV_EVENT_ALL, nullptr);
     lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);

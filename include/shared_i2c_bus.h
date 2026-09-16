@@ -69,6 +69,42 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y);
  */
 bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y, uint16_t *mapped_x, uint16_t *mapped_y);
 
+#define TOUCH_CALIBRATION_VERSION 1U
+#define TOUCH_CALIBRATION_POINT_COUNT 5U
+
+typedef struct
+{
+    bool valid;
+    uint32_t version;
+    uint8_t rotation;
+    uint16_t logical_width;
+    uint16_t logical_height;
+    uint16_t panel_width;
+    uint16_t panel_height;
+    float a, b, c;
+    float d, e, f;
+    float rms_error;
+    float max_error;
+} TouchCalibration;
+
+typedef struct
+{
+    float raw_x;
+    float raw_y;
+    float screen_x;
+    float screen_y;
+} TouchCalibrationPoint;
+
+/** Solve and persist a five-point affine calibration when RMS/max limits pass. */
+bool shared_i2c_touch_calibrate(const TouchCalibrationPoint *points, size_t count,
+                                float *rms_error, float *max_error);
+
+/** Atomically copy the active calibration state. */
+TouchCalibration shared_i2c_touch_get_calibration(void);
+
+/** Clear both RAM and NVS calibration state. */
+void shared_i2c_touch_reset_calibration(void);
+
 #ifdef __cplusplus
 }
 #endif

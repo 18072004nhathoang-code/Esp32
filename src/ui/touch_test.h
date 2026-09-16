@@ -1,7 +1,6 @@
 /**
  * @file touch_test.h
- * @brief Touch Diagnostic & Calibration Pattern for ESP32-S3 HMI (Landscape 320x240)
- * Dùng để kiểm tra: Tọa độ Raw X/Y, Mapped X/Y, Crosshair thời gian thực, test 4 góc + center.
+ * @brief Raw FT6336 five-point affine calibration and touch diagnostic.
  */
 
 #pragma once

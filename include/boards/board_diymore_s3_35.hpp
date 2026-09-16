@@ -27,6 +27,7 @@
 #define BOARD_LCD_BL                45
 #define BOARD_LCD_INVERT            true
 #define BOARD_LCD_RGB_ORDER         false
+#define BOARD_LCD_SWAP_BYTES        false
 #define BOARD_LCD_ROTATION          1       // Landscape mode (480x320)
 #define BOARD_LCD_SPI_FREQ          40000000
 

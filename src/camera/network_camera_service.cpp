@@ -43,7 +43,7 @@ NetworkCameraService::NetworkCameraService()
 
 NetworkCameraService::~NetworkCameraService()
 {
-    stop();
+    if (!stop(2000)) return;
     if (_buf_front)
     {
         free(_buf_front);
@@ -170,7 +170,11 @@ bool NetworkCameraService::parseJpegDimensions(const uint8_t *buf, size_t len, s
 bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
 {
     // Dừng worker cũ và chờ xác nhận thoát hoàn toàn trước khi đổi cấu hình
-    stop();
+    if (!stop(2000))
+    {
+        Serial.println("[NET_CAM] Worker chưa thoát; giữ nguyên profile hiện tại.");
+        return false;
+    }
 
     if (_config_mutex == nullptr)
     {
@@ -368,7 +372,9 @@ void NetworkCameraService::workerTask()
 
             if (_buf_back && _buf_front)
             {
-                int bytes = fetchHttpSnapshot(_buf_back, _back_capacity);
+                // Exactly one immutable profile snapshot is used for this request.
+                const NetworkCameraProfile request_profile = cur_prof;
+                int bytes = fetchHttpSnapshotForProfile(_buf_back, _back_capacity, request_profile);
                 // Xác thực nghiêm ngặt: bytes >= 4, SOI = 0xFF 0xD8, EOI = 0xFF 0xD9
                 if (bytes >= 4 &&
                     _buf_back[0] == 0xFF && _buf_back[1] == 0xD8 &&
@@ -444,6 +450,7 @@ void NetworkCameraService::workerTask()
 
 bool NetworkCameraService::start()
 {
+    NetworkCameraProfile request_profile = getActiveProfile();
     if (!_configured)
     {
         Serial.println("[NET_CAM] ❌ Chưa cấu hình thông số IP Camera.");
@@ -451,14 +458,14 @@ bool NetworkCameraService::start()
         return false;
     }
 
-    if (strlen(_profile.username) > 0 && strlen(_profile.password) == 0)
+    if (strlen(request_profile.username) > 0 && strlen(request_profile.password) == 0)
     {
         Serial.println("[NET_CAM] ⚠️ Cần nhập mật khẩu camera để xác thực!");
         _runtime_state = CAM_STATE_PASSWORD_REQUIRED;
         return false;
     }
 
-    if (_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
+    if (request_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
     {
         if (_running && _worker_task_handle != nullptr)
         {
@@ -495,7 +502,7 @@ bool NetworkCameraService::start()
         Serial.printf("[NET_CAM] Bắt đầu dịch vụ HTTP Snapshot: %s\n", sanitized_log);
         return true;
     }
-    else if (_profile.protocol == CAM_PROTO_MJPEG)
+    else if (request_profile.protocol == CAM_PROTO_MJPEG)
     {
         _connected = false;
         _runtime_state = CAM_STATE_ERROR;
@@ -503,7 +510,7 @@ bool NetworkCameraService::start()
         Serial.println("[NET_CAM] ⚠️ Giao thức MJPEG chưa hoàn chỉnh -> Đánh dấu NOT_IMPLEMENTED");
         return false;
     }
-    else if (_profile.protocol == CAM_PROTO_RTSP)
+    else if (request_profile.protocol == CAM_PROTO_RTSP)
     {
         _connected = false;
         _runtime_state = CAM_STATE_ERROR;
@@ -515,20 +522,25 @@ bool NetworkCameraService::start()
     return false;
 }
 
-void NetworkCameraService::stop()
+bool NetworkCameraService::stop(uint32_t timeout_ms)
 {
     _running = false;
+    uint32_t wait_start = millis();
     if (_worker_task_handle != nullptr)
     {
         if (_worker_exit_sem)
         {
-            xSemaphoreTake(_worker_exit_sem, pdMS_TO_TICKS(2000));
+            xSemaphoreTake(_worker_exit_sem, pdMS_TO_TICKS(timeout_ms));
         }
-        uint32_t wait_start = millis();
-        while (_worker_task_handle != nullptr && (millis() - wait_start < 1000))
+        while (_worker_task_handle != nullptr && (millis() - wait_start < timeout_ms))
         {
             vTaskDelay(pdMS_TO_TICKS(20));
         }
+    }
+    if (_worker_task_handle != nullptr)
+    {
+        Serial.println("[NET_CAM] Worker stop timeout; tài nguyên vẫn được giữ nguyên.");
+        return false;
     }
     _connected = false;
     if (_runtime_state != CAM_STATE_PASSWORD_REQUIRED)
@@ -536,6 +548,7 @@ void NetworkCameraService::stop()
         _runtime_state = CAM_STATE_STOPPED;
     }
     Serial.println("[NET_CAM] ⏹ Đã dừng dịch vụ IP Camera.");
+    return true;
 }
 
 bool NetworkCameraService::isConnected() const
@@ -706,14 +719,15 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
 {
     if (!_configured || !wifi_manager_is_connected()) return false;
 
-    uint16_t onvif_port = _profile.onvif_port > 0 ? _profile.onvif_port : 80;
+    const NetworkCameraProfile request_profile = getActiveProfile();
+    uint16_t onvif_port = request_profile.onvif_port > 0 ? request_profile.onvif_port : 80;
     char probe_url[128];
-    snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service", _profile.ip, onvif_port);
+    snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service", request_profile.ip, onvif_port);
 
     HTTPClient http;
     WiFiClient client;
     http.begin(client, probe_url);
-    http.setTimeout(2500);
+    http.setTimeout(1500);
     http.addHeader("Content-Type", "application/soap+xml; charset=utf-8");
 
     const char *soap_req =
@@ -764,34 +778,51 @@ bool NetworkCameraService::onvifGetStreamUri(const char *profile_token, char *ou
 
 int NetworkCameraService::fetchHttpSnapshot(uint8_t *&out_buf, size_t &current_cap)
 {
+    const NetworkCameraProfile request_profile = getActiveProfile();
+    return fetchHttpSnapshotForProfile(out_buf, current_cap, request_profile);
+}
+
+int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t &current_cap,
+                                                       const NetworkCameraProfile &request_profile)
+{
     if (!_configured || !out_buf || current_cap == 0) return -1;
 
     char url[256];
-    buildSnapshotUrl(url, sizeof(url));
+    if (request_profile.custom_url[0] != '\0')
+    {
+        strncpy(url, request_profile.custom_url, sizeof(url) - 1);
+        url[sizeof(url) - 1] = '\0';
+    }
+    else
+    {
+        uint8_t channel = request_profile.channel > 0 ? request_profile.channel : 1;
+        uint16_t port = request_profile.http_port > 0 ? request_profile.http_port : 80;
+        switch (request_profile.vendor)
+        {
+            case CAM_VENDOR_HIKVISION:
+                snprintf(url, sizeof(url), "http://%s:%u/ISAPI/Streaming/channels/%u01/picture",
+                         request_profile.ip, port, channel);
+                break;
+            case CAM_VENDOR_KBVISION:
+                snprintf(url, sizeof(url), "http://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
+                         request_profile.ip, port, channel);
+                break;
+            default:
+                snprintf(url, sizeof(url), "http://%s:%u/onvif/snapshot", request_profile.ip, port);
+                break;
+        }
+    }
 
     HTTPClient http;
     WiFiClient client;
 
-    char user_copy[32] = {0};
-    char pass_copy[32] = {0};
-    if (_config_mutex && xSemaphoreTake(_config_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    if (strlen(request_profile.username) > 0)
     {
-        strncpy(user_copy, _profile.username, sizeof(user_copy) - 1);
-        strncpy(pass_copy, _profile.password, sizeof(pass_copy) - 1);
-        xSemaphoreGive(_config_mutex);
-    }
-    else
-    {
-        strncpy(user_copy, _profile.username, sizeof(user_copy) - 1);
-        strncpy(pass_copy, _profile.password, sizeof(pass_copy) - 1);
-    }
-
-    if (strlen(user_copy) > 0)
-    {
-        http.setAuthorization(user_copy, pass_copy);
+        http.setAuthorization(request_profile.username, request_profile.password);
     }
     http.begin(client, url);
-    http.setTimeout(4000);
+    const uint32_t request_timeout_ms = 1500;
+    http.setTimeout(request_timeout_ms);
 
     int httpCode = http.GET();
     int bytesRead = -1;
@@ -833,7 +864,8 @@ int NetworkCameraService::fetchHttpSnapshot(uint8_t *&out_buf, size_t &current_c
             uint32_t start_ms = millis();
             bool reached_eoi = false;
 
-            while ((http.connected() || stream->available()) && (millis() - start_ms < 4000))
+            while (_running && (http.connected() || stream->available()) &&
+                   (millis() - start_ms < request_timeout_ms))
             {
                 size_t avail = stream->available();
                 if (avail > 0)

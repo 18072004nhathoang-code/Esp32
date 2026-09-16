@@ -13,7 +13,7 @@ public:
 
     bool configure(const NetworkCameraProfile &profile);
     bool start();
-    void stop();
+    bool stop(uint32_t timeout_ms = 2000);
     bool isConnected() const;
     NetworkCameraProfile getActiveProfile();
 
@@ -84,6 +84,8 @@ private:
 
     static void workerTaskEntry(void *param);
     void workerTask();
+    int fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t &current_cap,
+                                    const NetworkCameraProfile &request_profile);
 };
 
 extern NetworkCameraService g_network_camera;

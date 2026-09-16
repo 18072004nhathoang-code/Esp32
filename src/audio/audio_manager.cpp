@@ -381,6 +381,7 @@ static void audio_background_task(void *pvParameters)
                 else if (recording_active && recorded_samples_count >= record_sample_capacity)
                 {
                     recording_active = false;
+                    audio_release_ownership(AUDIO_OWNER_RECORDER);
                 }
             }
 
@@ -624,6 +625,7 @@ void audio_play_sound_effect(SoundEffect fx)
 bool audio_start_recording(uint32_t max_duration_sec)
 {
     if (!psram_record_buf) return false;
+    if (recording_active) return true;
     audio_stop_playback();
     if (!audio_request_ownership(AUDIO_OWNER_RECORDER)) return false;
 
@@ -657,6 +659,7 @@ bool audio_is_recording(void)
 bool audio_start_playback(void)
 {
     if (!psram_record_buf || recorded_samples_count == 0) return false;
+    if (playback_active) return true;
     audio_stop_recording();
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return false;
 

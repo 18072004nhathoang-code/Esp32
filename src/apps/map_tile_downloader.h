@@ -11,7 +11,7 @@
 
 #include "../display/lvgl_port.h"
 
-// Kích thước chuẩn hiển thị toàn màn hình (Landscape DISP_HOR_RES x DISP_VER_RES)
+// Kích thước chuẩn theo logical display hiện tại.
 #ifndef MAP_TILE_WIDTH
 #define MAP_TILE_WIDTH  DISP_HOR_RES
 #endif

@@ -68,3 +68,14 @@ uint8_t lvgl_port_get_brightness(void);
  * @brief Lấy tên định danh của chiều xoay màn hình (Orientation)
  */
 const char* display_orientation_name(uint8_t rotation);
+
+typedef struct
+{
+    bool swap_bytes;
+    bool bgr_order;
+    bool inverted;
+} DisplayDiagnosticState;
+
+DisplayDiagnosticState lvgl_port_get_display_diagnostic(void);
+void lvgl_port_set_display_diagnostic(DisplayDiagnosticState state);
+bool lvgl_port_apply_display_diagnostic(void);

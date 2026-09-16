@@ -1,6 +1,6 @@
 /**
  * @file music_app.cpp
- * @brief Triển khai giao diện ứng dụng Music Player trên LVGL 8 cho màn hình 320x240 Landscape Flipped
+ * @brief Triển khai giao diện Music Player responsive trên LVGL 8.
  * Bố cục 1 cột dọc: Artwork đĩa than xoay ở trên, tên bài hát + thanh tiến trình + điều khiển cảm ứng
  */
 
@@ -109,12 +109,14 @@ static void volume_slider_event_cb(lv_event_t *e)
     }
 }
 
-/* Mở ứng dụng Music Player cho màn hình 320x240 */
+/* Mở ứng dụng Music Player theo logical display hiện tại. */
 void music_app_open(lv_obj_t *parent)
 {
     if (!parent) return;
 
     main_container = parent;
+    const bool portrait = SCREEN_WIDTH <= SCREEN_HEIGHT;
+    const lv_coord_t detail_w = portrait ? (SCREEN_WIDTH - 28) : 186;
     lv_obj_set_style_pad_all(main_container, 4, 0);
     lv_obj_clear_flag(main_container, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -131,9 +133,10 @@ void music_app_open(lv_obj_t *parent)
 
     // 1. ARTWORK ĐĨA THAN QUAY BÊN TRÁI (Size 88x88)
     vinyl_disc = lv_obj_create(player_card);
-    lv_obj_set_size(vinyl_disc, 88, 88);
-    lv_obj_align(vinyl_disc, LV_ALIGN_LEFT_MID, 8, 0);
-    lv_obj_set_style_radius(vinyl_disc, 44, 0);
+    lv_obj_set_size(vinyl_disc, portrait ? 76 : 88, portrait ? 76 : 88);
+    lv_obj_align(vinyl_disc, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_LEFT_MID,
+                 portrait ? 0 : 8, portrait ? 2 : 0);
+    lv_obj_set_style_radius(vinyl_disc, portrait ? 38 : 44, 0);
     lv_obj_set_style_bg_color(vinyl_disc, lv_color_hex(0x0C0E14), 0);
     lv_obj_set_style_border_color(vinyl_disc, lv_color_hex(0x2A3346), 0);
     lv_obj_set_style_border_width(vinyl_disc, 3, 0);
@@ -141,9 +144,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Vòng rãnh đĩa than
     lv_obj_t *groove = lv_obj_create(vinyl_disc);
-    lv_obj_set_size(groove, 60, 60);
+    lv_obj_set_size(groove, portrait ? 52 : 60, portrait ? 52 : 60);
     lv_obj_center(groove);
-    lv_obj_set_style_radius(groove, 30, 0);
+    lv_obj_set_style_radius(groove, portrait ? 26 : 30, 0);
     lv_obj_set_style_bg_opa(groove, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(groove, lv_color_hex(0x1F2837), 0);
     lv_obj_set_style_border_width(groove, 1, 0);
@@ -180,11 +183,12 @@ void music_app_open(lv_obj_t *parent)
     // 2. CỘT PHẢI: TÊN BÀI HÁT & THÔNG TIN (X = 106)
     lbl_track_title = lv_label_create(player_card);
     lv_label_set_long_mode(lbl_track_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(lbl_track_title, 186);
-    lv_obj_align(lbl_track_title, LV_ALIGN_TOP_RIGHT, -6, 2);
+    lv_obj_set_width(lbl_track_title, detail_w);
+    lv_obj_align(lbl_track_title, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 0 : -6, portrait ? 82 : 2);
     lv_obj_set_style_text_align(lbl_track_title, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(lbl_track_title, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_track_title, UI_FONT_14, 0);
+    lv_obj_set_style_text_font(lbl_track_title, UI_FONT_TITLE, 0);
 
     const MusicTrack *cur_track = music_player_get_track(music_player_get_current_index());
     if (cur_track)
@@ -200,13 +204,15 @@ void music_app_open(lv_obj_t *parent)
     lv_label_set_text_fmt(lbl_track_meta, "SD Card MP3 • %d bài", music_player_get_track_count());
     lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_track_meta, UI_FONT_12, 0);
-    lv_obj_set_width(lbl_track_meta, 186);
-    lv_obj_align(lbl_track_meta, LV_ALIGN_TOP_RIGHT, -6, 24);
+    lv_obj_set_width(lbl_track_meta, detail_w);
+    lv_obj_align(lbl_track_meta, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 0 : -6, portrait ? 108 : 24);
 
     // 3. THANH TIẾN TRÌNH (SEEK SLIDER) VÀ THỜI GIAN
     slider_progress = lv_slider_create(player_card);
-    lv_obj_set_size(slider_progress, 186, 6);
-    lv_obj_align(slider_progress, LV_ALIGN_TOP_RIGHT, -6, 44);
+    lv_obj_set_size(slider_progress, detail_w, 6);
+    lv_obj_align(slider_progress, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 0 : -6, portrait ? 132 : 44);
     lv_slider_set_range(slider_progress, 0, 100);
     lv_slider_set_value(slider_progress, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(slider_progress, lv_color_hex(0x1F2937), LV_PART_MAIN);
@@ -220,18 +226,20 @@ void music_app_open(lv_obj_t *parent)
     lv_label_set_text(lbl_cur_time, "00:00");
     lv_obj_set_style_text_color(lbl_cur_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_cur_time, UI_FONT_SMALL, 0);
-    lv_obj_align(lbl_cur_time, LV_ALIGN_TOP_RIGHT, -152, 54);
+    lv_obj_align(lbl_cur_time, portrait ? LV_ALIGN_TOP_LEFT : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 4 : -152, portrait ? 142 : 54);
 
     lbl_total_time = lv_label_create(player_card);
     lv_label_set_text(lbl_total_time, "00:00");
     lv_obj_set_style_text_color(lbl_total_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_total_time, UI_FONT_SMALL, 0);
-    lv_obj_align(lbl_total_time, LV_ALIGN_TOP_RIGHT, -6, 54);
+    lv_obj_align(lbl_total_time, LV_ALIGN_TOP_RIGHT, portrait ? -4 : -6, portrait ? 142 : 54);
 
     // 4. HÀNG ĐIỀU KHIỂN CẢM ỨNG: PREV - PLAY/PAUSE - NEXT (Nút tối thiểu >= 36px)
     lv_obj_t *ctrl_row = lv_obj_create(player_card);
-    lv_obj_set_size(ctrl_row, 186, 48);
-    lv_obj_align(ctrl_row, LV_ALIGN_TOP_RIGHT, -6, 72);
+    lv_obj_set_size(ctrl_row, detail_w, 48);
+    lv_obj_align(ctrl_row, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 0 : -6, portrait ? 160 : 72);
     lv_obj_set_style_bg_opa(ctrl_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ctrl_row, 0, 0);
     lv_obj_set_style_pad_all(ctrl_row, 0, 0);
@@ -286,8 +294,9 @@ void music_app_open(lv_obj_t *parent)
 
     // 5. HÀNG DƯỚI CỘT PHẢI: THANH ÂM LƯỢNG & NÚT MỞ PLAYLIST
     lv_obj_t *bottom_row = lv_obj_create(player_card);
-    lv_obj_set_size(bottom_row, 186, 34);
-    lv_obj_align(bottom_row, LV_ALIGN_TOP_RIGHT, -6, 126);
+    lv_obj_set_size(bottom_row, detail_w, 34);
+    lv_obj_align(bottom_row, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_TOP_RIGHT,
+                 portrait ? 0 : -6, portrait ? 216 : 126);
     lv_obj_set_style_bg_color(bottom_row, lv_color_hex(0x0F141F), 0);
     lv_obj_set_style_border_color(bottom_row, lv_color_hex(0x202B3D), 0);
     lv_obj_set_style_border_width(bottom_row, 1, 0);

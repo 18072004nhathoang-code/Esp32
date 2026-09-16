@@ -1,6 +1,6 @@
 /**
  * @file audio_app.cpp
- * @brief Giao diện ứng dụng Voice AI & Audio Lab cho màn hình 320x240 Landscape Flipped
+ * @brief Giao diện ứng dụng Voice AI & Audio Lab responsive.
  * Bố cục: Cuộn dọc các card chuyên biệt: Mic Oscilloscope, Speaker & Soundboard, PSRAM Voice Memo
  */
 
@@ -122,7 +122,7 @@ static void play_btn_cb(lv_event_t *e)
 }
 
 /* =========================================================================
- * KHỞI TẠO GIAO DIỆN AUDIO LAB 320x240 LANDSCAPE FLIPPED
+ * KHỞI TẠO GIAO DIỆN AUDIO LAB RESPONSIVE
  * ========================================================================= */
 void audio_app_open(lv_obj_t *parent)
 {

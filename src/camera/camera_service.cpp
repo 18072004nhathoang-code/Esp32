@@ -101,16 +101,18 @@ bool camera_service_start(void)
     return false;
 }
 
-void camera_service_stop(void)
+bool camera_service_stop(uint32_t timeout_ms)
 {
     if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
         g_local_camera.stop();
+        return true;
     }
     else if (active_source == CAM_SOURCE_NETWORK_STREAM)
     {
-        g_network_camera.stop();
+        return g_network_camera.stop(timeout_ms);
     }
+    return true;
 }
 
 CameraFrame* camera_service_get_frame(uint32_t timeout_ms)
@@ -204,4 +206,3 @@ CameraFeatureStatus camera_service_get_local_dvp_status(void)
 {
     return g_local_camera.isAvailable() ? CAM_STATUS_READY : CAM_STATUS_NOT_DETECTED;
 }
-

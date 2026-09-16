@@ -1,7 +1,7 @@
 /**
  * @file map_app.cpp
  * @brief Triển khai ứng dụng xem bản đồ Google Maps trên ESP32-S3
- * Hỗ trợ Google Maps Static API (320x240, solution_id=gmp_git_agentskills_v1),
+ * Hỗ trợ Google Maps Static API với canvas responsive,
  * bộ nhớ đệm thẻ nhớ MicroSD FAT32, chuyển đổi Roadmap/Satellite và giao diện cảm ứng Zoom/Pan.
  */
 
@@ -349,7 +349,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_clean(parent);
     lv_obj_set_style_pad_all(parent, 0, 0);
 
-    // 1. Cấp phát bộ đệm Canvas trong 8MB PSRAM (320x240 x 2 byte)
+    // 1. Cấp phát bộ đệm Canvas theo logical screen trong PSRAM.
     if (canvas_buffer == nullptr)
     {
         size_t buf_size = MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT * sizeof(lv_color_t);
@@ -398,8 +398,8 @@ void map_app_open(lv_obj_t *parent)
 
     // 5. FLOATING HUD TOP: Tiêu đề vị trí & Mức Zoom (Giữa)
     hud_city_pill = lv_obj_create(parent);
-    lv_obj_set_size(hud_city_pill, 176, 24);
-    lv_obj_set_pos(hud_city_pill, 56, 6);
+    lv_obj_set_size(hud_city_pill, SCREEN_WIDTH - 98, 24);
+    lv_obj_set_pos(hud_city_pill, 54, 6);
     lv_obj_set_style_radius(hud_city_pill, 8, 0);
     lv_obj_set_style_bg_color(hud_city_pill, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(hud_city_pill, LV_OPA_80, 0);
@@ -418,7 +418,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_t *btn_next_city = lv_btn_create(parent);
     lv_obj_set_size(btn_next_city, 34, 24);
     lv_obj_set_ext_click_area(btn_next_city, 6);
-    lv_obj_set_pos(btn_next_city, 236, 6);
+    lv_obj_set_pos(btn_next_city, SCREEN_WIDTH - 38, 6);
     lv_obj_set_style_radius(btn_next_city, 8, 0);
     lv_obj_set_style_bg_color(btn_next_city, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(btn_next_city, LV_OPA_80, 0);
@@ -436,7 +436,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_t *btn_zin = lv_btn_create(parent);
     lv_obj_set_size(btn_zin, 32, 32);
     lv_obj_set_ext_click_area(btn_zin, 6);
-    lv_obj_set_pos(btn_zin, 280, 36);
+    lv_obj_set_pos(btn_zin, SCREEN_WIDTH - 38, 42);
     lv_obj_set_style_radius(btn_zin, 16, 0);
     lv_obj_set_style_bg_color(btn_zin, lv_color_hex(0x161B26), 0);
     lv_obj_set_style_bg_opa(btn_zin, LV_OPA_80, 0);
@@ -451,7 +451,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_t *btn_zout = lv_btn_create(parent);
     lv_obj_set_size(btn_zout, 32, 32);
     lv_obj_set_ext_click_area(btn_zout, 6);
-    lv_obj_set_pos(btn_zout, 280, 72);
+    lv_obj_set_pos(btn_zout, SCREEN_WIDTH - 38, 80);
     lv_obj_set_style_radius(btn_zout, 16, 0);
     lv_obj_set_style_bg_color(btn_zout, lv_color_hex(0x161B26), 0);
     lv_obj_set_style_bg_opa(btn_zout, LV_OPA_80, 0);
@@ -466,7 +466,7 @@ void map_app_open(lv_obj_t *parent)
     // 7. CỤM NÚT ĐIỀU HƯỚNG D-PAD (PAN) GÓC DƯỚI PHẢI
     auto create_dpad_btn = [&](lv_coord_t x, lv_coord_t y, const char *sym, uintptr_t dir) {
         lv_obj_t *btn = lv_btn_create(parent);
-        lv_obj_set_size(btn, 26, 22);
+        lv_obj_set_size(btn, 32, 32);
         lv_obj_set_ext_click_area(btn, 6);
         lv_obj_set_pos(btn, x, y);
         lv_obj_set_style_radius(btn, 6, 0);
@@ -482,15 +482,15 @@ void map_app_open(lv_obj_t *parent)
         return btn;
     };
 
-    create_dpad_btn(268, 112, LV_SYMBOL_UP, 1);    // Lên
-    create_dpad_btn(240, 137, LV_SYMBOL_LEFT, 3);  // Trái
-    create_dpad_btn(268, 162, LV_SYMBOL_DOWN, 2);  // Xuống
-    create_dpad_btn(286, 137, LV_SYMBOL_RIGHT, 4); // Phải
+    create_dpad_btn(SCREEN_WIDTH - 70, APP_CONTENT_HEIGHT - 104, LV_SYMBOL_UP, 1);
+    create_dpad_btn(SCREEN_WIDTH - 104, APP_CONTENT_HEIGHT - 70, LV_SYMBOL_LEFT, 3);
+    create_dpad_btn(SCREEN_WIDTH - 70, APP_CONTENT_HEIGHT - 36, LV_SYMBOL_DOWN, 2);
+    create_dpad_btn(SCREEN_WIDTH - 36, APP_CONTENT_HEIGHT - 70, LV_SYMBOL_RIGHT, 4);
 
     // 8. FLOATING HUD BOTTOM: Trạng thái nguồn dữ liệu góc dưới trái
     hud_source_pill = lv_obj_create(parent);
-    lv_obj_set_size(hud_source_pill, 170, 22);
-    lv_obj_set_pos(hud_source_pill, 6, 166);
+    lv_obj_set_size(hud_source_pill, SCREEN_WIDTH - 112, 24);
+    lv_obj_set_pos(hud_source_pill, 6, APP_CONTENT_HEIGHT - 30);
     lv_obj_set_style_radius(hud_source_pill, 6, 0);
     lv_obj_set_style_bg_color(hud_source_pill, lv_color_hex(0x0A0E17), 0);
     lv_obj_set_style_bg_opa(hud_source_pill, LV_OPA_80, 0);

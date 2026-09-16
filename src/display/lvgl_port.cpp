@@ -6,7 +6,10 @@
 #include "lvgl_port.h"
 #include "spi_bus_guard.h"
 #include "../os/power_manager.h"
+#include "../ui/fonts/ui_fonts.h"
+#include "shared_i2c_bus.h"
 #include <esp_heap_caps.h>
+#include <Preferences.h>
 
 // Khởi tạo đối tượng LovyanGFX toàn cục
 LGFX gfx;
@@ -26,6 +29,9 @@ static lv_indev_drv_t indev_drv;
 // Task handle
 static TaskHandle_t lvgl_task_handle = nullptr;
 static uint8_t current_brightness = 85; // Mặc định 85%
+static DisplayDiagnosticState display_diagnostic = {
+    BOARD_LCD_SWAP_BYTES, BOARD_LCD_RGB_ORDER, BOARD_LCD_INVERT
+};
 
 /* Callback đẩy dữ liệu pixel từ LVGL sang màn hình bằng DMA qua LovyanGFX */
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
@@ -38,8 +44,25 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     {
         gfx.startWrite();
         gfx.setAddrWindow(area->x1, area->y1, w, h);
-        gfx.writePixelsDMA((uint16_t *)color_p, w * h);
+        uint32_t pixel_count = w * h;
+        if (display_diagnostic.bgr_order)
+        {
+            for (uint32_t i = 0; i < pixel_count; ++i)
+            {
+                uint16_t p = color_p[i].full;
+                color_p[i].full = (uint16_t)((p & 0x07E0U) | ((p & 0x001FU) << 11) | ((p & 0xF800U) >> 11));
+            }
+        }
+        gfx.writePixelsDMA((uint16_t *)color_p, pixel_count, display_diagnostic.swap_bytes);
         gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi nhả SPI bus
+        if (display_diagnostic.bgr_order)
+        {
+            for (uint32_t i = 0; i < pixel_count; ++i)
+            {
+                uint16_t p = color_p[i].full;
+                color_p[i].full = (uint16_t)((p & 0x07E0U) | ((p & 0x001FU) << 11) | ((p & 0xF800U) >> 11));
+            }
+        }
         gfx.endWrite();
         spi_bus_unlock();
     }
@@ -58,7 +81,7 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 {
     uint16_t touchX, touchY;
-    bool touched = gfx.getTouch(&touchX, &touchY);
+    bool touched = shared_i2c_touch_read(&touchX, &touchY);
 
     if (touched)
     {
@@ -106,7 +129,7 @@ static void lvgl_render_task(void *pvParameters)
         {
             // Trong chế độ Sleep: Tạm dừng lv_timer_handler(), chỉ quét cảm ứng tiết kiệm điện để chờ Touch to Wake
             uint16_t touchX, touchY;
-            if (gfx.getTouch(&touchX, &touchY))
+            if (shared_i2c_touch_read(&touchX, &touchY))
             {
                 // Chạm vào màn hình lúc đang ngủ -> đánh thức ngay lập tức!
                 power_manager_wake();
@@ -167,15 +190,24 @@ bool lvgl_port_init(void)
         return false;
     }
 
-    // Cấu hình xoay màn hình (Landscape Flipped 320x240 trên ES3C28P)
+    // Cấu hình xoay màn hình theo profile board.
 #if defined(BOARD_LCD_ROTATION)
     uint8_t rot = BOARD_LCD_ROTATION;
 #else
-    uint8_t rot = 3; // Mặc định Landscape Flipped (320x240)
+    uint8_t rot = 0;
 #endif
     gfx.setRotation(rot);
-    log_i("Màn hình: %dx%d, Rotation: %d (%s)", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
-    Serial.printf("[LVGL] Màn hình: %dx%d, Rotation: %d (%s)\n", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
+    Preferences display_prefs;
+    if (display_prefs.begin("display_diag", true))
+    {
+        display_diagnostic.swap_bytes = display_prefs.getBool("swap", BOARD_LCD_SWAP_BYTES);
+        display_diagnostic.bgr_order = display_prefs.getBool("bgr", BOARD_LCD_RGB_ORDER);
+        display_diagnostic.inverted = display_prefs.getBool("invert", BOARD_LCD_INVERT);
+        display_prefs.end();
+    }
+    gfx.invertDisplay(display_diagnostic.inverted);
+    log_i("Display: %dx%d, Rotation: %d, Orientation: %s", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
+    Serial.printf("Display: %dx%d\nRotation: %d\nOrientation: %s\n", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     
     // Thiết lập độ sáng ban đầu
     lvgl_port_set_brightness(current_brightness);
@@ -224,7 +256,16 @@ bool lvgl_port_init(void)
     disp_drv.ver_res = DISP_VER_RES;
     disp_drv.flush_cb = disp_flush_cb;
     disp_drv.draw_buf = &draw_buf;
-    lv_disp_drv_register(&disp_drv);
+    lv_disp_t *display = lv_disp_drv_register(&disp_drv);
+
+    // Be Vietnam Pro is the default UI font. Its descriptor falls back to
+    // Montserrat only for LVGL symbols absent from the Vietnamese font.
+    lv_theme_t *theme = lv_theme_default_init(display,
+                                               lv_palette_main(LV_PALETTE_CYAN),
+                                               lv_palette_main(LV_PALETTE_BLUE),
+                                               true,
+                                               UI_FONT_BODY);
+    lv_disp_set_theme(display, theme);
 
     // Cấu hình Touch Input Driver
     lv_indev_drv_init(&indev_drv);
@@ -266,4 +307,27 @@ void lvgl_port_set_brightness(uint8_t percent)
 uint8_t lvgl_port_get_brightness(void)
 {
     return current_brightness;
+}
+
+DisplayDiagnosticState lvgl_port_get_display_diagnostic(void)
+{
+    return display_diagnostic;
+}
+
+void lvgl_port_set_display_diagnostic(DisplayDiagnosticState state)
+{
+    display_diagnostic = state;
+    gfx.invertDisplay(state.inverted);
+    lv_obj_invalidate(lv_scr_act());
+}
+
+bool lvgl_port_apply_display_diagnostic(void)
+{
+    Preferences prefs;
+    if (!prefs.begin("display_diag", false)) return false;
+    bool ok = prefs.putBool("swap", display_diagnostic.swap_bytes) == 1;
+    ok = (prefs.putBool("bgr", display_diagnostic.bgr_order) == 1) && ok;
+    ok = (prefs.putBool("invert", display_diagnostic.inverted) == 1) && ok;
+    prefs.end();
+    return ok;
 }
