@@ -64,63 +64,8 @@ bool shared_i2c_codec_is_detected(void);
  */
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y);
 
-/**
- * @brief Đọc tọa độ cảm ứng chi tiết bao gồm cả raw và mapped (dùng cho Touch Test).
- */
-bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y,
-                                 uint16_t *mapped_x, uint16_t *mapped_y,
-                                 uint32_t *sample_sequence = nullptr);
-
-/** Suppress normal LVGL pointer events while raw calibration owns touch input. */
-void shared_i2c_touch_set_ui_suppressed(bool suppressed);
-bool shared_i2c_touch_is_ui_suppressed(void);
-
-#define TOUCH_CALIBRATION_VERSION 2U
-#define TOUCH_CALIBRATION_POINT_COUNT 5U
-
-typedef struct
-{
-    bool valid;
-    uint32_t version;
-    uint8_t rotation;
-    uint16_t logical_width;
-    uint16_t logical_height;
-    uint16_t panel_width;
-    uint16_t panel_height;
-    float a, b, c;
-    float d, e, f;
-    float rms_error;
-    float max_error;
-} TouchCalibration;
-
-typedef struct
-{
-    float raw_x;
-    float raw_y;
-    float screen_x;
-    float screen_y;
-} TouchCalibrationPoint;
-
-/** Solve a candidate affine transform without changing RAM or NVS state. */
-bool shared_i2c_touch_solve(const TouchCalibrationPoint *points, size_t count,
-                            TouchCalibration *candidate,
-                            float *fit_rms_error, float *fit_max_error);
-
-/** Apply one affine raw->screen transform. No rotation is performed here. */
-bool shared_i2c_touch_map_raw(const TouchCalibration *calibration,
-                              uint16_t raw_x, uint16_t raw_y,
-                              float *screen_x, float *screen_y);
-
-/** Persist and activate a solved candidate only after independent validation. */
-bool shared_i2c_touch_commit_calibration(const TouchCalibration *candidate,
-                                         float validation_rms_error,
-                                         float validation_max_error);
-
-/** Atomically copy the active calibration state. */
-TouchCalibration shared_i2c_touch_get_calibration(void);
-
-/** Clear both RAM and NVS calibration state. */
-void shared_i2c_touch_reset_calibration(void);
+/** True when the stored affine calibration matches the active display profile. */
+bool shared_i2c_touch_has_valid_calibration(void);
 
 #ifdef __cplusplus
 }

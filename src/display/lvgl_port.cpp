@@ -104,11 +104,6 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 
     if (touched)
     {
-        if (shared_i2c_touch_is_ui_suppressed())
-        {
-            data->state = LV_INDEV_STATE_REL;
-            return;
-        }
         // 1. Nếu màn hình đang ở trạng thái mờ (Dimmed 20%) hoặc ngủ (Sleep 0%)
         if (power_manager_get_state() != POWER_STATE_ACTIVE)
         {

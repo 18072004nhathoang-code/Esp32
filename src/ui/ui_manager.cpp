@@ -8,7 +8,6 @@
 #include "ui_manager.h"
 #include "ui_theme.h"
 #include "color_test.h"
-#include "touch_test.h"
 #include "../display/lvgl_port.h"
 #include "../apps/map_app.h"
 #include "../apps/audio_app.h"
@@ -76,7 +75,6 @@ enum AppID : uintptr_t {
     APP_AI_VOICE = 9,
     APP_CAMERA = 10,
     APP_POWER = 11,
-    APP_TOUCH_TEST = 12,
     APP_COLOR_TEST = 13
 };
 static AppID active_app = APP_NONE;
@@ -93,7 +91,6 @@ static void open_music_app(void);
 static void open_ai_voice_app(void);
 static void open_camera_app(void);
 static void open_power_app(void);
-static void open_touch_test_app(void);
 static void close_current_app(void);
 static void prepare_app_window(const char *title, AppID app_id);
 
@@ -101,14 +98,12 @@ static void prepare_app_window(const char *title, AppID app_id);
 static void close_btn_event_cb(lv_event_t *e)
 {
     (void)e;
-    if (ui_touch_test_is_calibration_blocking()) return;
     close_current_app();
 }
 
 /* Callback mở app từ Desktop hoặc Dock */
 static void app_icon_event_cb(lv_event_t *e)
 {
-    if (ui_touch_test_is_calibration_blocking()) return;
     uintptr_t app_id = (uintptr_t)lv_event_get_user_data(e);
     switch (app_id)
     {
@@ -123,7 +118,6 @@ static void app_icon_event_cb(lv_event_t *e)
         case APP_AI_VOICE:   open_ai_voice_app(); break;
         case APP_CAMERA:     open_camera_app(); break;
         case APP_POWER:      open_power_app(); break;
-        case APP_TOUCH_TEST: open_touch_test_app(); break;
         default: break;
     }
 }
@@ -153,15 +147,8 @@ static void theme_color_event_cb(lv_event_t *e)
 static void color_test_btn_cb(lv_event_t *e)
 {
     (void)e;
-    if (ui_touch_test_is_calibration_blocking()) return;
     prepare_app_window("Display Diagnostic", APP_COLOR_TEST);
     ui_color_test_open(app_content_container);
-}
-
-/* Callback mở màn hình Touch Test */
-static void touch_test_btn_cb(lv_event_t *e)
-{
-    open_touch_test_app();
 }
 
 /* Callback bấm nút Ngủ Ngay trong Power App */
@@ -326,7 +313,6 @@ static void create_desktop(void)
     create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,      1, 1);
     create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,      2, 1);
     create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,      0, 2);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch Test",lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_TEST, 1, 2);
 
     // 5. FLOATING BOTTOM DOCK (Chứa 4 app hay dùng: WiFi, Music, Maps, Camera)
     dock_bar = lv_obj_create(desktop_view);
@@ -416,7 +402,6 @@ static void invalidate_active_app_widgets(void)
         case APP_MUSIC: music_app_close(); break;
         case APP_AI_VOICE: ai_voice_app_close(); break;
         case APP_CAMERA: camera_app_close(); break;
-        case APP_TOUCH_TEST: ui_touch_test_close(); break;
         case APP_COLOR_TEST: ui_color_test_close(); break;
         default: break;
     }
@@ -669,7 +654,7 @@ static void open_settings_app(void)
     lv_obj_set_style_text_font(lbl_btn_p, UI_FONT_12, 0);
     lv_obj_center(lbl_btn_p);
 
-    // Card 4: Chẩn đoán & Kiểm thử phần cứng (Touch Test & Color Test)
+    // Card 4: Chẩn đoán màu màn hình
     lv_obj_t *card_diag = lv_obj_create(app_content_container);
     lv_obj_set_size(card_diag, SCREEN_WIDTH - 16, 75);
     lv_obj_align(card_diag, LV_ALIGN_TOP_MID, 0, 226);
@@ -680,29 +665,14 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_diag, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl_diag_t = lv_label_create(card_diag);
-    lv_label_set_text(lbl_diag_t, "Chẩn Đoán Màn Hình & Cảm Ứng");
+    lv_label_set_text(lbl_diag_t, "Chẩn Đoán Màn Hình");
     lv_obj_set_style_text_color(lbl_diag_t, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_set_style_text_font(lbl_diag_t, UI_FONT_12, 0);
     lv_obj_align(lbl_diag_t, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    lv_obj_t *btn_touch_test = lv_btn_create(card_diag);
-    lv_obj_set_size(btn_touch_test, (SCREEN_WIDTH - 28) / 2, 34);
-    lv_obj_align(btn_touch_test, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-    lv_obj_set_style_radius(btn_touch_test, 6, 0);
-    lv_obj_set_style_bg_color(btn_touch_test, lv_color_hex(0x1F2A38), 0);
-    lv_obj_set_style_border_color(btn_touch_test, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_border_width(btn_touch_test, 1, 0);
-    lv_obj_add_event_cb(btn_touch_test, touch_test_btn_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *lbl_tt = lv_label_create(btn_touch_test);
-    lv_label_set_text(lbl_tt, LV_SYMBOL_EDIT " Test Cảm Ứng");
-    lv_obj_set_style_text_color(lbl_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_tt, UI_FONT_BUTTON, 0);
-    lv_obj_center(lbl_tt);
-
     lv_obj_t *btn_color_test = lv_btn_create(card_diag);
-    lv_obj_set_size(btn_color_test, (SCREEN_WIDTH - 28) / 2, 34);
-    lv_obj_align(btn_color_test, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+    lv_obj_set_size(btn_color_test, SCREEN_WIDTH - 32, 34);
+    lv_obj_align(btn_color_test, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_obj_set_style_radius(btn_color_test, 6, 0);
     lv_obj_set_style_bg_color(btn_color_test, lv_color_hex(0x1F2A38), 0);
     lv_obj_set_style_border_color(btn_color_test, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
@@ -820,27 +790,10 @@ static void open_tools_app(void)
     lv_obj_set_style_text_font(lbl_pitch_val, UI_FONT_12, 0);
     lv_obj_align(lbl_pitch_val, LV_ALIGN_CENTER, 0, 26);
 
-    // Nút mở Touch Diagnostic Test
-    lv_obj_t *btn_tt = lv_btn_create(compass_card);
-    lv_obj_set_size(btn_tt, (SCREEN_WIDTH - 28) / 2, 34);
-    lv_obj_align(btn_tt, LV_ALIGN_BOTTOM_LEFT, 0, -4);
-    lv_obj_set_style_bg_color(btn_tt, lv_color_hex(0x1F2937), 0);
-    lv_obj_set_style_border_color(btn_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_border_width(btn_tt, 1, 0);
-    lv_obj_set_style_radius(btn_tt, 6, 0);
-    lv_obj_set_ext_click_area(btn_tt, 4);
-    lv_obj_add_event_cb(btn_tt, touch_test_btn_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *lbl_tt = lv_label_create(btn_tt);
-    lv_label_set_text(lbl_tt, LV_SYMBOL_EDIT " Test Cảm Ứng");
-    lv_obj_set_style_text_color(lbl_tt, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_tt, UI_FONT_BUTTON, 0);
-    lv_obj_center(lbl_tt);
-
     // Nút mở Color Self-Test
     lv_obj_t *btn_ct = lv_btn_create(compass_card);
-    lv_obj_set_size(btn_ct, (SCREEN_WIDTH - 28) / 2, 34);
-    lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
+    lv_obj_set_size(btn_ct, SCREEN_WIDTH - 36, 34);
+    lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_obj_set_style_bg_color(btn_ct, lv_color_hex(0x1F2937), 0);
     lv_obj_set_style_border_color(btn_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_border_width(btn_ct, 1, 0);
@@ -897,15 +850,6 @@ static void open_about_app(void)
 }
 
 /* =========================================================================
- * 11. ỨNG DỤNG TOUCH DIAGNOSTIC TEST
- * ========================================================================= */
-static void open_touch_test_app(void)
-{
-    prepare_app_window("Touch Calibration", APP_TOUCH_TEST);
-    ui_touch_test_open(app_content_container);
-}
-
-/* =========================================================================
  * CÁC HÀM MỞ APP TỪ CORE KHÁC HOẶC DESKTOP
  * ========================================================================= */
 static void open_map_app(void)
@@ -930,7 +874,7 @@ void ui_open_wifi_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        if (!ui_touch_test_is_calibration_blocking()) open_wifi_app();
+        open_wifi_app();
         lvgl_port_unlock();
     }
 }
@@ -945,7 +889,7 @@ void ui_open_music_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        if (!ui_touch_test_is_calibration_blocking()) open_music_app();
+        open_music_app();
         lvgl_port_unlock();
     }
 }
@@ -960,7 +904,7 @@ void ui_open_ai_voice_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        if (!ui_touch_test_is_calibration_blocking()) open_ai_voice_app();
+        open_ai_voice_app();
         lvgl_port_unlock();
     }
 }
@@ -975,7 +919,7 @@ void ui_open_camera_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        if (!ui_touch_test_is_calibration_blocking()) open_camera_app();
+        open_camera_app();
         lvgl_port_unlock();
     }
 }
@@ -990,10 +934,6 @@ void ui_init(void)
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(COLOR_OS_BG), 0);
         create_status_bar();
         create_desktop();
-        if (ui_touch_test_should_auto_open())
-        {
-            open_touch_test_app();
-        }
         lvgl_port_unlock();
     }
 }
@@ -1125,7 +1065,6 @@ void ui_update_periodic(const SystemStats &stats)
     music_app_update();
     ai_voice_app_update();
     camera_app_update();
-    ui_touch_test_update();
 
     lvgl_port_unlock();
 }

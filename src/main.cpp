@@ -9,7 +9,6 @@
 #include "shared_i2c_bus.h"
 #include "display/lvgl_port.h"
 #include "ui/ui_manager.h"
-#include "ui/touch_test.h"
 #include "os/system_info.h"
 #include "os/wifi_manager.h"
 #include "storage/storage_manager.h"
@@ -33,15 +32,6 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
-
-    // Giữ nút BOOT trong lúc khởi động để vào calibration mà không cần cảm ứng.
-    pinMode(BOARD_BOOT_PIN, INPUT_PULLUP);
-    delay(20);
-    if (digitalRead(BOARD_BOOT_PIN) == LOW)
-    {
-        ui_touch_test_request_forced_calibration();
-        Serial.println("[BOOT] Hardware calibration request: BOOT button held");
-    }
 
     // In thông tin phần cứng nhận diện thực tế
     SystemStats init_stats = system_get_stats();
@@ -75,7 +65,6 @@ void setup()
     Serial.println("[LCD] Status: Ready (LVGL 8.3 + LovyanGFX DMA)");
 
     DisplayDiagnosticState display_state = lvgl_port_get_display_diagnostic();
-    TouchCalibration boot_calibration = shared_i2c_touch_get_calibration();
     Serial.printf("[BOOT] Display: %dx%d rotation=%d (%s) pixel=RGB565 LV_COLOR_DEPTH=%d LV_COLOR_16_SWAP=%d\n",
                   DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION,
                   display_orientation_name(BOARD_LCD_ROTATION), LV_COLOR_DEPTH, LV_COLOR_16_SWAP);
@@ -83,7 +72,8 @@ void setup()
                   lvgl_port_get_color_config_source(),
                   display_state.bgr_order ? "BGR" : "RGB",
                   display_state.inverted ? "ON" : "OFF");
-    Serial.printf("[BOOT] Touch calibration: %s\n", boot_calibration.valid ? "VALID" : "INVALID");
+    Serial.printf("[BOOT] Touch calibration: %s\n",
+                  shared_i2c_touch_has_valid_calibration() ? "VALID" : "INVALID");
 
     // 3. [TOUCH] Thông tin cảm ứng & Trạng thái Probe thật
     Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (Configured: SDA:%d, SCL:%d)\n",
@@ -146,17 +136,9 @@ void setup()
         Serial.println("[AI] Status: ⚠️ AI Voice Service khởi tạo thất bại!");
     }
 
-    // 6. Khởi tạo Desktop; calibration không hợp lệ được mở trước WiFi.
+    // 6. Khởi tạo Desktop.
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
     ui_init();
-    if (ui_touch_test_is_calibration_blocking())
-    {
-        Serial.println("[BOOT] WiFi deferred until touch calibration is validated");
-        while (ui_touch_test_is_calibration_blocking())
-        {
-            delay(50);
-        }
-    }
 
     // 7. [WIFI] Khởi tạo dịch vụ mạng WiFi chạy nền trên Core 0
     Serial.println("[WIFI] Khởi tạo WiFi Manager Service trên Core 0...");
