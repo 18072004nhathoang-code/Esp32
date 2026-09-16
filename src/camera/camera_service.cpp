@@ -74,7 +74,7 @@ CameraRuntimeState camera_service_get_runtime_state(void)
 {
     if (active_source == CAM_SOURCE_LOCAL_DVP)
     {
-        return g_local_camera.isAvailable() ? CAM_STATE_CONNECTED : CAM_STATE_NOT_CONFIGURED;
+        return g_local_camera.isAvailable() ? CAM_STATE_RUNNING : CAM_STATE_NOT_CONFIGURED;
     }
     return g_network_camera.getRuntimeState();
 }
@@ -163,13 +163,14 @@ const char* camera_service_get_status_text(void)
     CameraRuntimeState st = g_network_camera.getRuntimeState();
     switch (st)
     {
-        case CAM_STATE_CONNECTING:        return "CONNECTING";
-        case CAM_STATE_CONNECTED:
+        case CAM_STATE_STARTING:          return "STARTING";
+        case CAM_STATE_RUNNING:
             if (g_network_camera.getTransportSecurity() == CAM_TRANSPORT_HTTP_PLAINTEXT)
                 return "WARNING: HTTP PLAINTEXT";
             if (g_network_camera.getTransportSecurity() == CAM_TRANSPORT_HTTPS_UNVERIFIED)
                 return "HTTPS: CERT UNVERIFIED";
-            return "CONNECTED";
+            return "RUNNING";
+        case CAM_STATE_STOPPING:          return "STOPPING";
         case CAM_STATE_PASSWORD_REQUIRED: return "PASSWORD_REQUIRED";
         case CAM_STATE_ERROR:             return "ERROR";
         case CAM_STATE_STOPPED:           return "STOPPED";

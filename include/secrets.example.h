@@ -18,3 +18,7 @@
 // Google Gemini API Key / OpenAI API Key cho trợ lý giọng nói AI
 #define GEMINI_API_KEY          ""
 #define OPENAI_API_KEY          ""
+
+// PEM CA certificate used to verify HTTPS IP-camera endpoints. Keep empty until
+// a trusted CA for the camera has been provisioned; verified TLS then fails closed.
+#define CAMERA_TLS_CA_CERT      ""

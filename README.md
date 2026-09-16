@@ -148,7 +148,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
    #define GEMINI_API_KEY              "AIzaSy..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
-4. **Bảo mật mật khẩu Camera IP**: Firmware tuyệt đối không lưu plaintext password vào NVS Flash. Sau mỗi lần khởi động lại thiết bị (Reboot), nếu profile có username nhưng password rỗng, hệ thống sẽ đưa camera vào trạng thái `PASSWORD_REQUIRED` và không tự động gửi request lặp vô hạn. Người dùng cần nhập lại mật khẩu trên UI để kích hoạt kết nối. Thông tin xác thực và URL camera được che chắn tự động (`***:***`) khi ghi log Serial Monitor. Kết nối snapshot ưu tiên HTTPS; HTTPS chưa xác thực chứng chỉ và mọi fallback HTTP plaintext đều hiển thị cảnh báo rõ trên Serial/UI, không được xem là kênh tin cậy.
+4. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
 
 ---
 
@@ -187,7 +187,7 @@ pio device monitor -b 115200
    - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
 8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
 9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc (`UI_FONT_SMALL` 12px, `UI_FONT_BODY` 14px, `UI_FONT_BUTTON` 14px, `UI_FONT_TITLE` 16px), không phụ thuộc font runtime ngoài.
-10. **Touch Architecture & Calibration Tool**: FT6336G raw → validation → affine calibration → clamp → LVGL. Wizard 5 điểm lấy mẫu ổn định, giải least-squares, chỉ lưu NVS `touch_cal` khi RMS ≤ 8 px và max ≤ 12 px. Khi chưa có calibration, rotation 2 dùng `x=239-raw_x`, `y=319-raw_y`. Touch Test chạy 40 Hz và dùng tọa độ local của container cho crosshair.
+10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. ES3C28P rotation 2 dùng `x=239-raw_x`, `y=319-raw_y`; không đọc hay ghi NVS `touch_cal`. Touch Diagnostic là màn hình quan sát tùy chọn 40 Hz, không hiệu chỉnh và không chặn boot.
 
 
 ---

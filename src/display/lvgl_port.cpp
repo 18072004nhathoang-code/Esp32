@@ -149,27 +149,30 @@ static uint32_t diagnostic_color(uint8_t red, uint8_t green, uint8_t blue)
 
 static void run_lovyangfx_color_test(void)
 {
-    static const uint8_t levels[] = {0, 51, 102, 153, 204, 255};
-    const int16_t band_h = gfx.height() / 4;
+    static const uint8_t colors[][3] = {
+        {255, 0, 0}, {0, 255, 0}, {0, 0, 255},
+        {0, 0, 0}, {255, 255, 255}, {51, 51, 51},
+        {102, 102, 102}, {153, 153, 153}, {204, 204, 204}
+    };
+    const int16_t band_h = gfx.height() / 5;
+    const int16_t cell_w = gfx.width() / 3;
     gfx.startWrite();
-    gfx.fillRect(0, 0, gfx.width() / 3, band_h, diagnostic_color(255, 0, 0));
-    gfx.fillRect(gfx.width() / 3, 0, gfx.width() / 3, band_h, diagnostic_color(0, 255, 0));
-    gfx.fillRect((gfx.width() / 3) * 2, 0, gfx.width() - (gfx.width() / 3) * 2, band_h,
-                 diagnostic_color(0, 0, 255));
-    gfx.fillRect(0, band_h, gfx.width() / 2, band_h, diagnostic_color(0, 0, 0));
-    gfx.fillRect(gfx.width() / 2, band_h, gfx.width() - gfx.width() / 2, band_h,
-                 diagnostic_color(255, 255, 255));
-    const int16_t gray_w = gfx.width() / (int16_t)(sizeof(levels) / sizeof(levels[0]));
-    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i)
+    gfx.fillScreen(diagnostic_color(0, 0, 0));
+    for (size_t i = 0; i < 9; ++i)
     {
-        gfx.fillRect((int16_t)i * gray_w, band_h * 2,
-                     i + 1 == sizeof(levels) / sizeof(levels[0]) ? gfx.width() - (int16_t)i * gray_w : gray_w,
-                     gfx.height() - band_h * 2,
-                     diagnostic_color(levels[i], levels[i], levels[i]));
+        const int16_t col = i % 3;
+        const int16_t row = i / 3;
+        gfx.fillRect(col * cell_w, row * band_h,
+                     col == 2 ? gfx.width() - col * cell_w : cell_w,
+                     band_h,
+                     diagnostic_color(colors[i][0], colors[i][1], colors[i][2]));
     }
+    gfx.setTextColor(diagnostic_color(255, 255, 255), diagnostic_color(0, 0, 0));
+    gfx.setTextDatum(middle_center);
+    gfx.drawString("RGB565 TEST / ABC 123", gfx.width() / 2, band_h * 4);
     gfx.endWrite();
-    Serial.println("[DISPLAY_TEST] LovyanGFX direct: BLACK/WHITE RGB grayscale rendered");
-    delay(250);
+    Serial.println("[DISPLAY_TEST] LovyanGFX direct: BLACK/WHITE RGB grayscale text rendered");
+    delay(1000);
 }
 
 static void run_lvgl_color_test(lv_disp_t *display)
@@ -181,22 +184,30 @@ static void run_lvgl_color_test(lv_disp_t *display)
     lv_obj_t *screen = lv_obj_create(nullptr);
     lv_obj_set_style_pad_all(screen, 0, 0);
     lv_obj_set_style_border_width(screen, 0, 0);
+    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
     const lv_coord_t cell_w = DISP_HOR_RES / 3;
-    const lv_coord_t cell_h = DISP_VER_RES / 3;
-    for (size_t i = 0; i < sizeof(colors) / sizeof(colors[0]); ++i)
+    const lv_coord_t cell_h = DISP_VER_RES / 5;
+    for (size_t i = 0; i < 9; ++i)
     {
         lv_obj_t *cell = lv_obj_create(screen);
         lv_obj_set_size(cell, i % 3 == 2 ? DISP_HOR_RES - cell_w * 2 : cell_w,
-                        i / 3 == 2 ? DISP_VER_RES - cell_h * 2 : cell_h);
+                        cell_h);
         lv_obj_set_pos(cell, (i % 3) * cell_w, (i / 3) * cell_h);
         lv_obj_set_style_bg_color(cell, lv_color_hex(colors[i]), 0);
         lv_obj_set_style_border_width(cell, 0, 0);
         lv_obj_set_style_radius(cell, 0, 0);
     }
+    lv_obj_t *sample = lv_label_create(screen);
+    lv_obj_set_width(sample, DISP_HOR_RES);
+    lv_label_set_text(sample, "RGB565 TEST / ABC 123");
+    lv_obj_set_style_text_align(sample, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(sample, lv_color_white(), 0);
+    lv_obj_set_style_text_font(sample, UI_FONT_BODY, 0);
+    lv_obj_set_pos(sample, 0, cell_h * 4 - UI_FONT_BODY->line_height / 2);
     lv_scr_load(screen);
     lv_refr_now(display);
-    Serial.println("[DISPLAY_TEST] LVGL flush: BLACK/WHITE RGB grayscale rendered");
-    delay(250);
+    Serial.println("[DISPLAY_TEST] LVGL flush: BLACK/WHITE RGB grayscale text rendered");
+    delay(1000);
     lv_obj_clean(screen);
 }
 
@@ -218,8 +229,7 @@ static void lvgl_render_task(void *pvParameters)
                 power_manager_wake();
             }
 
-            // Nghỉ dài 50ms để giảm tải tối đa CPU trên Core 1
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(16));
             continue;
         }
 

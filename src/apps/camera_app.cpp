@@ -11,12 +11,15 @@
 #include "../display/tjpg_guard.h"
 #include <esp_heap_caps.h>
 
+static_assert(sizeof(lv_color_t) == sizeof(uint16_t), "Camera preview requires LVGL RGB565");
+
 // Các widget giao diện
 static lv_obj_t *main_container = nullptr;
 static lv_obj_t *cam_canvas = nullptr;
 static lv_color_t *cam_canvas_buf = nullptr;
 static uint16_t canvas_w = 224;
 static uint16_t canvas_h = 188;
+static bool camera_portrait = true;
 
 static lv_obj_t *toolbar_box = nullptr;
 static lv_obj_t *lbl_metrics = nullptr;
@@ -37,6 +40,7 @@ static lv_obj_t *ta_user = nullptr;
 static lv_obj_t *ta_pass = nullptr;
 static lv_obj_t *dd_vendor = nullptr;
 static lv_obj_t *dd_proto = nullptr;
+static lv_obj_t *dd_security = nullptr;
 static lv_obj_t *btn_save_connect = nullptr;
 
 // Thống kê thực tế (True Telemetry)
@@ -48,11 +52,31 @@ static uint32_t last_fps_calc_time = 0;
 
 static int16_t draw_offset_x = 0;
 static int16_t draw_offset_y = 0;
+static uint16_t *decode_target = nullptr;
+static uint16_t *preview_front = nullptr;
+static uint16_t *preview_back = nullptr;
+static size_t preview_capacity_pixels = 0;
+static SemaphoreHandle_t preview_mutex = nullptr;
+static QueueHandle_t camera_command_queue = nullptr;
+static TaskHandle_t camera_worker_handle = nullptr;
+static volatile bool preview_active = false;
+static uint32_t preview_frame_id = 0;
+static uint32_t preview_timestamp_ms = 0;
+static uint32_t preview_jpeg_bytes = 0;
+static uint16_t preview_source_w = 0;
+static uint16_t preview_source_h = 0;
+
+enum CameraUiCommandType : uint8_t { CAM_UI_START, CAM_UI_STOP, CAM_UI_CONFIGURE };
+struct CameraUiCommand
+{
+    CameraUiCommandType type;
+    NetworkCameraProfile profile;
+};
 
 /* Callback của thư viện TJpgDec đưa dữ liệu RGB565 vào bộ đệm Canvas */
 static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
-    if (!cam_canvas_buf) return false;
+    if (!decode_target) return false;
     for (int16_t row = 0; row < h; row++)
     {
         int16_t dy = y + row + draw_offset_y;
@@ -63,18 +87,20 @@ static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, 
             int16_t dx = x + col + draw_offset_x;
             if (dx < 0) continue;
             if (dx >= canvas_w) break;
-            cam_canvas_buf[dy * canvas_w + dx] = lv_color_make(
-                ((bitmap[row * w + col] >> 11) & 0x1F) << 3,
-                ((bitmap[row * w + col] >> 5) & 0x3F) << 2,
-                (bitmap[row * w + col] & 0x1F) << 3
-            );
+            decode_target[dy * canvas_w + dx] = bitmap[row * w + col];
         }
     }
     return true;
 }
 
 /* Đọc thông số cấu hình từ giao diện UI và áp dụng vào Camera Service */
-static bool apply_ui_configuration(bool start_after_config)
+static bool enqueue_camera_command(const CameraUiCommand &command)
+{
+    return camera_worker_handle && camera_command_queue &&
+           xQueueSend(camera_command_queue, &command, 0) == pdTRUE;
+}
+
+static bool queue_ui_configuration(void)
 {
     NetworkCameraProfile prof;
     memset(&prof, 0, sizeof(prof));
@@ -112,25 +138,17 @@ static bool apply_ui_configuration(bool start_after_config)
             default: prof.protocol = CAM_PROTO_HTTP_SNAPSHOT; break;
         }
     }
+    prof.security_mode = dd_security
+        ? static_cast<CameraSecurityMode>(lv_dropdown_get_selected(dd_security))
+        : CAM_SECURITY_TLS_VERIFIED;
 
-    if (!camera_service_configure_network(prof))
+    CameraUiCommand command = {};
+    command.type = CAM_UI_CONFIGURE;
+    command.profile = prof;
+    if (!enqueue_camera_command(command))
     {
-        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "CONFIGURATION FAILED");
+        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
         return false;
-    }
-    if (!camera_service_save_network_profile())
-    {
-        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "NVS SAVE FAILED");
-        return false;
-    }
-
-    if (start_after_config)
-    {
-        if (!camera_service_start())
-        {
-            if (lbl_cam_status) lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
-            return false;
-        }
     }
     return true;
 }
@@ -139,10 +157,10 @@ static bool apply_ui_configuration(bool start_after_config)
 static void btn_snap_cb(lv_event_t *e)
 {
     (void)e;
-    if (!camera_service_start() && lbl_cam_status)
-    {
-        lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
-    }
+    CameraUiCommand command = {};
+    command.type = CAM_UI_START;
+    if (!enqueue_camera_command(command) && lbl_cam_status)
+        lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
 }
 
 // Bấm nút Mở / Đóng Cấu hình
@@ -164,20 +182,17 @@ static void btn_cfg_cb(lv_event_t *e)
 // Bấm nút Ngắt kết nối
 static void btn_disconnect_cb(lv_event_t *e)
 {
-    bool stopped = camera_service_stop();
-    if (lbl_cam_status)
-    {
-        lv_label_set_text(lbl_cam_status, stopped ? "Đã ngắt kết nối" : "STOP FAILED");
-        lv_obj_set_style_text_color(lbl_cam_status,
-                                    stopped ? lv_color_hex(COLOR_TEXT_MUTED) : lv_color_hex(COLOR_ACCENT_RED), 0);
-    }
+    CameraUiCommand command = {};
+    command.type = CAM_UI_STOP;
+    if (!enqueue_camera_command(command) && lbl_cam_status)
+        lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
 }
 
 // Bấm Lưu & Kết nối trong Modal Cấu hình
 static void btn_save_connect_cb(lv_event_t *e)
 {
     if (cam_keyboard) lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);
-    bool applied = apply_ui_configuration(true);
+    bool applied = queue_ui_configuration();
     if (applied && cfg_modal)
     {
         lv_obj_add_flag(cfg_modal, LV_OBJ_FLAG_HIDDEN);
@@ -207,6 +222,107 @@ static void kb_event_cb(lv_event_t *e)
     }
 }
 
+static void decode_latest_frame(void)
+{
+    if (!preview_active || !preview_back || !preview_front) return;
+    CameraFrame *frame = camera_service_get_frame(10);
+    if (!frame) return;
+    if (!frame->buf || frame->len == 0)
+    {
+        camera_service_return_frame(frame);
+        return;
+    }
+    if (frame->frame_id == preview_frame_id)
+    {
+        camera_service_return_frame(frame);
+        return;
+    }
+
+    memset(preview_back, 0, canvas_w * canvas_h * sizeof(uint16_t));
+    uint16_t orig_w = 0;
+    uint16_t orig_h = 0;
+    uint8_t scale = 1;
+    bool decoded = false;
+    if (tjpg_guard_lock())
+    {
+        decode_target = preview_back;
+        TJpgDec.setCallback(camera_tjpg_output_cb);
+        TJpgDec.setSwapBytes(false);
+        if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == JDR_OK &&
+            orig_w > 0 && orig_h > 0)
+        {
+            while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
+                scale *= 2;
+            TJpgDec.setJpgScale(scale);
+            draw_offset_x = (static_cast<int16_t>(canvas_w) - static_cast<int16_t>(orig_w / scale)) / 2;
+            draw_offset_y = (static_cast<int16_t>(canvas_h) - static_cast<int16_t>(orig_h / scale)) / 2;
+            decoded = TJpgDec.drawJpg(0, 0, frame->buf, frame->len) == JDR_OK;
+        }
+        decode_target = nullptr;
+        TJpgDec.setJpgScale(1);
+        tjpg_guard_unlock();
+    }
+
+    if (decoded && preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+    {
+        uint16_t *old_front = preview_front;
+        preview_front = preview_back;
+        preview_back = old_front;
+        preview_frame_id = frame->frame_id;
+        preview_timestamp_ms = frame->timestamp_ms;
+        preview_jpeg_bytes = frame->len;
+        preview_source_w = orig_w;
+        preview_source_h = orig_h;
+        xSemaphoreGive(preview_mutex);
+    }
+    camera_service_return_frame(frame);
+}
+
+static void camera_ui_worker(void *)
+{
+    for (;;)
+    {
+        CameraUiCommand command = {};
+        if (camera_command_queue && xQueueReceive(camera_command_queue, &command, pdMS_TO_TICKS(20)) == pdTRUE)
+        {
+            if (command.type == CAM_UI_STOP)
+            {
+                (void)camera_service_stop(2000);
+            }
+            else if (command.type == CAM_UI_START)
+            {
+                (void)camera_service_start();
+            }
+            else if (command.type == CAM_UI_CONFIGURE)
+            {
+                if (camera_service_configure_network(command.profile))
+                {
+                    (void)camera_service_save_network_profile();
+                    (void)camera_service_start();
+                }
+            }
+        }
+        decode_latest_frame();
+    }
+}
+
+static bool ensure_camera_worker(void)
+{
+    if (!preview_mutex) preview_mutex = xSemaphoreCreateMutex();
+    if (!camera_command_queue) camera_command_queue = xQueueCreate(4, sizeof(CameraUiCommand));
+    if (!preview_mutex || !camera_command_queue) return false;
+    if (!camera_worker_handle)
+    {
+        if (xTaskCreatePinnedToCore(camera_ui_worker, "CameraUiWorker", 6144, nullptr, 2,
+                                    &camera_worker_handle, 0) != pdPASS)
+        {
+            camera_worker_handle = nullptr;
+            return false;
+        }
+    }
+    return true;
+}
+
 /* =========================================================================
  * KHỞI TẠO GIAO DIỆN CAMERA PORTRAIT
  * ========================================================================= */
@@ -224,9 +340,31 @@ void camera_app_open(lv_obj_t *parent)
 
     // Preview phía trên, điều khiển và telemetry xếp dọc bên dưới.
     const bool portrait = SCREEN_WIDTH <= SCREEN_HEIGHT;
+    camera_portrait = portrait;
     uint16_t toolbar_w = portrait ? (SCREEN_WIDTH - 4) : 96;
     canvas_w = portrait ? (SCREEN_WIDTH - 4) : (SCREEN_WIDTH - toolbar_w - 12);
     canvas_h = portrait ? 148 : (APP_CONTENT_HEIGHT - 6);
+    const size_t required_pixels = static_cast<size_t>(canvas_w) * canvas_h;
+    const bool worker_ready = ensure_camera_worker();
+
+    if (preview_capacity_pixels < required_pixels)
+    {
+        uint16_t *new_front = static_cast<uint16_t *>(heap_caps_malloc(required_pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        uint16_t *new_back = static_cast<uint16_t *>(heap_caps_malloc(required_pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!new_front) new_front = static_cast<uint16_t *>(malloc(required_pixels * sizeof(uint16_t)));
+        if (!new_back) new_back = static_cast<uint16_t *>(malloc(required_pixels * sizeof(uint16_t)));
+        if (new_front && new_back)
+        {
+            preview_front = new_front;
+            preview_back = new_back;
+            preview_capacity_pixels = required_pixels;
+        }
+        else
+        {
+            if (new_front) free(new_front);
+            if (new_back) free(new_back);
+        }
+    }
 
     // CẤP PHÁT BỘ ĐỆM CANVAS TRONG PSRAM
     if (!cam_canvas_buf)
@@ -244,6 +382,14 @@ void camera_app_open(lv_obj_t *parent)
         {
             cam_canvas_buf[i] = lv_color_hex(0x0A0D14);
         }
+    }
+    if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (preview_front) memset(preview_front, 0, required_pixels * sizeof(uint16_t));
+        if (preview_back) memset(preview_back, 0, required_pixels * sizeof(uint16_t));
+        preview_frame_id = 0;
+        preview_active = worker_ready && preview_front && preview_back;
+        xSemaphoreGive(preview_mutex);
     }
 
     // 2. Preview full-width phía trên.
@@ -325,9 +471,10 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_dis, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_dis);
 
-    // Dòng thông số thực tế (FPS, Kích thước, Dung lượng, Latency dạng multiline gọn)
+    // Dòng thông số thực tế (FPS decode thành công, kích thước, dung lượng, frame age)
     lbl_metrics = lv_label_create(toolbar_box);
-    lv_label_set_text(lbl_metrics, "FPS 0.0\n0x0\n0 KB\n0 ms");
+    lv_label_set_text(lbl_metrics, portrait ? "FPS 0.0 • 0x0\n0 KB • Age 0 ms"
+                                             : "FPS 0.0\n0x0\n0 KB\nAge 0 ms");
     lv_obj_set_width(lbl_metrics, portrait ? (toolbar_w - 12) : btn_w);
     lv_obj_set_style_text_color(lbl_metrics, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(lbl_metrics, UI_FONT_12, 0);
@@ -445,11 +592,34 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_bg_color(dd_proto, lv_color_hex(0x151B27), 0);
     lv_obj_set_style_text_font(dd_proto, UI_FONT_SMALL, 0);
 
+    lv_obj_t *lbl_security = lv_label_create(cfg_modal);
+    lv_label_set_text(lbl_security, "Bảo mật transport:");
+    lv_obj_set_style_text_color(lbl_security, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_security, UI_FONT_SMALL, 0);
+    lv_obj_set_pos(lbl_security, 6, 476);
+
+    dd_security = lv_dropdown_create(cfg_modal);
+    lv_obj_set_size(dd_security, SCREEN_WIDTH - 28, 30);
+    lv_obj_set_pos(dd_security, 6, 492);
+    lv_dropdown_set_options(dd_security,
+        "HTTPS verified (CA required)\nHTTPS insecure - WARNING\nHTTP plaintext - WARNING");
+    lv_dropdown_set_selected(dd_security, static_cast<uint16_t>(cur_prof.security_mode));
+    lv_obj_set_style_bg_color(dd_security, lv_color_hex(0x151B27), 0);
+    lv_obj_set_style_text_font(dd_security, UI_FONT_SMALL, 0);
+
+    lv_obj_t *security_warning = lv_label_create(cfg_modal);
+    lv_obj_set_width(security_warning, SCREEN_WIDTH - 28);
+    lv_obj_set_pos(security_warning, 6, 526);
+    lv_label_set_text(security_warning, "Insecure/HTTP là opt-in và có nguy cơ lộ credential/MITM.");
+    lv_label_set_long_mode(security_warning, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(security_warning, UI_FONT_SMALL, 0);
+    lv_obj_set_style_text_color(security_warning, lv_color_hex(COLOR_ACCENT_RED), 0);
+
     // Nút Lưu & Kết nối (Touch target >= 32px)
     btn_save_connect = lv_btn_create(cfg_modal);
     lv_obj_set_size(btn_save_connect, SCREEN_WIDTH - 28, 34);
     lv_obj_set_ext_click_area(btn_save_connect, 4);
-    lv_obj_set_pos(btn_save_connect, 6, 480);
+    lv_obj_set_pos(btn_save_connect, 6, 570);
     lv_obj_set_style_radius(btn_save_connect, 6, 0);
     lv_obj_set_style_bg_color(btn_save_connect, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_add_event_cb(btn_save_connect, btn_save_connect_cb, LV_EVENT_CLICKED, nullptr);
@@ -467,14 +637,23 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(cam_keyboard, kb_event_cb, LV_EVENT_ALL, nullptr);
     lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);
 
-    // Bắt đầu chạy service camera
-    camera_service_start();
+    CameraUiCommand start_command = {};
+    start_command.type = CAM_UI_START;
+    if ((!preview_active || !enqueue_camera_command(start_command)) && lbl_cam_status)
+        lv_label_set_text(lbl_cam_status, "CAMERA/PREVIEW DEGRADED");
 }
 
 /* Đóng và dọn dẹp */
 void camera_app_close(void)
 {
-    camera_service_stop();
+    if (preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        preview_active = false;
+        xSemaphoreGive(preview_mutex);
+    }
+    CameraUiCommand stop_command = {};
+    stop_command.type = CAM_UI_STOP;
+    (void)enqueue_camera_command(stop_command);
     main_container = nullptr;
     cam_canvas = nullptr;
     toolbar_box = nullptr;
@@ -494,6 +673,7 @@ void camera_app_close(void)
     ta_pass = nullptr;
     dd_vendor = nullptr;
     dd_proto = nullptr;
+    dd_security = nullptr;
     btn_save_connect = nullptr;
 }
 
@@ -501,80 +681,50 @@ void camera_app_close(void)
 void camera_app_update(void)
 {
     if (!main_container || !cam_canvas || !cam_canvas_buf) return;
-
-    // Lấy frame mới nhất từ Ping-Pong Double Buffer
-    CameraFrame *frame = camera_service_get_frame();
-    if (frame && frame->buf && frame->len > 0)
+    uint32_t ready_frame_id = 0;
+    uint32_t ready_timestamp_ms = 0;
+    uint32_t ready_jpeg_bytes = 0;
+    uint16_t ready_width = 0;
+    uint16_t ready_height = 0;
+    if (preview_mutex && xSemaphoreTake(preview_mutex, 0) == pdTRUE)
     {
-        if (frame->frame_id != last_rendered_frame_id)
+        ready_frame_id = preview_frame_id;
+        if (ready_frame_id != last_rendered_frame_id && preview_front)
         {
-            uint32_t now = millis();
-            frame_count++;
-            if (now - last_fps_calc_time >= 1000)
-            {
-                real_fps = (float)frame_count * 1000.0f / (float)(now - last_fps_calc_time);
-                frame_count = 0;
-                last_fps_calc_time = now;
-            }
-
-            uint32_t latency = (frame->timestamp_ms > 0 && now >= frame->timestamp_ms)
-                               ? (now - frame->timestamp_ms) : (now - last_frame_time_ms);
-            last_frame_time_ms = now;
-
-            // Xóa nền đen để chống lem khi letterbox
-            for (int i = 0; i < canvas_w * canvas_h; i++)
-            {
-                cam_canvas_buf[i] = lv_color_hex(0x000000);
-            }
-
-            // Toàn bộ cấu hình và giải mã TJpgDec dùng chung một mutex với Map.
-            uint16_t orig_w = 0, orig_h = 0;
-            uint8_t scale = 1;
-            bool decoded = false;
-            if (tjpg_guard_lock())
-            {
-                TJpgDec.setCallback(camera_tjpg_output_cb);
-                TJpgDec.setSwapBytes(false);
-                if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == 0 && orig_w > 0 && orig_h > 0)
-                {
-                    while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
-                    {
-                        scale *= 2;
-                    }
-
-                    TJpgDec.setJpgScale(scale);
-                    uint16_t scaled_w = orig_w / scale;
-                    uint16_t scaled_h = orig_h / scale;
-                    draw_offset_x = ((int16_t)canvas_w - (int16_t)scaled_w) / 2;
-                    draw_offset_y = ((int16_t)canvas_h - (int16_t)scaled_h) / 2;
-                }
-                else
-                {
-                    TJpgDec.setJpgScale(1);
-                    draw_offset_x = 0;
-                    draw_offset_y = 0;
-                }
-                decoded = (TJpgDec.drawJpg(0, 0, frame->buf, frame->len) == JDR_OK);
-                tjpg_guard_unlock();
-            }
-            if (decoded)
-            {
-                last_rendered_frame_id = frame->frame_id;
-                lv_obj_invalidate(cam_canvas);
-            }
-
-            if (lbl_metrics)
-            {
-                lv_label_set_text_fmt(lbl_metrics, "FPS: %.1f\n%dx%d\n%u KB\n%u ms",
-                    real_fps,
-                    orig_w > 0 ? orig_w : (frame->width > 0 ? frame->width : canvas_w),
-                    orig_h > 0 ? orig_h : (frame->height > 0 ? frame->height : canvas_h),
-                    (unsigned int)(frame->len / 1024),
-                    (unsigned int)latency);
-            }
+            memcpy(cam_canvas_buf, preview_front, static_cast<size_t>(canvas_w) * canvas_h * sizeof(lv_color_t));
+            ready_timestamp_ms = preview_timestamp_ms;
+            ready_jpeg_bytes = preview_jpeg_bytes;
+            ready_width = preview_source_w;
+            ready_height = preview_source_h;
+            last_rendered_frame_id = ready_frame_id;
         }
+        xSemaphoreGive(preview_mutex);
+    }
 
-        camera_service_return_frame(frame);
+    if (ready_frame_id != 0 && ready_frame_id == last_rendered_frame_id && ready_timestamp_ms != 0)
+    {
+        const uint32_t now = millis();
+        frame_count++;
+        if (now - last_fps_calc_time >= 1000)
+        {
+            real_fps = static_cast<float>(frame_count) * 1000.0f / (now - last_fps_calc_time);
+            frame_count = 0;
+            last_fps_calc_time = now;
+        }
+        const uint32_t age = now >= ready_timestamp_ms ? now - ready_timestamp_ms : 0;
+        last_frame_time_ms = now;
+        lv_obj_invalidate(cam_canvas);
+        if (lbl_metrics)
+        {
+            if (camera_portrait)
+                lv_label_set_text_fmt(lbl_metrics, "FPS %.1f • %ux%u\n%u KB • Age %u ms",
+                    real_fps, ready_width, ready_height,
+                    static_cast<unsigned>(ready_jpeg_bytes / 1024), static_cast<unsigned>(age));
+            else
+                lv_label_set_text_fmt(lbl_metrics, "FPS %.1f\n%ux%u\n%u KB\nAge %u ms",
+                    real_fps, ready_width, ready_height,
+                    static_cast<unsigned>(ready_jpeg_bytes / 1024), static_cast<unsigned>(age));
+        }
     }
 
     if (lbl_cam_status)

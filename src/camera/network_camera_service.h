@@ -15,7 +15,7 @@ public:
     bool start();
     bool stop(uint32_t timeout_ms = 2000);
     bool isConnected() const;
-    NetworkCameraProfile getActiveProfile();
+    NetworkCameraProfile getActiveProfile() const;
 
     // Lấy trạng thái khả năng thực tế của từng tính năng
     CameraFeatureStatus getSnapshotStatus() const;
@@ -61,7 +61,7 @@ private:
     volatile CameraTransportSecurity _transport_security;
     uint32_t _frame_sequence;
     NetworkCameraProfile _profile;
-    SemaphoreHandle_t _config_mutex;
+    mutable SemaphoreHandle_t _config_mutex;
     SemaphoreHandle_t _worker_exit_sem;
 
     char _onvif_snapshot_url[192];
@@ -90,6 +90,8 @@ private:
                                     const NetworkCameraProfile &request_profile);
     bool ensureSynchronizationPrimitives();
     void setTransportSecurity(CameraTransportSecurity security);
+    bool snapshotState(NetworkCameraProfile &profile, bool &configured,
+                       CameraRuntimeState &state) const;
 };
 
 extern NetworkCameraService g_network_camera;

@@ -1,6 +1,6 @@
 /**
  * @file color_test.h
- * @brief Display Color Self-Test & Calibration Pattern for ESP32-S3 HMI
+ * @brief Display Color Self-Test & Diagnostic Pattern for ESP32-S3 HMI
  * Dùng để kiểm tra: RGB Order, Panel Invert, 16-bit Color Byte Swap và SPI Signal Integrity.
  */
 

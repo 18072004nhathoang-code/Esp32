@@ -40,9 +40,9 @@
 #define BOARD_TOUCH_SCL             15      // IO15 là TP_SCL
 #define BOARD_TOUCH_INT             17      // IO17 là TP_INT (Low khi có chạm)
 #define BOARD_TOUCH_RST             18      // IO18 là TP_RST (Low level reset)
-#define BOARD_TOUCH_SWAP_XY         0       // Calibration swap trước rotation
-#define BOARD_TOUCH_INVERT_X        0       // Calibration invert X trước rotation
-#define BOARD_TOUCH_INVERT_Y        0       // Calibration invert Y trước rotation
+#define BOARD_TOUCH_SWAP_XY         0       // Native-axis normalization before rotation
+#define BOARD_TOUCH_INVERT_X        0       // Native-axis normalization before rotation
+#define BOARD_TOUCH_INVERT_Y        0       // Native-axis normalization before rotation
 
 // --- MicroSD Card: Giao tiếp SDMMC / SDIO chuyên dụng (Không chia sẻ bus với LCD) ---
 #define BOARD_SD_INTERFACE          SD_IF_SDMMC_4BIT

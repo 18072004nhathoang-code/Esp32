@@ -8,6 +8,7 @@
 #include "ui_manager.h"
 #include "ui_theme.h"
 #include "color_test.h"
+#include "touch_debug.h"
 #include "../display/lvgl_port.h"
 #include "../apps/map_app.h"
 #include "../apps/audio_app.h"
@@ -75,7 +76,8 @@ enum AppID : uintptr_t {
     APP_AI_VOICE = 9,
     APP_CAMERA = 10,
     APP_POWER = 11,
-    APP_COLOR_TEST = 13
+    APP_COLOR_TEST = 13,
+    APP_TOUCH_DEBUG = 14
 };
 static AppID active_app = APP_NONE;
 
@@ -149,6 +151,13 @@ static void color_test_btn_cb(lv_event_t *e)
     (void)e;
     prepare_app_window("Display Diagnostic", APP_COLOR_TEST);
     ui_color_test_open(app_content_container);
+}
+
+static void touch_debug_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    prepare_app_window("Touch Diagnostic", APP_TOUCH_DEBUG);
+    ui_touch_debug_open(app_content_container);
 }
 
 /* Callback bấm nút Ngủ Ngay trong Power App */
@@ -366,10 +375,12 @@ static void ensure_app_window(void)
     lv_obj_align(app_title_lbl, LV_ALIGN_LEFT_MID, 8, 0);
     lv_obj_set_style_text_color(app_title_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(app_title_lbl, UI_FONT_TITLE, 0);
+    lv_obj_set_width(app_title_lbl, SCREEN_WIDTH - 58);
+    lv_label_set_long_mode(app_title_lbl, LV_LABEL_LONG_DOT);
 
     // Nút đóng app (X) tối thiểu >=32x32 hit area
     lv_obj_t *close_btn = lv_btn_create(header);
-    lv_obj_set_size(close_btn, 34, 22);
+    lv_obj_set_size(close_btn, 34, 28);
     lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_bg_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_set_style_radius(close_btn, 6, 0);
@@ -381,7 +392,7 @@ static void ensure_app_window(void)
     lv_obj_set_style_text_font(close_lbl, UI_FONT_12, 0);
     lv_obj_center(close_lbl);
 
-    // Khung chứa nội dung ứng dụng (320 x 194)
+    // Khung chứa nội dung ứng dụng, tính từ logical screen và header 30 px.
     app_content_container = lv_obj_create(app_window);
     lv_obj_set_size(app_content_container, SCREEN_WIDTH, APP_CONTENT_HEIGHT);
     lv_obj_align(app_content_container, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -403,6 +414,7 @@ static void invalidate_active_app_widgets(void)
         case APP_AI_VOICE: ai_voice_app_close(); break;
         case APP_CAMERA: camera_app_close(); break;
         case APP_COLOR_TEST: ui_color_test_close(); break;
+        case APP_TOUCH_DEBUG: ui_touch_debug_close(); break;
         default: break;
     }
 
@@ -782,18 +794,18 @@ static void open_tools_app(void)
     lv_label_set_text(lbl_compass_val, "[DEMO]\nHướng: 180.5° Nam\nTừ trường: 48.2 µT");
     lv_obj_set_style_text_color(lbl_compass_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(lbl_compass_val, UI_FONT_12, 0);
-    lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -22);
+    lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -32);
 
     lbl_pitch_val = lv_label_create(compass_card);
     lv_label_set_text(lbl_pitch_val, "Pitch/Roll: 0.2° | -0.5°\nGia tốc: 9.81 m/s²\nÁp suất: 1013.25 hPa");
     lv_obj_set_style_text_color(lbl_pitch_val, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_pitch_val, UI_FONT_12, 0);
-    lv_obj_align(lbl_pitch_val, LV_ALIGN_CENTER, 0, 26);
+    lv_obj_align(lbl_pitch_val, LV_ALIGN_CENTER, 0, 8);
 
     // Nút mở Color Self-Test
     lv_obj_t *btn_ct = lv_btn_create(compass_card);
-    lv_obj_set_size(btn_ct, SCREEN_WIDTH - 36, 34);
-    lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_size(btn_ct, (SCREEN_WIDTH - 42) / 2, 34);
+    lv_obj_align(btn_ct, LV_ALIGN_BOTTOM_LEFT, 0, -4);
     lv_obj_set_style_bg_color(btn_ct, lv_color_hex(0x1F2937), 0);
     lv_obj_set_style_border_color(btn_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_border_width(btn_ct, 1, 0);
@@ -802,10 +814,23 @@ static void open_tools_app(void)
     lv_obj_add_event_cb(btn_ct, color_test_btn_cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *lbl_ct = lv_label_create(btn_ct);
-    lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Test Màu");
+    lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Màu");
     lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_text_font(lbl_ct, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_ct);
+
+    lv_obj_t *btn_touch = lv_btn_create(compass_card);
+    lv_obj_set_size(btn_touch, (SCREEN_WIDTH - 42) / 2, 34);
+    lv_obj_align(btn_touch, LV_ALIGN_BOTTOM_RIGHT, 0, -4);
+    lv_obj_set_style_bg_color(btn_touch, lv_color_hex(0x1F2937), 0);
+    lv_obj_set_style_border_color(btn_touch, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+    lv_obj_set_style_border_width(btn_touch, 1, 0);
+    lv_obj_set_style_radius(btn_touch, 6, 0);
+    lv_obj_add_event_cb(btn_touch, touch_debug_btn_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_touch = lv_label_create(btn_touch);
+    lv_label_set_text(lbl_touch, "Touch");
+    lv_obj_set_style_text_font(lbl_touch, UI_FONT_BUTTON, 0);
+    lv_obj_center(lbl_touch);
 }
 
 /* =========================================================================

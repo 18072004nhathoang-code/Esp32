@@ -87,11 +87,19 @@ inline const char* camera_feature_status_to_string(CameraFeatureStatus st)
 enum CameraRuntimeState
 {
     CAM_STATE_NOT_CONFIGURED = 0,
-    CAM_STATE_CONNECTING,
-    CAM_STATE_CONNECTED,
+    CAM_STATE_STOPPED,
+    CAM_STATE_STARTING,
+    CAM_STATE_RUNNING,
+    CAM_STATE_STOPPING,
     CAM_STATE_PASSWORD_REQUIRED,
-    CAM_STATE_ERROR,
-    CAM_STATE_STOPPED
+    CAM_STATE_ERROR
+};
+
+enum CameraSecurityMode
+{
+    CAM_SECURITY_TLS_VERIFIED = 0,
+    CAM_SECURITY_TLS_INSECURE,
+    CAM_SECURITY_HTTP_PLAINTEXT
 };
 
 enum CameraTransportSecurity
@@ -106,8 +114,9 @@ inline const char* camera_runtime_state_to_string(CameraRuntimeState st)
 {
     switch (st)
     {
-        case CAM_STATE_CONNECTING:        return "CONNECTING";
-        case CAM_STATE_CONNECTED:         return "CONNECTED";
+        case CAM_STATE_STARTING:          return "STARTING";
+        case CAM_STATE_RUNNING:           return "RUNNING";
+        case CAM_STATE_STOPPING:          return "STOPPING";
         case CAM_STATE_PASSWORD_REQUIRED: return "PASSWORD_REQUIRED";
         case CAM_STATE_ERROR:             return "ERROR";
         case CAM_STATE_STOPPED:           return "STOPPED";
@@ -171,5 +180,6 @@ struct NetworkCameraProfile
     char username[32];
     char password[32];
     uint8_t channel;
+    CameraSecurityMode security_mode;
     char custom_url[128];
 };

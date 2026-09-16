@@ -4,74 +4,23 @@
  */
 
 #include "shared_i2c_bus.h"
+#include "touch_transform.h"
 #include <Wire.h>
-#include <Preferences.h>
-#include <math.h>
-
-namespace
-{
-constexpr uint32_t kTouchCalibrationVersion = 2U;
-
-struct TouchCalibration
-{
-    bool valid;
-    uint32_t version;
-    uint8_t rotation;
-    uint16_t logical_width;
-    uint16_t logical_height;
-    uint16_t panel_width;
-    uint16_t panel_height;
-    float a, b, c;
-    float d, e, f;
-    float rms_error;
-    float max_error;
-};
-}
 
 static SemaphoreHandle_t s_i2c_mutex = nullptr;
 static bool s_bus_initialized = false;
 static bool s_touch_detected = false;
 static bool s_codec_detected = false;
-static TouchCalibration s_calibration = {};
 static portMUX_TYPE s_touch_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static SharedTouchSnapshot s_touch_snapshot = {};
+static uint8_t s_active_touch_id = 0xFF;
+static uint32_t s_last_valid_press_ms = 0;
+static constexpr uint32_t kI2cErrorReleaseTimeoutMs = 60;
 
 // Đăng ký thanh ghi FT6336G
 #define FT6336_REG_TD_STATUS    0x02
-#define FT6336_REG_P1_XH        0x03
-#define FT6336_REG_P1_XL        0x04
-#define FT6336_REG_P1_YH        0x05
-#define FT6336_REG_P1_YL        0x06
-
-static bool calibration_metadata_matches(const TouchCalibration &cal)
-{
-    return cal.valid &&
-           cal.version == kTouchCalibrationVersion &&
-           cal.rotation == BOARD_LCD_ROTATION &&
-           cal.logical_width == BOARD_LCD_WIDTH &&
-           cal.logical_height == BOARD_LCD_HEIGHT &&
-           cal.panel_width == BOARD_LCD_PANEL_WIDTH &&
-           cal.panel_height == BOARD_LCD_PANEL_HEIGHT &&
-           isfinite(cal.a) && isfinite(cal.b) && isfinite(cal.c) &&
-           isfinite(cal.d) && isfinite(cal.e) && isfinite(cal.f);
-}
-
-static void load_touch_calibration(void)
-{
-    TouchCalibration loaded = {};
-    Preferences prefs;
-    if (prefs.begin("touch_cal", true))
-    {
-        if (prefs.getBytesLength("data") == sizeof(loaded))
-        {
-            prefs.getBytes("data", &loaded, sizeof(loaded));
-        }
-        prefs.end();
-    }
-    if (!calibration_metadata_matches(loaded)) loaded.valid = false;
-    portENTER_CRITICAL(&s_touch_state_mux);
-    s_calibration = loaded;
-    portEXIT_CRITICAL(&s_touch_state_mux);
-}
+#define FT6336_POINT_BYTES       6
+#define FT6336_MAX_POINTS        2
 
 bool shared_i2c_init(void)
 {
@@ -134,7 +83,6 @@ bool shared_i2c_init(void)
 
     s_bus_initialized = true;
     shared_i2c_unlock();
-    load_touch_calibration();
 
     Serial.printf("[I2C] Bus: Shared physical bus (SDA:%d, SCL:%d, 400kHz)\n",
                   BOARD_TOUCH_SDA, BOARD_TOUCH_SCL);
@@ -252,14 +200,11 @@ bool shared_i2c_codec_is_detected(void)
     return s_codec_detected;
 }
 
-static bool map_calibrated_touch(const TouchCalibration &calibration,
-                                 uint16_t raw_x, uint16_t raw_y,
-                                 float *screen_x, float *screen_y)
+static void publish_touch_snapshot(const SharedTouchSnapshot &snapshot)
 {
-    if (!screen_x || !screen_y || !calibration_metadata_matches(calibration)) return false;
-    *screen_x = calibration.a * raw_x + calibration.b * raw_y + calibration.c;
-    *screen_y = calibration.d * raw_x + calibration.e * raw_y + calibration.f;
-    return isfinite(*screen_x) && isfinite(*screen_y);
+    portENTER_CRITICAL(&s_touch_state_mux);
+    s_touch_snapshot = snapshot;
+    portEXIT_CRITICAL(&s_touch_state_mux);
 }
 
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
@@ -269,119 +214,127 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
         return false;
     }
 
-    if (!shared_i2c_lock(20))
-    {
-        return false;
-    }
+    SharedTouchSnapshot snapshot = {};
+    snapshot.event = SHARED_TOUCH_EVENT_NONE;
+    snapshot.touch_id = 0xFF;
+    snapshot.timestamp_ms = millis();
 
-    uint8_t buf[5];
-    Wire.beginTransmission(BOARD_TOUCH_I2C_ADDR);
-    Wire.write(FT6336_REG_TD_STATUS);
-    if (Wire.endTransmission(false) != 0)
+    uint8_t buf[1 + FT6336_MAX_POINTS * FT6336_POINT_BYTES] = {};
+    bool io_ok = false;
+    if (shared_i2c_lock(20))
     {
+        Wire.beginTransmission(BOARD_TOUCH_I2C_ADDR);
+        Wire.write(FT6336_REG_TD_STATUS);
+        if (Wire.endTransmission(false) == 0)
+        {
+            const size_t wanted = sizeof(buf);
+            const size_t count = Wire.requestFrom((int)BOARD_TOUCH_I2C_ADDR, (int)wanted);
+            if (count == wanted)
+            {
+                for (size_t i = 0; i < wanted; ++i) buf[i] = Wire.read();
+                io_ok = true;
+            }
+            else
+            {
+                while (Wire.available()) (void)Wire.read();
+            }
+        }
         shared_i2c_unlock();
+    }
+
+    snapshot.io_ok = io_ok;
+    if (!io_ok)
+    {
+        SharedTouchSnapshot previous;
+        shared_i2c_touch_get_snapshot(&previous);
+        if (previous.pressed && (snapshot.timestamp_ms - s_last_valid_press_ms) <= kI2cErrorReleaseTimeoutMs)
+        {
+            previous.io_ok = false;
+            previous.timestamp_ms = snapshot.timestamp_ms;
+            publish_touch_snapshot(previous);
+            *x = previous.mapped_x;
+            *y = previous.mapped_y;
+            return true;
+        }
+        snapshot.sequence = previous.sequence;
+        publish_touch_snapshot(snapshot);
+        s_active_touch_id = 0xFF;
         return false;
     }
 
-    size_t count = Wire.requestFrom((int)BOARD_TOUCH_I2C_ADDR, 5);
-    if (count != 5)
+    snapshot.point_count = buf[0] & 0x0FU;
+    SharedTouchSnapshot previous;
+    shared_i2c_touch_get_snapshot(&previous);
+    snapshot.sequence = previous.sequence + 1;
+    if (snapshot.point_count == 0)
     {
-        shared_i2c_unlock();
+        snapshot.sample_valid = true;
+        snapshot.event = SHARED_TOUCH_EVENT_UP;
+        publish_touch_snapshot(snapshot);
+        s_active_touch_id = 0xFF;
+        return false;
+    }
+    if (snapshot.point_count > FT6336_MAX_POINTS)
+    {
+        publish_touch_snapshot(snapshot);
+        s_active_touch_id = 0xFF;
         return false;
     }
 
-    for (int i = 0; i < 5; i++)
+    int selected = -1;
+    for (uint8_t index = 0; index < snapshot.point_count; ++index)
     {
-        buf[i] = Wire.read();
+        const size_t base = 1 + index * FT6336_POINT_BYTES;
+        const uint8_t event = (buf[base] >> 6) & 0x03U;
+        const uint8_t id = (buf[base + 2] >> 4) & 0x0FU;
+        if (event <= SHARED_TOUCH_EVENT_CONTACT &&
+            (selected < 0 || id == s_active_touch_id))
+        {
+            selected = index;
+            if (id == s_active_touch_id) break;
+        }
     }
-    shared_i2c_unlock();
-
-    uint8_t touches = buf[0] & 0x0F;
-    if (touches != 1)
+    if (selected < 0)
     {
+        publish_touch_snapshot(snapshot);
+        s_active_touch_id = 0xFF;
         return false;
     }
 
-    uint16_t raw_x = ((uint16_t)(buf[1] & 0x0F) << 8) | buf[2];
-    uint16_t raw_y = ((uint16_t)(buf[3] & 0x0F) << 8) | buf[4];
-    if (raw_x > 4095 || raw_y > 4095)
-    {
-        return false;
-    }
+    const size_t base = 1 + selected * FT6336_POINT_BYTES;
+    snapshot.event = (buf[base] >> 6) & 0x03U;
+    snapshot.touch_id = (buf[base + 2] >> 4) & 0x0FU;
+    snapshot.raw_x = (uint16_t(buf[base] & 0x0FU) << 8) | buf[base + 1];
+    snapshot.raw_y = (uint16_t(buf[base + 2] & 0x0FU) << 8) | buf[base + 3];
 
-    TouchCalibration calibration;
-    portENTER_CRITICAL(&s_touch_state_mux);
-    calibration = s_calibration;
-    portEXIT_CRITICAL(&s_touch_state_mux);
-
-    int32_t mapped_x = 0;
-    int32_t mapped_y = 0;
-    float affine_x = 0.0f;
-    float affine_y = 0.0f;
-    if (map_calibrated_touch(calibration, raw_x, raw_y, &affine_x, &affine_y))
+    const TouchTransformConfig transform = {
+        BOARD_LCD_PANEL_WIDTH, BOARD_LCD_PANEL_HEIGHT,
+        BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT, BOARD_LCD_ROTATION,
+        BOARD_TOUCH_SWAP_XY != 0, BOARD_TOUCH_INVERT_X != 0, BOARD_TOUCH_INVERT_Y != 0
+    };
+    snapshot.sample_valid = touch_transform_point(transform, snapshot.raw_x, snapshot.raw_y,
+                                                  &snapshot.mapped_x, &snapshot.mapped_y);
+    snapshot.pressed = snapshot.sample_valid && snapshot.event != SHARED_TOUCH_EVENT_UP;
+    if (snapshot.pressed)
     {
-        // The affine transform already targets logical screen coordinates.
-        // Never rotate calibrated coordinates a second time.
-        mapped_x = (int32_t)lroundf(affine_x);
-        mapped_y = (int32_t)lroundf(affine_y);
+        s_active_touch_id = snapshot.touch_id;
+        s_last_valid_press_ms = snapshot.timestamp_ms;
+        *x = snapshot.mapped_x;
+        *y = snapshot.mapped_y;
     }
     else
     {
-        // Safe profile-based fallback; a valid saved affine calibration supersedes it.
-        int32_t cal_x = raw_x;
-        int32_t cal_y = raw_y;
-        int32_t x_extent = BOARD_LCD_PANEL_WIDTH;
-        int32_t y_extent = BOARD_LCD_PANEL_HEIGHT;
-
-#if defined(BOARD_TOUCH_SWAP_XY) && BOARD_TOUCH_SWAP_XY
-        int32_t tmp = cal_x; cal_x = cal_y; cal_y = tmp;
-        tmp = x_extent; x_extent = y_extent; y_extent = tmp;
-#endif
-
-#if defined(BOARD_TOUCH_INVERT_X) && BOARD_TOUCH_INVERT_X
-        cal_x = (x_extent - 1) - cal_x;
-#endif
-
-#if defined(BOARD_TOUCH_INVERT_Y) && BOARD_TOUCH_INVERT_Y
-        cal_y = (y_extent - 1) - cal_y;
-#endif
-
-        // Rotation transform uses native panel dimensions, never logical axes.
-#ifndef BOARD_LCD_ROTATION
-#define BOARD_LCD_ROTATION 0
-#endif
-
-#if (BOARD_LCD_ROTATION == 0)
-        mapped_x = cal_x;
-        mapped_y = cal_y;
-#elif (BOARD_LCD_ROTATION == 1)
-        mapped_x = cal_y;
-        mapped_y = BOARD_LCD_PANEL_WIDTH - 1 - cal_x;
-#elif (BOARD_LCD_ROTATION == 2)
-        mapped_x = BOARD_LCD_PANEL_WIDTH - 1 - cal_x;
-        mapped_y = BOARD_LCD_PANEL_HEIGHT - 1 - cal_y;
-#elif (BOARD_LCD_ROTATION == 3)
-        mapped_x = BOARD_LCD_PANEL_HEIGHT - 1 - cal_y;
-        mapped_y = cal_x;
-#endif
+        s_active_touch_id = 0xFF;
     }
-
-    // 3. Constrain vào logical dimensions (0 .. BOARD_LCD_WIDTH-1, 0 .. BOARD_LCD_HEIGHT-1)
-    if (mapped_x < 0) mapped_x = 0;
-    if (mapped_x >= BOARD_LCD_WIDTH)  mapped_x = BOARD_LCD_WIDTH - 1;
-    if (mapped_y < 0) mapped_y = 0;
-    if (mapped_y >= BOARD_LCD_HEIGHT) mapped_y = BOARD_LCD_HEIGHT - 1;
-
-    *x = (uint16_t)mapped_x;
-    *y = (uint16_t)mapped_y;
-    return true;
+    publish_touch_snapshot(snapshot);
+    return snapshot.pressed;
 }
 
-bool shared_i2c_touch_has_valid_calibration(void)
+bool shared_i2c_touch_get_snapshot(SharedTouchSnapshot *snapshot)
 {
-    TouchCalibration calibration;
+    if (!snapshot) return false;
     portENTER_CRITICAL(&s_touch_state_mux);
-    calibration = s_calibration;
+    *snapshot = s_touch_snapshot;
     portEXIT_CRITICAL(&s_touch_state_mux);
-    return calibration_metadata_matches(calibration);
+    return snapshot->sequence != 0 || snapshot->timestamp_ms != 0;
 }

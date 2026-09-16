@@ -72,8 +72,7 @@ void setup()
                   lvgl_port_get_color_config_source(),
                   display_state.bgr_order ? "BGR" : "RGB",
                   display_state.inverted ? "ON" : "OFF");
-    Serial.printf("[BOOT] Touch calibration: %s\n",
-                  shared_i2c_touch_has_valid_calibration() ? "VALID" : "INVALID");
+    Serial.println("[BOOT] Touch mapping: BOARD_PROFILE (saved touch_cal ignored)");
 
     // 3. [TOUCH] Thông tin cảm ứng & Trạng thái Probe thật
     Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (Configured: SDA:%d, SCL:%d)\n",

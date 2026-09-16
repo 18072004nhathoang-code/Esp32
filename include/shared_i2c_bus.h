@@ -64,8 +64,32 @@ bool shared_i2c_codec_is_detected(void);
  */
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y);
 
-/** True when the stored affine calibration matches the active display profile. */
-bool shared_i2c_touch_has_valid_calibration(void);
+enum SharedTouchEvent : uint8_t
+{
+    SHARED_TOUCH_EVENT_DOWN = 0,
+    SHARED_TOUCH_EVENT_UP = 1,
+    SHARED_TOUCH_EVENT_CONTACT = 2,
+    SHARED_TOUCH_EVENT_NONE = 3
+};
+
+struct SharedTouchSnapshot
+{
+    bool io_ok;
+    bool sample_valid;
+    bool pressed;
+    uint8_t point_count;
+    uint8_t event;
+    uint8_t touch_id;
+    uint16_t raw_x;
+    uint16_t raw_y;
+    uint16_t mapped_x;
+    uint16_t mapped_y;
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+};
+
+/** Copy the latest touch observation without initiating another I2C transaction. */
+bool shared_i2c_touch_get_snapshot(SharedTouchSnapshot *snapshot);
 
 #ifdef __cplusplus
 }

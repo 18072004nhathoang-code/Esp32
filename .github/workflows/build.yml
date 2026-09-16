@@ -46,7 +46,11 @@ jobs:
           // AI Voice Assistant API Keys
           #define GEMINI_API_KEY              ""
           #define OPENAI_API_KEY              ""
+          #define CAMERA_TLS_CA_CERT          ""
           EOF
+
+      - name: Run behavioral regression tests
+        run: node simulator/regression_test.js
 
       - name: Compile ESP32-S3 Firmware
         run: |
