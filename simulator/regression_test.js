@@ -29,13 +29,17 @@ function transform(rawX, rawY, cfg) {
 }
 
 const es3 = { nativeW: 240, nativeH: 320, logicalW: 240, logicalH: 320, rotation: 2,
-    swap: false, invertX: false, invertY: false };
+    swap: false, invertX: true, invertY: true };
 const diy = { nativeW: 320, nativeH: 480, logicalW: 480, logicalH: 320, rotation: 1,
     swap: false, invertX: false, invertY: false };
 
-assert.deepStrictEqual(transform(0, 0, es3), [239, 319]);
-assert.deepStrictEqual(transform(239, 319, es3), [0, 0]);
-assert.deepStrictEqual(transform(120, 160, es3), [119, 159]);
+// ES3C28P's FT6336 axes already follow the installed portrait orientation.
+// Its 180-degree sensor mounting offset and LCD rotation 2 must cancel out.
+assert.deepStrictEqual(transform(0, 0, es3), [0, 0]);
+assert.deepStrictEqual(transform(239, 0, es3), [239, 0]);
+assert.deepStrictEqual(transform(0, 319, es3), [0, 319]);
+assert.deepStrictEqual(transform(239, 319, es3), [239, 319]);
+assert.deepStrictEqual(transform(120, 160, es3), [120, 160]);
 assert.strictEqual(transform(240, 0, es3), null);
 assert.strictEqual(transform(0, 320, es3), null);
 assert.deepStrictEqual(transform(0, 0, diy), [0, 319]);
@@ -45,12 +49,14 @@ for (const [rotation, logicalW, logicalH, expected] of [
     [0, 240, 320, [0, 0]], [1, 320, 240, [0, 239]],
     [2, 240, 320, [239, 319]], [3, 320, 240, [319, 0]]
 ]) {
-    assert.deepStrictEqual(transform(0, 0, { ...es3, rotation, logicalW, logicalH }), expected);
+    assert.deepStrictEqual(transform(0, 0, {
+        ...es3, rotation, logicalW, logicalH, invertX: false, invertY: false
+    }), expected);
 }
 
 const horizontal = [20, 60, 100].map(x => transform(x, 100, es3));
-assert.deepStrictEqual(horizontal.map(p => p[0]), [219, 179, 139]);
-assert.ok(horizontal.every(p => p[1] === 219));
+assert.deepStrictEqual(horizontal.map(p => p[0]), [20, 60, 100]);
+assert.ok(horizontal.every(p => p[1] === 100));
 const vertical = [20, 60, 100].map(y => transform(50, y, diy));
 assert.deepStrictEqual(vertical.map(p => p[0]), [20, 60, 100]);
 assert.ok(vertical.every(p => p[1] === 269));
