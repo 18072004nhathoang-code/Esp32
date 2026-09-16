@@ -7,7 +7,14 @@ const { BASE_DIR, HOST, resolveRequestPath } = require('./server');
 assert.strictEqual(HOST, process.env.HOST || '127.0.0.1');
 assert.strictEqual(resolveRequestPath('/'), path.join(BASE_DIR, 'index.html'));
 assert.strictEqual(resolveRequestPath('/maps_view.html?x=1'), path.join(BASE_DIR, 'maps_view.html'));
-for (const attack of ['/../platformio.ini', '/%2e%2e/platformio.ini', '/..%5cplatformio.ini', '/%00index.html'])
+for (const attack of [
+    '/../platformio.ini',
+    '/%2e%2e/platformio.ini',
+    '/..%5cplatformio.ini',
+    '/%2e%2e%5cplatformio.ini',
+    '/safe%5c..%5c..%5cplatformio.ini',
+    '/%00index.html'
+])
     assert.strictEqual(resolveRequestPath(attack), null);
 
 function transform(rawX, rawY, cfg) {

@@ -23,6 +23,10 @@ function resolveRequestPath(rawUrl) {
     }
     if (reqPath.includes('\0')) return null;
 
+    // URL paths use '/', but Windows-style separators must be treated as
+    // separators on every host so CI and production enforce the same boundary.
+    reqPath = reqPath.replace(/\\/g, '/');
+
     const resolvedPath = path.resolve(BASE_DIR, `.${reqPath}`);
     const relativePath = path.relative(BASE_DIR, resolvedPath);
     if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
