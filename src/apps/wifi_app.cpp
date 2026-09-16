@@ -306,9 +306,9 @@ void wifi_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(top_bar, 2, 0);
     lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Nút Quét Mạng
+    // Nút Quét Mạng (>= 40x32 hit area)
     btn_scan = lv_btn_create(top_bar);
-    lv_obj_set_size(btn_scan, 84, 28);
+    lv_obj_set_size(btn_scan, 88, 30);
     lv_obj_set_ext_click_area(btn_scan, 4);
     lv_obj_align(btn_scan, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_style_radius(btn_scan, 6, 0);
@@ -318,19 +318,19 @@ void wifi_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_scan_btn = lv_label_create(btn_scan);
     lv_label_set_text(lbl_scan_btn, LV_SYMBOL_REFRESH " Quét");
     lv_obj_set_style_text_color(lbl_scan_btn, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_scan_btn, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_scan_btn, UI_FONT_14, 0);
     lv_obj_center(lbl_scan_btn);
 
     // Nhãn trạng thái quét
     lbl_scan_info = lv_label_create(top_bar);
     lv_label_set_text(lbl_scan_info, "Sẵn sàng");
     lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_scan_info, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_scan_info, UI_FONT_12, 0);
     lv_obj_align(lbl_scan_info, LV_ALIGN_RIGHT_MID, -4, 0);
 
     // 2. DANH SÁCH MẠNG FULL-WIDTH DẠNG LIST CUỘN DỌC
     network_list = lv_list_create(main_container);
-    lv_obj_set_size(network_list, SCREEN_WIDTH - 8, APP_CONTENT_HEIGHT - 44);
+    lv_obj_set_size(network_list, SCREEN_WIDTH - 8, APP_CONTENT_HEIGHT - 40);
     lv_obj_align(network_list, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_obj_set_style_bg_color(network_list, lv_color_hex(COLOR_CARD_BG), 0);
     lv_obj_set_style_border_color(network_list, lv_color_hex(COLOR_CARD_BORDER), 0);
@@ -338,21 +338,21 @@ void wifi_app_open(lv_obj_t *parent)
     lv_obj_set_style_radius(network_list, 10, 0);
     lv_obj_set_style_pad_all(network_list, 4, 0);
 
-    // 3. MODAL NHẬP MẬT KHẨU TOÀN CHIỀU RỘNG (MẶC ĐỊNH ẨN)
+    // 3. MODAL NHẬP MẬT KHẨU LANDSCAPE 320x240 (KHÔNG BỊ BÀN PHÍM CHE NÚT)
     pwd_modal = lv_obj_create(main_container);
     lv_obj_set_size(pwd_modal, SCREEN_WIDTH - 4, APP_CONTENT_HEIGHT);
     lv_obj_center(pwd_modal);
-    lv_obj_set_style_radius(pwd_modal, 12, 0);
+    lv_obj_set_style_radius(pwd_modal, 10, 0);
     lv_obj_set_style_bg_color(pwd_modal, lv_color_hex(0x0B1018), 0);
     lv_obj_set_style_border_color(pwd_modal, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_set_style_border_width(pwd_modal, 1, 0);
-    lv_obj_set_style_pad_all(pwd_modal, 6, 0);
+    lv_obj_set_style_pad_all(pwd_modal, 4, 0);
     lv_obj_clear_flag(pwd_modal, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(pwd_modal, LV_OBJ_FLAG_HIDDEN); // Ẩn ban đầu
+    lv_obj_add_flag(pwd_modal, LV_OBJ_FLAG_HIDDEN);
 
-    // Header modal
+    // Dòng 1: Tiêu đề mạng và nút Đóng (y = 2, h = 24)
     lv_obj_t *m_header = lv_obj_create(pwd_modal);
-    lv_obj_set_size(m_header, SCREEN_WIDTH - 16, 26);
+    lv_obj_set_size(m_header, SCREEN_WIDTH - 12, 24);
     lv_obj_align(m_header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_opa(m_header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(m_header, 0, 0);
@@ -362,11 +362,11 @@ void wifi_app_open(lv_obj_t *parent)
     lbl_target_ssid = lv_label_create(m_header);
     lv_label_set_text(lbl_target_ssid, "Mạng: --");
     lv_obj_set_style_text_color(lbl_target_ssid, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_target_ssid, UI_FONT_12, 0);
-    lv_obj_align(lbl_target_ssid, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_set_style_text_font(lbl_target_ssid, UI_FONT_14, 0);
+    lv_obj_align(lbl_target_ssid, LV_ALIGN_LEFT_MID, 2, 0);
 
     btn_cancel = lv_btn_create(m_header);
-    lv_obj_set_size(btn_cancel, 32, 24);
+    lv_obj_set_size(btn_cancel, 34, 22);
     lv_obj_set_ext_click_area(btn_cancel, 6);
     lv_obj_align(btn_cancel, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_radius(btn_cancel, 6, 0);
@@ -375,67 +375,58 @@ void wifi_app_open(lv_obj_t *parent)
 
     lv_obj_t *lbl_cx = lv_label_create(btn_cancel);
     lv_label_set_text(lbl_cx, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_font(lbl_cx, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_cx, UI_FONT_12, 0);
     lv_obj_center(lbl_cx);
 
-    // Hàng nhập mật khẩu
+    // Dòng 2: Nhập pass + Mắt + Kết nối + Quên mạng (y = 26, h = 32)
     lv_obj_t *pwd_row = lv_obj_create(pwd_modal);
-    lv_obj_set_size(pwd_row, SCREEN_WIDTH - 16, 34);
-    lv_obj_align(pwd_row, LV_ALIGN_TOP_MID, 0, 28);
+    lv_obj_set_size(pwd_row, SCREEN_WIDTH - 12, 32);
+    lv_obj_align(pwd_row, LV_ALIGN_TOP_MID, 0, 26);
     lv_obj_set_style_bg_opa(pwd_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(pwd_row, 0, 0);
     lv_obj_set_style_pad_all(pwd_row, 0, 0);
     lv_obj_clear_flag(pwd_row, LV_OBJ_FLAG_SCROLLABLE);
 
     ta_password = lv_textarea_create(pwd_row);
-    lv_obj_set_size(ta_password, SCREEN_WIDTH - 54, 32);
+    lv_obj_set_size(ta_password, 144, 30);
     lv_obj_align(ta_password, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_textarea_set_placeholder_text(ta_password, "Nhập mật khẩu...");
+    lv_textarea_set_placeholder_text(ta_password, "Mật khẩu...");
     lv_textarea_set_password_mode(ta_password, true);
     lv_textarea_set_one_line(ta_password, true);
     lv_obj_set_style_bg_color(ta_password, lv_color_hex(0x131A26), 0);
     lv_obj_set_style_border_color(ta_password, lv_color_hex(0x2E3B52), 0);
     lv_obj_set_style_text_color(ta_password, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(ta_password, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(ta_password, UI_FONT_14, 0);
 
     btn_eye = lv_btn_create(pwd_row);
-    lv_obj_set_size(btn_eye, 34, 32);
+    lv_obj_set_size(btn_eye, 32, 30);
     lv_obj_set_ext_click_area(btn_eye, 4);
-    lv_obj_align(btn_eye, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_align(btn_eye, LV_ALIGN_LEFT_MID, 148, 0);
     lv_obj_set_style_radius(btn_eye, 6, 0);
     lv_obj_set_style_bg_color(btn_eye, lv_color_hex(0x1E293B), 0);
     lv_obj_add_event_cb(btn_eye, eye_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     lbl_eye = lv_label_create(btn_eye);
     lv_label_set_text(lbl_eye, LV_SYMBOL_EYE_OPEN);
-    lv_obj_set_style_text_font(lbl_eye, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_eye, UI_FONT_12, 0);
     lv_obj_center(lbl_eye);
 
-    // Hàng nút thao tác: Kết nối / Quên mạng
-    lv_obj_t *action_row = lv_obj_create(pwd_modal);
-    lv_obj_set_size(action_row, SCREEN_WIDTH - 16, 32);
-    lv_obj_align(action_row, LV_ALIGN_TOP_MID, 0, 64);
-    lv_obj_set_style_bg_opa(action_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(action_row, 0, 0);
-    lv_obj_set_style_pad_all(action_row, 0, 0);
-    lv_obj_clear_flag(action_row, LV_OBJ_FLAG_SCROLLABLE);
-
-    btn_connect = lv_btn_create(action_row);
-    lv_obj_set_size(btn_connect, 126, 32);
+    btn_connect = lv_btn_create(pwd_row);
+    lv_obj_set_size(btn_connect, 78, 30);
     lv_obj_set_ext_click_area(btn_connect, 4);
-    lv_obj_align(btn_connect, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(btn_connect, LV_ALIGN_LEFT_MID, 184, 0);
     lv_obj_set_style_radius(btn_connect, 6, 0);
     lv_obj_set_style_bg_color(btn_connect, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_add_event_cb(btn_connect, connect_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *lbl_conn = lv_label_create(btn_connect);
-    lv_label_set_text(lbl_conn, LV_SYMBOL_OK " Kết Nối");
+    lv_label_set_text(lbl_conn, LV_SYMBOL_OK " Nối");
     lv_obj_set_style_text_color(lbl_conn, lv_color_hex(0x0A0D14), 0);
     lv_obj_set_style_text_font(lbl_conn, UI_FONT_12, 0);
     lv_obj_center(lbl_conn);
 
-    btn_forget = lv_btn_create(action_row);
-    lv_obj_set_size(btn_forget, 76, 32);
+    btn_forget = lv_btn_create(pwd_row);
+    lv_obj_set_size(btn_forget, 40, 30);
     lv_obj_set_ext_click_area(btn_forget, 4);
     lv_obj_align(btn_forget, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_radius(btn_forget, 6, 0);
@@ -450,17 +441,17 @@ void wifi_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_f, UI_FONT_12, 0);
     lv_obj_center(lbl_f);
 
-    // Nhãn trạng thái
+    // Dòng 3: Nhãn trạng thái (y = 60, h = 18)
     lbl_status = lv_label_create(pwd_modal);
     lv_label_set_text(lbl_status, "Vui lòng nhập mật khẩu");
     lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_status, UI_FONT_10, 0);
-    lv_obj_align(lbl_status, LV_ALIGN_TOP_MID, 0, 98);
+    lv_obj_set_style_text_font(lbl_status, UI_FONT_12, 0);
+    lv_obj_align(lbl_status, LV_ALIGN_TOP_LEFT, 4, 60);
 
-    // Bàn phím ảo LVGL tối ưu cho chiều rộng 240px
+    // Bàn phím ảo LVGL 320x110 đặt dưới đáy
     keyboard = lv_keyboard_create(pwd_modal);
-    lv_obj_set_size(keyboard, SCREEN_WIDTH - 16, 126);
-    lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(keyboard, SCREEN_WIDTH - 12, 110);
+    lv_obj_align(keyboard, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_keyboard_set_textarea(keyboard, ta_password);
     lv_obj_add_event_cb(keyboard, keyboard_event_cb, LV_EVENT_ALL, nullptr);
 
@@ -524,7 +515,7 @@ void wifi_app_update(void)
                 lv_obj_t *empty_lbl = lv_label_create(network_list);
                 lv_label_set_text(empty_lbl, "Không tìm thấy mạng nào.");
                 lv_obj_set_style_text_color(empty_lbl, lv_color_hex(COLOR_TEXT_MUTED), 0);
-                lv_obj_set_style_text_font(empty_lbl, UI_FONT_10, 0);
+                lv_obj_set_style_text_font(empty_lbl, UI_FONT_12, 0);
             }
             else
             {
@@ -535,29 +526,40 @@ void wifi_app_update(void)
                     char safe_ssid[48];
                     sanitize_ssid(net.ssid, safe_ssid, sizeof(safe_ssid));
 
-                    char item_text[72];
-                    snprintf(item_text, sizeof(item_text), "%s (%ddBm)", safe_ssid, (int)net.rssi);
+                    // Custom item row 40px theo chuẩn 38-42px
+                    lv_obj_t *btn = lv_btn_create(network_list);
+                    lv_obj_set_size(btn, SCREEN_WIDTH - 24, 40);
+                    lv_obj_set_style_radius(btn, 8, 0);
+                    lv_obj_set_style_bg_color(btn, lv_color_hex(0x141B26), 0);
+                    lv_obj_set_style_border_color(btn, lv_color_hex(0x222D3E), 0);
+                    lv_obj_set_style_border_width(btn, 1, 0);
+                    lv_obj_set_style_pad_hor(btn, 8, 0);
+                    lv_obj_set_style_pad_ver(btn, 0, 0);
+                    lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
 
+                    // Icon bên trái
+                    lv_obj_t *icon_lbl = lv_label_create(btn);
                     const char *sym = !net.is_encrypted ? LV_SYMBOL_WIFI : LV_SYMBOL_EYE_CLOSE;
-                    lv_obj_t *btn = lv_list_add_btn(network_list, sym, item_text);
-                    lv_obj_set_style_radius(btn, 6, 0);
-                    lv_obj_set_style_bg_color(btn, lv_color_hex(0x151B27), 0);
-                    lv_obj_set_style_pad_ver(btn, 8, 0);
-                    lv_obj_set_style_pad_hor(btn, 6, 0);
-                    lv_obj_set_style_text_color(btn, lv_color_hex(COLOR_TEXT_WHITE), 0);
-                    lv_obj_set_style_text_font(btn, UI_FONT_12, 0);
+                    lv_label_set_text(icon_lbl, sym);
+                    lv_obj_set_style_text_color(icon_lbl, net.is_encrypted ? lv_color_hex(COLOR_ACCENT_AMBER) : lv_color_hex(COLOR_ACCENT_GREEN), 0);
+                    lv_obj_set_style_text_font(icon_lbl, UI_FONT_14, 0);
+                    lv_obj_align(icon_lbl, LV_ALIGN_LEFT_MID, 4, 0);
 
-                    // Ellipsis cho SSID dài
-                    uint32_t child_cnt = lv_obj_get_child_cnt(btn);
-                    if (child_cnt >= 2)
-                    {
-                        lv_obj_t *btn_lbl = lv_obj_get_child(btn, 1);
-                        if (btn_lbl)
-                        {
-                            lv_label_set_long_mode(btn_lbl, LV_LABEL_LONG_DOT);
-                            lv_obj_set_width(btn_lbl, SCREEN_WIDTH - 64);
-                        }
-                    }
+                    // SSID (14px SemiBold)
+                    lv_obj_t *ssid_lbl = lv_label_create(btn);
+                    lv_label_set_text(ssid_lbl, safe_ssid);
+                    lv_label_set_long_mode(ssid_lbl, LV_LABEL_LONG_DOT);
+                    lv_obj_set_width(ssid_lbl, 190);
+                    lv_obj_set_style_text_color(ssid_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
+                    lv_obj_set_style_text_font(ssid_lbl, UI_FONT_14, 0);
+                    lv_obj_align(ssid_lbl, LV_ALIGN_LEFT_MID, 28, 0);
+
+                    // RSSI (12px bên phải)
+                    lv_obj_t *rssi_lbl = lv_label_create(btn);
+                    lv_label_set_text_fmt(rssi_lbl, "%d dBm", (int)net.rssi);
+                    lv_obj_set_style_text_color(rssi_lbl, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+                    lv_obj_set_style_text_font(rssi_lbl, UI_FONT_12, 0);
+                    lv_obj_align(rssi_lbl, LV_ALIGN_RIGHT_MID, -4, 0);
 
                     // Callback khi chọn mạng
                     lv_obj_add_event_cb(btn, network_item_clicked_cb, LV_EVENT_CLICKED, (void *)net.ssid);

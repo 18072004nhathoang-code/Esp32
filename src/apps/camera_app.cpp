@@ -15,8 +15,8 @@
 static lv_obj_t *main_container = nullptr;
 static lv_obj_t *cam_canvas = nullptr;
 static lv_color_t *cam_canvas_buf = nullptr;
-static uint16_t canvas_w = 236;
-static uint16_t canvas_h = 176;
+static uint16_t canvas_w = 224;
+static uint16_t canvas_h = 188;
 
 static lv_obj_t *toolbar_box = nullptr;
 static lv_obj_t *lbl_metrics = nullptr;
@@ -223,22 +223,22 @@ void camera_app_open(lv_obj_t *parent)
         }
     }
 
-    // 2. VÙNG KHUNG HÌNH CAMERA ƯU TIÊN LỚN (236x176)
+    // 2. VÙNG KHUNG HÌNH CAMERA ƯU TIÊN LỚN (224x188) BÊN TRÁI
     cam_canvas = lv_canvas_create(parent);
     if (cam_canvas_buf)
     {
         lv_canvas_set_buffer(cam_canvas, cam_canvas_buf, canvas_w, canvas_h, LV_IMG_CF_TRUE_COLOR);
     }
     lv_obj_set_size(cam_canvas, canvas_w, canvas_h);
-    lv_obj_align(cam_canvas, LV_ALIGN_TOP_MID, 0, 2);
+    lv_obj_align(cam_canvas, LV_ALIGN_LEFT_MID, 4, 0);
     lv_obj_set_style_border_color(cam_canvas, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_border_width(cam_canvas, 1, 0);
     lv_obj_set_style_radius(cam_canvas, 8, 0);
 
-    // 3. TOOLBAR NHỎ PHÍA DƯỚI (KHÔNG CHE VÙNG ẢNH)
+    // 3. TOOLBAR ĐIỀU KHIỂN DỌC BÊN PHẢI (84x188)
     toolbar_box = lv_obj_create(parent);
-    lv_obj_set_size(toolbar_box, SCREEN_WIDTH - 6, APP_CONTENT_HEIGHT - canvas_h - 10);
-    lv_obj_align(toolbar_box, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_size(toolbar_box, 84, 188);
+    lv_obj_align(toolbar_box, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_bg_color(toolbar_box, lv_color_hex(COLOR_CARD_BG), 0);
     lv_obj_set_style_border_color(toolbar_box, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_border_width(toolbar_box, 1, 0);
@@ -246,20 +246,11 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(toolbar_box, 4, 0);
     lv_obj_clear_flag(toolbar_box, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Hàng nút điều khiển nhỏ: Chụp lại / Cấu hình / Ngắt (Touch Target >= 32px)
-    lv_obj_t *btn_row = lv_obj_create(toolbar_box);
-    lv_obj_set_size(btn_row, SCREEN_WIDTH - 16, 34);
-    lv_obj_align(btn_row, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(btn_row, 0, 0);
-    lv_obj_set_style_pad_all(btn_row, 0, 0);
-    lv_obj_clear_flag(btn_row, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Nút Snapshot
-    btn_snap = lv_btn_create(btn_row);
-    lv_obj_set_size(btn_snap, 72, 32);
+    // Nút Snapshot (36px height)
+    btn_snap = lv_btn_create(toolbar_box);
+    lv_obj_set_size(btn_snap, 74, 36);
     lv_obj_set_ext_click_area(btn_snap, 4);
-    lv_obj_align(btn_snap, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(btn_snap, LV_ALIGN_TOP_MID, 0, 2);
     lv_obj_set_style_radius(btn_snap, 6, 0);
     lv_obj_set_style_bg_color(btn_snap, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_add_event_cb(btn_snap, btn_snap_cb, LV_EVENT_CLICKED, nullptr);
@@ -267,14 +258,14 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_snap = lv_label_create(btn_snap);
     lv_label_set_text(lbl_snap, LV_SYMBOL_REFRESH " Chụp");
     lv_obj_set_style_text_color(lbl_snap, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_text_font(lbl_snap, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_snap, UI_FONT_12, 0);
     lv_obj_center(lbl_snap);
 
-    // Nút Cấu hình
-    btn_cfg = lv_btn_create(btn_row);
-    lv_obj_set_size(btn_cfg, 76, 32);
+    // Nút Cấu hình (36px height)
+    btn_cfg = lv_btn_create(toolbar_box);
+    lv_obj_set_size(btn_cfg, 74, 36);
     lv_obj_set_ext_click_area(btn_cfg, 4);
-    lv_obj_align(btn_cfg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(btn_cfg, LV_ALIGN_TOP_MID, 0, 42);
     lv_obj_set_style_radius(btn_cfg, 6, 0);
     lv_obj_set_style_bg_color(btn_cfg, lv_color_hex(0x1F2A3D), 0);
     lv_obj_set_style_border_color(btn_cfg, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
@@ -282,16 +273,16 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(btn_cfg, btn_cfg_cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *lbl_cfg = lv_label_create(btn_cfg);
-    lv_label_set_text(lbl_cfg, LV_SYMBOL_SETTINGS " Cài đặt");
+    lv_label_set_text(lbl_cfg, LV_SYMBOL_SETTINGS " Cài");
     lv_obj_set_style_text_color(lbl_cfg, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_cfg, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_cfg, UI_FONT_12, 0);
     lv_obj_center(lbl_cfg);
 
-    // Nút Ngắt kết nối
-    btn_disconnect = lv_btn_create(btn_row);
-    lv_obj_set_size(btn_disconnect, 68, 32);
+    // Nút Dừng (36px height)
+    btn_disconnect = lv_btn_create(toolbar_box);
+    lv_obj_set_size(btn_disconnect, 74, 36);
     lv_obj_set_ext_click_area(btn_disconnect, 4);
-    lv_obj_align(btn_disconnect, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_align(btn_disconnect, LV_ALIGN_TOP_MID, 0, 82);
     lv_obj_set_style_radius(btn_disconnect, 6, 0);
     lv_obj_set_style_bg_color(btn_disconnect, lv_color_hex(0x281B24), 0);
     lv_obj_set_style_border_color(btn_disconnect, lv_color_hex(COLOR_ACCENT_RED), 0);
@@ -301,22 +292,24 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_dis = lv_label_create(btn_disconnect);
     lv_label_set_text(lbl_dis, LV_SYMBOL_POWER " Dừng");
     lv_obj_set_style_text_color(lbl_dis, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(lbl_dis, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_dis, UI_FONT_12, 0);
     lv_obj_center(lbl_dis);
 
-    // Dòng thông số thực tế (FPS, Độ phân giải, Độ trễ)
+    // Dòng thông số thực tế (FPS, Latency)
     lbl_metrics = lv_label_create(toolbar_box);
-    lv_label_set_text(lbl_metrics, "FPS: 0.0 • 0x0 • 0 KB • 0ms");
+    lv_label_set_text(lbl_metrics, "FPS: 0.0\n0x0 • 0ms");
     lv_obj_set_style_text_color(lbl_metrics, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(lbl_metrics, UI_FONT_10, 0);
-    lv_obj_align(lbl_metrics, LV_ALIGN_BOTTOM_LEFT, 2, -18);
+    lv_obj_align(lbl_metrics, LV_ALIGN_TOP_MID, 0, 122);
+    lv_obj_set_style_text_align(lbl_metrics, LV_TEXT_ALIGN_CENTER, 0);
 
     // Dòng trạng thái nguồn & Năng lực thực
     lbl_cam_status = lv_label_create(toolbar_box);
-    lv_label_set_text(lbl_cam_status, "HTTP Snap: Sẵn sàng | ONVIF/RTSP: Chưa hỗ trợ");
+    lv_label_set_text(lbl_cam_status, "HTTP Snap");
     lv_obj_set_style_text_color(lbl_cam_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_cam_status, UI_FONT_10, 0);
-    lv_obj_align(lbl_cam_status, LV_ALIGN_BOTTOM_LEFT, 2, -2);
+    lv_obj_align(lbl_cam_status, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_text_align(lbl_cam_status, LV_TEXT_ALIGN_CENTER, 0);
 
     // 4. MODAL CẤU HÌNH CAMERA CUỘN DỌC (MẶC ĐỊNH ẨN)
     cfg_modal = lv_obj_create(parent);

@@ -155,12 +155,14 @@ bool lvgl_port_init(void)
         return false;
     }
 
-    // Xoay màn hình sang chế độ dọc (Portrait 240x320) chuẩn Mini OS
+    // Cấu hình xoay màn hình (Landscape Flipped 320x240 trên ES3C28P)
 #if defined(BOARD_LCD_ROTATION)
     gfx.setRotation(BOARD_LCD_ROTATION);
 #else
-    gfx.setRotation(0); // Mặc định Portrait (240x320)
+    gfx.setRotation(3); // Mặc định Landscape Flipped (320x240)
 #endif
+    log_i("Màn hình: %dx%d, Rotation: %d (Landscape Flipped)", DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION);
+    Serial.printf("[LVGL] Màn hình: %dx%d, Rotation: %d (Landscape Flipped)\n", DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION);
     
     // Thiết lập độ sáng ban đầu
     lvgl_port_set_brightness(current_brightness);

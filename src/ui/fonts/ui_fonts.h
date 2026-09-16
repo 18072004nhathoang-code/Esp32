@@ -23,6 +23,11 @@ extern const lv_font_t ui_font_16;
 #define UI_FONT_14 (&ui_font_14)
 #define UI_FONT_16 (&ui_font_16)
 
+#define UI_FONT_SMALL  (&ui_font_10)
+#define UI_FONT_BODY   (&ui_font_14)
+#define UI_FONT_BUTTON (&ui_font_14)
+#define UI_FONT_TITLE  (&ui_font_16)
+
 #ifdef __cplusplus
 }
 #endif

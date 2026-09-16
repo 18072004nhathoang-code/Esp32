@@ -191,6 +191,21 @@ bool shared_i2c_codec_is_detected(void)
     return s_codec_detected;
 }
 
+static uint16_t s_last_raw_x = 0;
+static uint16_t s_last_raw_y = 0;
+static uint16_t s_last_mapped_x = 0;
+static uint16_t s_last_mapped_y = 0;
+static bool s_is_touched = false;
+
+bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y, uint16_t *mapped_x, uint16_t *mapped_y)
+{
+    if (raw_x) *raw_x = s_last_raw_x;
+    if (raw_y) *raw_y = s_last_raw_y;
+    if (mapped_x) *mapped_x = s_last_mapped_x;
+    if (mapped_y) *mapped_y = s_last_mapped_y;
+    return s_is_touched;
+}
+
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
 {
     if (!s_touch_detected || !x || !y) return false;
@@ -220,37 +235,66 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
     shared_i2c_unlock();
 
     uint8_t touches = buf[0] & 0x0F;
-    if (touches == 0 || touches > 2) return false;
+    if (touches == 0 || touches > 2)
+    {
+        s_is_touched = false;
+        return false;
+    }
 
     uint16_t raw_x = ((uint16_t)(buf[1] & 0x0F) << 8) | buf[2];
     uint16_t raw_y = ((uint16_t)(buf[3] & 0x0F) << 8) | buf[4];
 
-    // Chuẩn hóa tọa độ theo BOARD_LCD_ROTATION
+    // 1. Áp dụng calibration trước rotation
+    int32_t cal_x = raw_x;
+    int32_t cal_y = raw_y;
+
+#if defined(BOARD_TOUCH_SWAP_XY) && BOARD_TOUCH_SWAP_XY
+    int32_t tmp = cal_x; cal_x = cal_y; cal_y = tmp;
+#endif
+
+#if defined(BOARD_TOUCH_INVERT_X) && BOARD_TOUCH_INVERT_X
+    cal_x = (BOARD_LCD_PANEL_WIDTH - 1) - cal_x;
+#endif
+
+#if defined(BOARD_TOUCH_INVERT_Y) && BOARD_TOUCH_INVERT_Y
+    cal_y = (BOARD_LCD_PANEL_HEIGHT - 1) - cal_y;
+#endif
+
+    // 2. Transform theo BOARD_LCD_ROTATION dựa trên native panel dimensions
 #ifndef BOARD_LCD_ROTATION
 #define BOARD_LCD_ROTATION 0
 #endif
 
-    uint16_t mapped_x = raw_x;
-    uint16_t mapped_y = raw_y;
+    int32_t mapped_x = cal_x;
+    int32_t mapped_y = cal_y;
 
 #if (BOARD_LCD_ROTATION == 0)
-    mapped_x = raw_x;
-    mapped_y = raw_y;
+    mapped_x = cal_x;
+    mapped_y = cal_y;
 #elif (BOARD_LCD_ROTATION == 1)
-    mapped_x = raw_y;
-    mapped_y = (BOARD_LCD_WIDTH > raw_x) ? (BOARD_LCD_WIDTH - 1 - raw_x) : 0;
+    mapped_x = cal_y;
+    mapped_y = BOARD_LCD_PANEL_WIDTH - 1 - cal_x;
 #elif (BOARD_LCD_ROTATION == 2)
-    mapped_x = (BOARD_LCD_WIDTH > raw_x) ? (BOARD_LCD_WIDTH - 1 - raw_x) : 0;
-    mapped_y = (BOARD_LCD_HEIGHT > raw_y) ? (BOARD_LCD_HEIGHT - 1 - raw_y) : 0;
+    mapped_x = BOARD_LCD_PANEL_WIDTH - 1 - cal_x;
+    mapped_y = BOARD_LCD_PANEL_HEIGHT - 1 - cal_y;
 #elif (BOARD_LCD_ROTATION == 3)
-    mapped_x = (BOARD_LCD_HEIGHT > raw_y) ? (BOARD_LCD_HEIGHT - 1 - raw_y) : 0;
-    mapped_y = raw_x;
+    mapped_x = BOARD_LCD_PANEL_HEIGHT - 1 - cal_y;
+    mapped_y = cal_x;
 #endif
 
+    // 3. Constrain vào logical dimensions (0 .. BOARD_LCD_WIDTH-1, 0 .. BOARD_LCD_HEIGHT-1)
+    if (mapped_x < 0) mapped_x = 0;
     if (mapped_x >= BOARD_LCD_WIDTH)  mapped_x = BOARD_LCD_WIDTH - 1;
+    if (mapped_y < 0) mapped_y = 0;
     if (mapped_y >= BOARD_LCD_HEIGHT) mapped_y = BOARD_LCD_HEIGHT - 1;
 
-    *x = mapped_x;
-    *y = mapped_y;
+    s_last_raw_x = raw_x;
+    s_last_raw_y = raw_y;
+    s_last_mapped_x = (uint16_t)mapped_x;
+    s_last_mapped_y = (uint16_t)mapped_y;
+    s_is_touched = true;
+
+    *x = (uint16_t)mapped_x;
+    *y = (uint16_t)mapped_y;
     return true;
 }

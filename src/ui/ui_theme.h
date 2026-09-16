@@ -21,17 +21,17 @@
 #endif
 
 #define STATUS_BAR_HEIGHT    22
-#define APP_HEADER_HEIGHT    28
-#define DOCK_HEIGHT          52
-#define APP_CONTENT_HEIGHT   (SCREEN_HEIGHT - STATUS_BAR_HEIGHT - APP_HEADER_HEIGHT) // 270 px
-#define DESKTOP_GRID_HEIGHT  (SCREEN_HEIGHT - STATUS_BAR_HEIGHT - DOCK_HEIGHT)       // 246 px
+#define APP_HEADER_HEIGHT    24
+#define DOCK_HEIGHT          44
+#define APP_CONTENT_HEIGHT   (SCREEN_HEIGHT - STATUS_BAR_HEIGHT - APP_HEADER_HEIGHT)
+#define DESKTOP_GRID_HEIGHT  (SCREEN_HEIGHT - STATUS_BAR_HEIGHT - DOCK_HEIGHT)
 
 // Touch accessibility & widget dimensions
 #define MIN_TOUCH_SIZE       32
-#define APP_ICON_BOX_SIZE    44   // 38-48px per requirement
-#define APP_ICON_RADIUS      14   // iOS squircle radius
-#define DOCK_ICON_BOX_SIZE   40
-#define DOCK_ICON_RADIUS     12
+#define APP_ICON_BOX_SIZE    40   // 38-44px per requirement
+#define APP_ICON_RADIUS      12   // iOS squircle radius
+#define DOCK_ICON_BOX_SIZE   36
+#define DOCK_ICON_RADIUS     10
 
 // Animation timings (native LVGL 120-250ms)
 #define ANIM_TIME_FAST_MS    140

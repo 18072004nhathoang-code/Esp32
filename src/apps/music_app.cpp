@@ -118,7 +118,7 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(main_container, 4, 0);
     lv_obj_clear_flag(main_container, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Card chính bao trọn khung dọc 240x320
+    // Card chính bao trọn khung dọc/ngang
     player_card = lv_obj_create(main_container);
     lv_obj_set_size(player_card, SCREEN_WIDTH - 8, APP_CONTENT_HEIGHT - 6);
     lv_obj_center(player_card);
@@ -129,11 +129,11 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(player_card, 6, 0);
     lv_obj_clear_flag(player_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 1. ARTWORK ĐĨA THAN QUAY NHỎ TRÊN CÙNG (Y = 2)
+    // 1. ARTWORK ĐĨA THAN QUAY BÊN TRÁI (Size 88x88)
     vinyl_disc = lv_obj_create(player_card);
-    lv_obj_set_size(vinyl_disc, 68, 68);
-    lv_obj_align(vinyl_disc, LV_ALIGN_TOP_MID, 0, 4);
-    lv_obj_set_style_radius(vinyl_disc, 34, 0);
+    lv_obj_set_size(vinyl_disc, 88, 88);
+    lv_obj_align(vinyl_disc, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_radius(vinyl_disc, 44, 0);
     lv_obj_set_style_bg_color(vinyl_disc, lv_color_hex(0x0C0E14), 0);
     lv_obj_set_style_border_color(vinyl_disc, lv_color_hex(0x2A3346), 0);
     lv_obj_set_style_border_width(vinyl_disc, 3, 0);
@@ -141,9 +141,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Vòng rãnh đĩa than
     lv_obj_t *groove = lv_obj_create(vinyl_disc);
-    lv_obj_set_size(groove, 48, 48);
+    lv_obj_set_size(groove, 60, 60);
     lv_obj_center(groove);
-    lv_obj_set_style_radius(groove, 24, 0);
+    lv_obj_set_style_radius(groove, 30, 0);
     lv_obj_set_style_bg_opa(groove, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_color(groove, lv_color_hex(0x1F2837), 0);
     lv_obj_set_style_border_width(groove, 1, 0);
@@ -151,9 +151,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Tâm nhãn đĩa màu Tím Neon
     lv_obj_t *vinyl_label = lv_obj_create(vinyl_disc);
-    lv_obj_set_size(vinyl_label, 26, 26);
+    lv_obj_set_size(vinyl_label, 32, 32);
     lv_obj_center(vinyl_label);
-    lv_obj_set_style_radius(vinyl_label, 13, 0);
+    lv_obj_set_style_radius(vinyl_label, 16, 0);
     lv_obj_set_style_bg_color(vinyl_label, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_border_color(vinyl_label, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_set_style_border_width(vinyl_label, 2, 0);
@@ -161,9 +161,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Lỗ tâm trục đĩa
     lv_obj_t *spindle_hole = lv_obj_create(vinyl_label);
-    lv_obj_set_size(spindle_hole, 6, 6);
+    lv_obj_set_size(spindle_hole, 8, 8);
     lv_obj_center(spindle_hole);
-    lv_obj_set_style_radius(spindle_hole, 3, 0);
+    lv_obj_set_style_radius(spindle_hole, 4, 0);
     lv_obj_set_style_bg_color(spindle_hole, lv_color_hex(0x0A0D14), 0);
     lv_obj_set_style_border_width(spindle_hole, 0, 0);
     lv_obj_clear_flag(spindle_hole, LV_OBJ_FLAG_SCROLLABLE);
@@ -177,14 +177,14 @@ void music_app_open(lv_obj_t *parent)
     lv_anim_set_exec_cb(&vinyl_anim, anim_vinyl_rotate_cb);
     vinyl_anim_running = false;
 
-    // 2. TÊN BÀI HÁT & THÔNG TIN
+    // 2. CỘT PHẢI: TÊN BÀI HÁT & THÔNG TIN (X = 106)
     lbl_track_title = lv_label_create(player_card);
     lv_label_set_long_mode(lbl_track_title, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_width(lbl_track_title, 204);
-    lv_obj_align(lbl_track_title, LV_ALIGN_TOP_MID, 0, 78);
-    lv_obj_set_style_text_align(lbl_track_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(lbl_track_title, 186);
+    lv_obj_align(lbl_track_title, LV_ALIGN_TOP_RIGHT, -6, 2);
+    lv_obj_set_style_text_align(lbl_track_title, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(lbl_track_title, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_track_title, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_track_title, UI_FONT_14, 0);
 
     const MusicTrack *cur_track = music_player_get_track(music_player_get_current_index());
     if (cur_track)
@@ -199,13 +199,14 @@ void music_app_open(lv_obj_t *parent)
     lbl_track_meta = lv_label_create(player_card);
     lv_label_set_text_fmt(lbl_track_meta, "SD Card MP3 • %d bài", music_player_get_track_count());
     lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_track_meta, UI_FONT_10, 0);
-    lv_obj_align(lbl_track_meta, LV_ALIGN_TOP_MID, 0, 96);
+    lv_obj_set_style_text_font(lbl_track_meta, UI_FONT_12, 0);
+    lv_obj_set_width(lbl_track_meta, 186);
+    lv_obj_align(lbl_track_meta, LV_ALIGN_TOP_RIGHT, -6, 24);
 
     // 3. THANH TIẾN TRÌNH (SEEK SLIDER) VÀ THỜI GIAN
     slider_progress = lv_slider_create(player_card);
-    lv_obj_set_size(slider_progress, 196, 6);
-    lv_obj_align(slider_progress, LV_ALIGN_TOP_MID, 0, 116);
+    lv_obj_set_size(slider_progress, 186, 6);
+    lv_obj_align(slider_progress, LV_ALIGN_TOP_RIGHT, -6, 44);
     lv_slider_set_range(slider_progress, 0, 100);
     lv_slider_set_value(slider_progress, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(slider_progress, lv_color_hex(0x1F2937), LV_PART_MAIN);
@@ -214,23 +215,23 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(slider_progress, 2, LV_PART_KNOB);
     lv_obj_add_event_cb(slider_progress, progress_slider_event_cb, LV_EVENT_ALL, nullptr);
 
-    // Thời gian hiện tại (Trái) & Tổng thời lượng (Phải)
+    // Thời gian hiện tại (Trái cột phải) & Tổng thời lượng (Phải cột phải)
     lbl_cur_time = lv_label_create(player_card);
     lv_label_set_text(lbl_cur_time, "00:00");
     lv_obj_set_style_text_color(lbl_cur_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_cur_time, UI_FONT_10, 0);
-    lv_obj_align(lbl_cur_time, LV_ALIGN_TOP_LEFT, 10, 126);
+    lv_obj_align(lbl_cur_time, LV_ALIGN_TOP_RIGHT, -152, 54);
 
     lbl_total_time = lv_label_create(player_card);
     lv_label_set_text(lbl_total_time, "00:00");
     lv_obj_set_style_text_color(lbl_total_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_total_time, UI_FONT_10, 0);
-    lv_obj_align(lbl_total_time, LV_ALIGN_TOP_RIGHT, -10, 126);
+    lv_obj_align(lbl_total_time, LV_ALIGN_TOP_RIGHT, -6, 54);
 
-    // 4. HÀNG ĐIỀU KHIỂN CẢM ỨNG: PREV - PLAY/PAUSE - NEXT (Nút tối thiểu >= 32x32)
+    // 4. HÀNG ĐIỀU KHIỂN CẢM ỨNG: PREV - PLAY/PAUSE - NEXT (Nút tối thiểu >= 36px)
     lv_obj_t *ctrl_row = lv_obj_create(player_card);
-    lv_obj_set_size(ctrl_row, 196, 52);
-    lv_obj_align(ctrl_row, LV_ALIGN_TOP_MID, 0, 142);
+    lv_obj_set_size(ctrl_row, 186, 48);
+    lv_obj_align(ctrl_row, LV_ALIGN_TOP_RIGHT, -6, 72);
     lv_obj_set_style_bg_opa(ctrl_row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ctrl_row, 0, 0);
     lv_obj_set_style_pad_all(ctrl_row, 0, 0);
@@ -238,9 +239,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Nút Previous
     lv_obj_t *btn_prev = lv_btn_create(ctrl_row);
-    lv_obj_set_size(btn_prev, 38, 38);
-    lv_obj_align(btn_prev, LV_ALIGN_LEFT_MID, 16, 0);
-    lv_obj_set_style_radius(btn_prev, 19, 0);
+    lv_obj_set_size(btn_prev, 36, 36);
+    lv_obj_align(btn_prev, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_set_style_radius(btn_prev, 18, 0);
     lv_obj_set_style_bg_color(btn_prev, lv_color_hex(0x1F2837), 0);
     lv_obj_set_style_border_color(btn_prev, lv_color_hex(0x374151), 0);
     lv_obj_set_style_border_width(btn_prev, 1, 0);
@@ -251,13 +252,13 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_prev, UI_FONT_12, 0);
     lv_obj_center(lbl_prev);
 
-    // Nút Play/Pause chính (Nổi bật 46x46)
+    // Nút Play/Pause chính (Nổi bật 44x44)
     btn_play = lv_btn_create(ctrl_row);
-    lv_obj_set_size(btn_play, 46, 46);
+    lv_obj_set_size(btn_play, 44, 44);
     lv_obj_align(btn_play, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_radius(btn_play, 23, 0);
+    lv_obj_set_style_radius(btn_play, 22, 0);
     lv_obj_set_style_bg_color(btn_play, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_shadow_width(btn_play, 10, 0);
+    lv_obj_set_style_shadow_width(btn_play, 8, 0);
     lv_obj_set_style_shadow_color(btn_play, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_shadow_opa(btn_play, LV_OPA_50, 0);
     lv_obj_add_event_cb(btn_play, play_btn_click_cb, LV_EVENT_CLICKED, nullptr);
@@ -270,9 +271,9 @@ void music_app_open(lv_obj_t *parent)
 
     // Nút Next
     lv_obj_t *btn_next = lv_btn_create(ctrl_row);
-    lv_obj_set_size(btn_next, 38, 38);
-    lv_obj_align(btn_next, LV_ALIGN_RIGHT_MID, -16, 0);
-    lv_obj_set_style_radius(btn_next, 19, 0);
+    lv_obj_set_size(btn_next, 36, 36);
+    lv_obj_align(btn_next, LV_ALIGN_RIGHT_MID, -12, 0);
+    lv_obj_set_style_radius(btn_next, 18, 0);
     lv_obj_set_style_bg_color(btn_next, lv_color_hex(0x1F2837), 0);
     lv_obj_set_style_border_color(btn_next, lv_color_hex(0x374151), 0);
     lv_obj_set_style_border_width(btn_next, 1, 0);
@@ -283,26 +284,26 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_next, UI_FONT_12, 0);
     lv_obj_center(lbl_next);
 
-    // 5. THANH DƯỚI CÙNG: THANH ÂM LƯỢNG & NÚT MỞ PLAYLIST
+    // 5. HÀNG DƯỚI CỘT PHẢI: THANH ÂM LƯỢNG & NÚT MỞ PLAYLIST
     lv_obj_t *bottom_row = lv_obj_create(player_card);
-    lv_obj_set_size(bottom_row, 204, 38);
-    lv_obj_align(bottom_row, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_size(bottom_row, 186, 34);
+    lv_obj_align(bottom_row, LV_ALIGN_TOP_RIGHT, -6, 126);
     lv_obj_set_style_bg_color(bottom_row, lv_color_hex(0x0F141F), 0);
     lv_obj_set_style_border_color(bottom_row, lv_color_hex(0x202B3D), 0);
     lv_obj_set_style_border_width(bottom_row, 1, 0);
-    lv_obj_set_style_radius(bottom_row, 10, 0);
-    lv_obj_set_style_pad_hor(bottom_row, 6, 0);
-    lv_obj_set_style_pad_ver(bottom_row, 4, 0);
+    lv_obj_set_style_radius(bottom_row, 8, 0);
+    lv_obj_set_style_pad_hor(bottom_row, 4, 0);
+    lv_obj_set_style_pad_ver(bottom_row, 2, 0);
     lv_obj_clear_flag(bottom_row, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl_spk = lv_label_create(bottom_row);
     lv_label_set_text(lbl_spk, LV_SYMBOL_VOLUME_MAX);
     lv_obj_set_style_text_color(lbl_spk, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_spk, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_spk, UI_FONT_12, 0);
     lv_obj_align(lbl_spk, LV_ALIGN_LEFT_MID, 2, 0);
 
     slider_volume = lv_slider_create(bottom_row);
-    lv_obj_set_size(slider_volume, 84, 6);
+    lv_obj_set_size(slider_volume, 68, 6);
     lv_obj_align(slider_volume, LV_ALIGN_LEFT_MID, 20, 0);
     lv_slider_set_range(slider_volume, 0, 100);
     lv_slider_set_value(slider_volume, music_player_get_volume(), LV_ANIM_OFF);
@@ -314,12 +315,12 @@ void music_app_open(lv_obj_t *parent)
     lbl_vol_val = lv_label_create(bottom_row);
     lv_label_set_text_fmt(lbl_vol_val, "%d%%", music_player_get_volume());
     lv_obj_set_style_text_color(lbl_vol_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_vol_val, UI_FONT_10, 0);
-    lv_obj_align(lbl_vol_val, LV_ALIGN_LEFT_MID, 110, 0);
+    lv_obj_set_style_text_font(lbl_vol_val, UI_FONT_12, 0);
+    lv_obj_align(lbl_vol_val, LV_ALIGN_LEFT_MID, 94, 0);
 
     // Nút mở Playlist Drawer
     lv_obj_t *btn_playlist = lv_btn_create(bottom_row);
-    lv_obj_set_size(btn_playlist, 48, 26);
+    lv_obj_set_size(btn_playlist, 42, 26);
     lv_obj_align(btn_playlist, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_radius(btn_playlist, 6, 0);
     lv_obj_set_style_bg_color(btn_playlist, lv_color_hex(0x1E293B), 0);
@@ -346,7 +347,7 @@ void music_app_open(lv_obj_t *parent)
 
     // Header modal
     lv_obj_t *pl_header = lv_obj_create(playlist_modal);
-    lv_obj_set_size(pl_header, SCREEN_WIDTH - 24, 26);
+    lv_obj_set_size(pl_header, SCREEN_WIDTH - 24, 28);
     lv_obj_align(pl_header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_opa(pl_header, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(pl_header, 0, 0);
@@ -356,11 +357,11 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_t *pl_title = lv_label_create(pl_header);
     lv_label_set_text(pl_title, LV_SYMBOL_DIRECTORY " Danh Sách /music");
     lv_obj_set_style_text_color(pl_title, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(pl_title, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(pl_title, UI_FONT_14, 0);
     lv_obj_align(pl_title, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *btn_close_pl = lv_btn_create(pl_header);
-    lv_obj_set_size(btn_close_pl, 26, 22);
+    lv_obj_set_size(btn_close_pl, 32, 26);
     lv_obj_align(btn_close_pl, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_radius(btn_close_pl, 6, 0);
     lv_obj_set_style_bg_color(btn_close_pl, lv_color_hex(COLOR_ACCENT_RED), 0);
@@ -368,7 +369,7 @@ void music_app_open(lv_obj_t *parent)
 
     lv_obj_t *lbl_x = lv_label_create(btn_close_pl);
     lv_label_set_text(lbl_x, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_font(lbl_x, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_x, UI_FONT_12, 0);
     lv_obj_center(lbl_x);
 
     // Danh sách cuộn toàn chiều rộng
@@ -389,10 +390,10 @@ void music_app_open(lv_obj_t *parent)
         lv_obj_t *btn = lv_list_add_btn(music_list, LV_SYMBOL_AUDIO, track->title);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x182030), 0);
-        lv_obj_set_style_pad_ver(btn, 6, 0);
-        lv_obj_set_style_pad_hor(btn, 6, 0);
+        lv_obj_set_style_pad_ver(btn, 8, 0);
+        lv_obj_set_style_pad_hor(btn, 8, 0);
         lv_obj_set_style_text_color(btn, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(btn, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(btn, UI_FONT_12, 0);
         lv_obj_add_event_cb(btn, track_item_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
     }
 }

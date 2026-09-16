@@ -13,8 +13,8 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 
 1. **ES3C28P 2.8" IPS HMI (Mặc định)**:
    - Bo mạch thông minh chuyên dụng trợ lý ảo AI (Xiaozhi/ChatGPT, Cheap Black Display).
-   - Màn hình 2.8 inch IPS 240x320 Portrait chuẩn Mobile OS (Orientation: Portrait 240x320) IC điều khiển ILI9341V.
-   - Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`).
+   - Màn hình 2.8 inch IPS panel native 240x320, hiển thị ở chế độ **Landscape Flipped 320x240** (`BOARD_LCD_ROTATION 3`) cho không gian điều khiển ngang tối ưu.
+   - Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`) với cơ chế ánh xạ ma trận xoay phần cứng sang logic hiển thị, tích hợp màn hình chẩn đoán **Touch Test 5 điểm**.
    - Thẻ nhớ MicroSD kết nối qua **SDMMC / SDIO chuyên dụng** (không chia sẻ bus với màn hình).
    - Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
    - Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> Tự động chuyển toàn diện sang Network IP Camera (Hikvision, KBVision, Ezviz, Yoosee, ONVIF).
@@ -26,12 +26,12 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 
 ```text
 +-------------------------------------------------------------------------------+
-|                    Mini OS Desktop & Application Layer (240x320)              |
+|             Mini OS Desktop & Application Layer (320x240 Landscape Flipped)   |
 | [Status Bar] [System Monitor] [Google Maps] [Music Player] [XiaoZhi AI Voice] |
 |          [WiFi Settings] [Control Center] [Power Manager] [Camera IP]         |
 +-------------------------------------------------------------------------------+
 |                     LVGL 8.3.11 High-Level Graphics Engine                    |
-|          (Modern TikTok / Mobile OS Style, 240x320 Portrait, Fast 60 FPS)     |
+|      (Be Vietnam Pro SemiBold Typography, 320x240 Landscape, Fast 60 FPS)    |
 +-------------------------------------------------------------------------------+
 |                 FreeRTOS Multi-Tasking & Thread-Safe Porting                  |
 |  - Core 1: LVGL GUI Engine (Priority 4, 12KB Stack, Mutex Protected)          |
@@ -40,8 +40,8 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 |  - Core 0: Storage Manager (Unified SDMMC / SPI SD Hardware Abstraction)      |
 +-------------------------------------------------------------------------------+
 |              Hardware Abstraction Layer (include/board_config.h)               |
-|  - board_es3c28p.hpp       : ILI9341V (240x320 Portrait) + FT6336G + SDMMC   |
-|  - board_diymore_s3_35.hpp : ST7796 (Portrait HAL)        + FT6336U + SPI SD   |
+|  - board_es3c28p.hpp       : ILI9341V (320x240 Landscape Flipped) + FT6336G   |
+|  - board_diymore_s3_35.hpp : ST7796 (Landscape HAL)         + FT6336U + SPI   |
 +-------------------------------------------------------------------------------+
 |       Hardware: ESP32-S3-WROOM-1 N16R8 (Dual-Core LX7 @ 240MHz, 16M/8M OPI)   |
 +-------------------------------------------------------------------------------+
@@ -184,9 +184,9 @@ pio device monitor -b 115200
    - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, giải mã bằng TJpg_Decoder và hiển thị trực tiếp lên LVGL Canvas kèm đo FPS thực tế).
    - **ONVIF Client**: `NOT_IMPLEMENTED` (Hỗ trợ cấu trúc SOAP cơ bản, không trả kết quả thành công giả khi chưa parse được profile).
    - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
-   - **RTSP / H.264 Client**: `NOT_IMPLEMENTED`.
 8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
-9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Montserrat** và **Be Vietnam Pro** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu.
+9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc, không phụ thuộc font runtime ngoài.
+10. **Touch Architecture & Calibration Tool (Touch Test)**: Cảm ứng FT6336G chia sẻ bus phần cứng an toàn qua `shared_i2c_bus`. Hệ thống hỗ trợ bộ cờ hiệu chuẩn (`BOARD_TOUCH_SWAP_XY`, `BOARD_TOUCH_INVERT_X`, `BOARD_TOUCH_INVERT_Y`) và ma trận chuyển đổi tọa độ theo hướng quay màn hình (`BOARD_LCD_ROTATION 3` - Landscape Flipped: `mapped_x = PANEL_HEIGHT - 1 - raw_y; mapped_y = raw_x;`). Đi kèm ứng dụng **Touch Test** hiển thị trực tiếp tọa độ raw, tọa độ mapped, crosshair tâm ngón tay và 5 điểm hiệu chuẩn (TL, TR, BL, BR, Center) để xác thực độ chính xác cảm ứng theo thời gian thực.
 
 
 ---

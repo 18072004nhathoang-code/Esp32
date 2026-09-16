@@ -64,6 +64,11 @@ bool shared_i2c_codec_is_detected(void);
  */
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y);
 
+/**
+ * @brief Đọc tọa độ cảm ứng chi tiết bao gồm cả raw và mapped (dùng cho Touch Test).
+ */
+bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y, uint16_t *mapped_x, uint16_t *mapped_y);
+
 #ifdef __cplusplus
 }
 #endif

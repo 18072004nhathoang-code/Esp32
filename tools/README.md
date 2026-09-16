@@ -3,18 +3,19 @@
 Hệ điều hành Mini OS sử dụng các bộ font nhúng C trực tiếp (`src/ui/fonts/ui_font_*.c`) với kích thước 10px, 12px, 14px, 16px.
 
 ## Nguồn gốc Font & Bản quyền (License)
-* **Font Family**: Google Fonts (Roboto / Montserrat / Be Vietnam Pro).
+* **Font Family**: **Be Vietnam Pro SemiBold** (Google Fonts).
 * **Bản quyền**: [SIL Open Font License 1.1 (OFL-1.1)](https://openfontlicense.org/).
-* Hoàn toàn tự do sử dụng, chỉnh sửa và phân phối trong các dự án nguồn mở (MIT / Apache / BSD).
+* Hoàn toàn tự do sử dụng, chỉnh sửa và phân phối trong các dự án nguồn mở.
 * Không phụ thuộc font bản quyền độc quyền của hệ điều hành Windows (`segoeui.ttf`).
+* Tích hợp tự động **LVGL Symbol Fallback** (`lv_font_montserrat_10/12/14/16`) để hiển thị hoàn hảo các biểu tượng WiFi, Pin, Loa, Cài đặt, Play, v.v.
 
 ## Cách tái tạo (Reproduce) Font
-1. Cài đặt công cụ chuyển đổi font LVGL:
+1. Cài đặt Node.js và công cụ chuyển đổi font LVGL:
    ```bash
    npm install -g lv_font_conv
    ```
 2. Chạy script tạo font:
    ```bash
-   python tools/generate_fonts.py <path_to_open_font.ttf>
+   python tools/generate_fonts.py
    ```
-   Script sẽ tự động xuất ra các file `src/ui/fonts/ui_font_10.c`, `12.c`, `14.c`, `16.c` và sửa các macro guard để tương thích với abstraction `UI_FONT_10`, `UI_FONT_12`, `UI_FONT_14`, `UI_FONT_16`.
+   Script sẽ tự động tải file `BeVietnamPro-SemiBold.ttf` từ Google Fonts nếu chưa có, xuất ra các file C trong `src/ui/fonts/ui_font_*.c` với đầy đủ dải Unicode tiếng Việt (có dấu U+1EA0 - U+1EF9), thiết lập cấu trúc fallback symbol tự động và dùng `shell=False` độc lập nền tảng.

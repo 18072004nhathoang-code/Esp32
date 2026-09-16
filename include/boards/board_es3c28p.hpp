@@ -13,13 +13,13 @@
 #define BOARD_PROFILE_FLASH_MB      16
 #define BOARD_PROFILE_PSRAM_MB      8
 
-// --- Display: ILI9341V 240x320 Portrait 4-wire SPI ---
+// --- Display: ILI9341V Native 240x320 -> Logical 320x240 Landscape Flipped ---
 #define BOARD_LCD_CONTROLLER        LCD_CTRL_ILI9341
 #define BOARD_LCD_BUS               LCD_BUS_SPI
-#define BOARD_LCD_WIDTH             240     // Portrait resolution
-#define BOARD_LCD_HEIGHT            320
-#define BOARD_LCD_PANEL_WIDTH       240     // Panel native resolution
-#define BOARD_LCD_PANEL_HEIGHT      320
+#define BOARD_LCD_PANEL_WIDTH       240     // Panel native resolution width
+#define BOARD_LCD_PANEL_HEIGHT      320     // Panel native resolution height
+#define BOARD_LCD_WIDTH             320     // Logical LVGL resolution width
+#define BOARD_LCD_HEIGHT            240     // Logical LVGL resolution height
 #define BOARD_LCD_MOSI              11
 #define BOARD_LCD_MISO              13
 #define BOARD_LCD_SCK               12
@@ -29,7 +29,7 @@
 #define BOARD_LCD_BL                45      // IO45 điều khiển đèn nền LCD Backlight
 #define BOARD_LCD_INVERT            false   // ILI9341V tiêu chuẩn không invert
 #define BOARD_LCD_RGB_ORDER         false   // RGB Order
-#define BOARD_LCD_ROTATION          0       // Portrait mode (240x320)
+#define BOARD_LCD_ROTATION          3       // Landscape Flipped (320x240)
 #define BOARD_LCD_SPI_FREQ          40000000
 
 // --- Touch: FocalTech FT6336G (Capacitive I2C) ---
@@ -39,6 +39,9 @@
 #define BOARD_TOUCH_SCL             15      // IO15 là TP_SCL
 #define BOARD_TOUCH_INT             17      // IO17 là TP_INT (Low khi có chạm)
 #define BOARD_TOUCH_RST             18      // IO18 là TP_RST (Low level reset)
+#define BOARD_TOUCH_SWAP_XY         0       // Calibration swap trước rotation
+#define BOARD_TOUCH_INVERT_X        0       // Calibration invert X trước rotation
+#define BOARD_TOUCH_INVERT_Y        0       // Calibration invert Y trước rotation
 
 // --- MicroSD Card: Giao tiếp SDMMC / SDIO chuyên dụng (Không chia sẻ bus với LCD) ---
 #define BOARD_SD_INTERFACE          SD_IF_SDMMC_4BIT

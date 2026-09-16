@@ -37,6 +37,9 @@
 #define BOARD_TOUCH_SCL             9
 #define BOARD_TOUCH_INT             -1      // Polling mode (tránh xung đột với GPIO 4)
 #define BOARD_TOUCH_RST             3
+#define BOARD_TOUCH_SWAP_XY         0
+#define BOARD_TOUCH_INVERT_X        0
+#define BOARD_TOUCH_INVERT_Y        0
 
 // --- MicroSD Card: SPI Bus dùng chung với LCD (FSPI) ---
 #define BOARD_SD_INTERFACE          SD_IF_SPI
