@@ -12,7 +12,6 @@
 #include "../ui/ui_theme.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
-#include <math.h>
 
 // Danh sách các địa điểm cài đặt sẵn
 static const MapPresetLocation PRESETS[] = {
@@ -32,7 +31,6 @@ static int cur_zoom = MAP_DEFAULT_ZOOM;
 static size_t cur_preset_idx = 0;
 static char cur_maptype[16] = "roadmap"; // "roadmap" hoặc "satellite"
 static bool auto_fetch_enabled = true;
-static uint8_t radar_anim_step = 0;
 
 // Đối tượng giao diện LVGL
 static lv_obj_t *app_container = nullptr;
@@ -60,17 +58,6 @@ static void draw_canvas_line(lv_obj_t *canvas, lv_point_t p1, lv_point_t p2, lv_
     lv_canvas_draw_line(canvas, pts, 2, &line_dsc);
 }
 
-/* Vẽ hình chữ nhật phủ màu */
-static void draw_canvas_rect(lv_obj_t *canvas, lv_coord_t x, lv_coord_t y, lv_coord_t w, lv_coord_t h, lv_color_t color)
-{
-    lv_draw_rect_dsc_t rect_dsc;
-    lv_draw_rect_dsc_init(&rect_dsc);
-    rect_dsc.bg_color = color;
-    rect_dsc.bg_opa = LV_OPA_COVER;
-    rect_dsc.border_width = 0;
-    lv_canvas_draw_rect(canvas, x, y, w, h, &rect_dsc);
-}
-
 /* Vẽ vòng tròn trên canvas */
 static void draw_canvas_circle(lv_obj_t *canvas, lv_coord_t cx, lv_coord_t cy, lv_coord_t radius, lv_color_t color)
 {
@@ -90,13 +77,6 @@ static void draw_map_overlays(void)
 
     lv_coord_t center_x = MAP_CANVAS_WIDTH / 2;
     lv_coord_t center_y = MAP_CANVAS_HEIGHT / 2;
-
-    // Sóng Radar phát xung
-    radar_anim_step = (radar_anim_step + 1) % 4;
-    lv_coord_t radar_r1 = 18 + radar_anim_step * 3;
-    lv_coord_t radar_r2 = 12 + radar_anim_step * 2;
-    draw_canvas_circle(map_canvas, center_x, center_y, radar_r1, lv_color_hex(0x3B1F27));
-    draw_canvas_circle(map_canvas, center_x, center_y, radar_r2, lv_color_hex(0x5A2430));
 
     // Bóng đổ ghim
     draw_canvas_circle(map_canvas, center_x, center_y + 4, 6, lv_color_hex(0x0A0D14));
@@ -119,50 +99,11 @@ static void draw_map_overlays(void)
     draw_canvas_line(map_canvas, { 70, (lv_coord_t)(MAP_CANVAS_HEIGHT - 13) }, { 70, (lv_coord_t)(MAP_CANVAS_HEIGHT - 8) }, lv_color_hex(0xCBD5E0), 2);
 }
 
-/* Thuật toán vẽ bản đồ Vector Offline dự phòng khi chưa tải được ảnh */
-static void render_offline_vector_map(void)
+/* Empty state: không dựng dữ liệu địa lý giả khi tile thật không khả dụng. */
+static void render_empty_map(void)
 {
     if (!map_canvas || !canvas_buffer) return;
-
-    bool is_sat = (strcmp(cur_maptype, "satellite") == 0);
-    lv_color_t bg_col = is_sat ? lv_color_hex(0x0C1814) : lv_color_hex(0x181E29);
-    lv_canvas_fill_bg(map_canvas, bg_col, LV_OPA_COVER);
-
-    int scale = 1 << (cur_zoom > 10 ? (cur_zoom - 10) : 1);
-    int offset_x = (int)(cur_lon * 120.0 * scale) % 45;
-    int offset_y = (int)(cur_lat * 120.0 * scale) % 45;
-    if (offset_x < 0) offset_x += 45;
-    if (offset_y < 0) offset_y += 45;
-
-    // Khối nhà đô thị
-    for (int bx = offset_x + 10; bx < MAP_CANVAS_WIDTH - 20; bx += 55)
-    {
-        for (int by = offset_y + 10; by < MAP_CANVAS_HEIGHT - 20; by += 45)
-        {
-            lv_color_t block_col = is_sat ? lv_color_hex(0x162820) : lv_color_hex(0x222B38);
-            draw_canvas_rect(map_canvas, bx, by, 22, 16, block_col);
-            draw_canvas_rect(map_canvas, bx + 26, by, 18, 16, block_col);
-        }
-    }
-
-    // Công viên / Thảm thực vật
-    lv_color_t green_col = is_sat ? lv_color_hex(0x0F2E1E) : lv_color_hex(0x1A362B);
-    draw_canvas_rect(map_canvas, (offset_x + 15) % MAP_CANVAS_WIDTH, 12, 75, 55, green_col);
-    draw_canvas_rect(map_canvas, (offset_x + 150) % MAP_CANVAS_WIDTH, 90, 60, 45, green_col);
-
-    // Sông hồ
-    for (int y = 0; y < MAP_CANVAS_HEIGHT; y += 4)
-    {
-        int river_x = (int)(sinf((y + offset_y * 2) * 0.05f) * 22.0f) + (MAP_CANVAS_WIDTH / 2) + offset_x - 35;
-        if (river_x >= 0 && river_x < MAP_CANVAS_WIDTH - 25)
-        {
-            draw_canvas_rect(map_canvas, river_x, y, 22, 4, lv_color_hex(0x13273D));
-        }
-    }
-
-    // Đại lộ / Đường chính
-    int hwy_y = (MAP_CANVAS_HEIGHT / 2) + (offset_y % 35) - 18;
-    draw_canvas_line(map_canvas, { 0, (lv_coord_t)hwy_y }, { MAP_CANVAS_WIDTH, (lv_coord_t)(hwy_y + 24) }, lv_color_hex(0xEA8E18), 3);
+    lv_canvas_fill_bg(map_canvas, lv_color_hex(0x111827), LV_OPA_COVER);
 }
 
 /**
@@ -184,7 +125,8 @@ void map_app_render(void)
             }
             else
             {
-                lv_label_set_text(hud_lbl_source, LV_SYMBOL_WIFI " Google Static API");
+                lv_label_set_text_fmt(hud_lbl_source, LV_SYMBOL_WIFI " %s",
+                                      map_tile_downloader_get_network_provider());
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
             }
         }
@@ -205,11 +147,11 @@ void map_app_render(void)
         {
             if (hud_lbl_source)
             {
-                lv_label_set_text(hud_lbl_source, st == TILE_DEGRADED ? "[!] Degraded -> Vector" : "[!] Lỗi nạp -> Vector");
+                lv_label_set_text(hud_lbl_source,
+                    st == TILE_DEGRADED ? "[Offline] Không có tile cache" : "[!] Không tải được tile");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
             }
-            render_offline_vector_map();
-            draw_map_overlays();
+            render_empty_map();
         }
     }
 
@@ -244,6 +186,15 @@ void map_app_render(void)
 
 static bool trigger_map_reload(void)
 {
+    if (strcmp(cur_maptype, "satellite") == 0 && !map_tile_downloader_supports_satellite())
+    {
+        if (hud_lbl_source)
+        {
+            lv_label_set_text(hud_lbl_source, "Satellite cần Google API key");
+            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
+        }
+        return false;
+    }
     if (!map_tile_downloader_request(cur_lat, cur_lon, cur_zoom, cur_maptype))
     {
         if (hud_lbl_source)
@@ -251,8 +202,7 @@ static bool trigger_map_reload(void)
             lv_label_set_text(hud_lbl_source, "[!] Queue unavailable");
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
         }
-        render_offline_vector_map();
-        draw_map_overlays();
+        render_empty_map();
         return false;
     }
 
@@ -266,7 +216,8 @@ static bool trigger_map_reload(void)
         }
         else if (wifi_manager_is_connected())
         {
-            lv_label_set_text(hud_lbl_source, LV_SYMBOL_WIFI " Gửi yêu cầu Google API...");
+            lv_label_set_text_fmt(hud_lbl_source, LV_SYMBOL_WIFI " Đang tải %s...",
+                                  map_tile_downloader_get_network_provider());
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
         }
         else
@@ -420,6 +371,8 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_set_style_border_width(hud_type_btn, 1, 0);
     lv_obj_set_style_pad_all(hud_type_btn, 0, 0);
     lv_obj_add_event_cb(hud_type_btn, btn_toggle_type_cb, LV_EVENT_CLICKED, nullptr);
+    if (!map_tile_downloader_supports_satellite())
+        lv_obj_add_state(hud_type_btn, LV_STATE_DISABLED);
 
     hud_lbl_type = lv_label_create(hud_type_btn);
     lv_label_set_text(hud_lbl_type, "Road");
@@ -542,6 +495,12 @@ void map_app_open(lv_obj_t *parent)
 
 void map_app_close(void)
 {
+    if (map_canvas) lv_obj_del(map_canvas);
+    if (canvas_buffer)
+    {
+        free(canvas_buffer);
+        canvas_buffer = nullptr;
+    }
     app_container    = nullptr;
     map_canvas       = nullptr;
     hud_city_pill    = nullptr;

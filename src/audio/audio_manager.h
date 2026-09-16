@@ -62,6 +62,14 @@ enum AudioOwner
     AUDIO_OWNER_AI_VOICE    // AI voice speech synthesis playback
 };
 
+enum AudioRecordingFileState
+{
+    AUDIO_FILE_NONE = 0,
+    AUDIO_FILE_SAVING,
+    AUDIO_FILE_SAVED,
+    AUDIO_FILE_ERROR
+};
+
 /**
  * @brief Yêu cầu quyền sở hữu phần cứng I2S
  * @param requester Phân hệ yêu cầu
@@ -160,6 +168,13 @@ uint32_t audio_get_recorded_duration_ms(void);
  * @brief Lấy tiến trình đang phát lại (ms)
  */
 uint32_t audio_get_playback_progress_ms(void);
+size_t audio_get_recorded_sample_count(void);
+size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples);
+AudioRecordingFileState audio_get_recording_file_state(void);
+const char *audio_get_recording_file_path(void);
+
+/** Write mono PCM16 samples through the installed duplex driver. Caller owns I2S. */
+bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeout_ms = 100);
 
 /**
  * @brief Lấy cường độ âm thanh thời gian thực từ Microphone (0 - 100%)

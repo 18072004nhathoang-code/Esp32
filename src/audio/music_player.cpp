@@ -444,7 +444,7 @@ void music_player_scan_sd(void)
                             String title = fname.substring(0, fname.length() - 4);
                             title.replace('_', ' ');
                             strncpy(track.title, title.c_str(), sizeof(track.title) - 1);
-                            track.duration_sec = 210; // Mặc định thời lượng ước tính
+                            track.duration_sec = 0; // Cập nhật từ decoder sau khi mở tệp thật
 
                             Serial.printf("[MUSIC_PLAYER] 🎵 Tìm thấy bài hát [%d]: %s (%s)\n", 
                                           total_tracks_found + 1, track.title, track.filepath);
@@ -459,43 +459,21 @@ void music_player_scan_sd(void)
         }
     }
 
-    // Nếu thẻ nhớ trống hoặc chưa có file, nạp danh sách nhạc mẫu mặc định
     if (total_tracks_found == 0)
-    {
-        Serial.println("[MUSIC_PLAYER] Thư mục /music chưa có tệp MP3 -> Nạp danh sách bài hát mẫu");
-
-        const char *demo_files[] = {
-            "01_chill_lofi_vibes.mp3",
-            "02_acoustic_sunset.mp3",
-            "03_synthwave_neon_drive.mp3",
-            "04_vietnam_que_huong_toi.mp3",
-            "05_piano_relaxing_rain.mp3"
-        };
-        const char *demo_titles[] = {
-            "Chill Lofi Vibes (Coffee Beats)",
-            "Acoustic Sunset Melody",
-            "Synthwave Neon Night Drive",
-            "Việt Nam Quê Hương Tôi (Remix)",
-            "Piano Relaxing in the Rain"
-        };
-        const uint32_t demo_durations[] = { 214, 185, 240, 290, 178 };
-
-        int num_demos = sizeof(demo_files) / sizeof(demo_files[0]);
-        for (int i = 0; i < num_demos && i < MUSIC_MAX_TRACKS; i++)
-        {
-            MusicTrack &track = playlist[i];
-            strncpy(track.filename, demo_files[i], sizeof(track.filename) - 1);
-            snprintf(track.filepath, sizeof(track.filepath), "%s/%s", MUSIC_DIR, demo_files[i]);
-            strncpy(track.title, demo_titles[i], sizeof(track.title) - 1);
-            track.duration_sec = demo_durations[i];
-            total_tracks_found++;
-        }
-    }
+        Serial.println("[MUSIC_PLAYER] Không có tệp MP3 thật trong /music; playlist để trống");
 
     player_state.total_tracks = total_tracks_found;
     if (total_tracks_found > 0)
     {
         player_state.total_duration_sec = playlist[player_state.current_track_idx].duration_sec;
+    }
+    else
+    {
+        player_state.current_track_idx = 0;
+        player_state.total_duration_sec = 0;
+        player_state.current_time_sec = 0;
+        player_state.is_playing = false;
+        player_state.is_paused = false;
     }
 }
 
@@ -531,95 +509,92 @@ bool music_player_play_index(int index)
     return true;
 }
 
-void music_player_toggle_play(void)
+bool music_player_toggle_play(void)
 {
     if (player_state.is_playing)
     {
         if (player_state.is_paused)
         {
-            music_player_resume();
+            return music_player_resume();
         }
         else
         {
-            music_player_pause();
+            return music_player_pause();
         }
     }
     else
     {
-        music_player_play_index(player_state.current_track_idx);
+        return music_player_play_index(player_state.current_track_idx);
     }
 }
 
-void music_player_next(void)
+bool music_player_next(void)
 {
-    if (total_tracks_found == 0) return;
+    if (total_tracks_found == 0) return false;
     int next_idx = (player_state.current_track_idx + 1) % total_tracks_found;
-    music_player_play_index(next_idx);
+    return music_player_play_index(next_idx);
 }
 
-void music_player_prev(void)
+bool music_player_prev(void)
 {
-    if (total_tracks_found == 0) return;
+    if (total_tracks_found == 0) return false;
     int prev_idx = (player_state.current_track_idx - 1 + total_tracks_found) % total_tracks_found;
-    music_player_play_index(prev_idx);
+    return music_player_play_index(prev_idx);
 }
 
-void music_player_pause(void)
+bool music_player_pause(void)
 {
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_PAUSE;
-    if (enqueue_music_command(cmd))
-    {
-        Serial.println("[MUSIC_PLAYER] ⏸ Gửi lệnh tạm dừng phát nhạc");
-    }
+    if (!enqueue_music_command(cmd)) return false;
+    Serial.println("[MUSIC_PLAYER] ⏸ Gửi lệnh tạm dừng phát nhạc");
+    return true;
 }
 
-void music_player_resume(void)
+bool music_player_resume(void)
 {
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_RESUME;
-    if (enqueue_music_command(cmd))
-    {
-        Serial.println("[MUSIC_PLAYER] ▶ Gửi lệnh tiếp tục phát nhạc");
-    }
+    if (!enqueue_music_command(cmd)) return false;
+    Serial.println("[MUSIC_PLAYER] ▶ Gửi lệnh tiếp tục phát nhạc");
+    return true;
 }
 
-void music_player_stop(void)
+bool music_player_stop(void)
 {
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_STOP;
-    if (enqueue_music_command(cmd))
-    {
-        Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
-    }
+    if (!enqueue_music_command(cmd)) return false;
+    Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
+    return true;
 }
 
-void music_player_seek(uint32_t sec)
+bool music_player_seek(uint32_t sec)
 {
+    const uint32_t duration = player_state.total_duration_sec;
+    if (!player_state.is_playing || duration == 0 || sec > duration) return false;
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_SEEK;
     cmd.param = sec;
-    if (enqueue_music_command(cmd))
-    {
-        Serial.printf("[MUSIC_PLAYER] ⏩ Gửi lệnh tua tới giây %u\n", sec);
-    }
+    if (!enqueue_music_command(cmd)) return false;
+    Serial.printf("[MUSIC_PLAYER] ⏩ Gửi lệnh tua tới giây %u\n", sec);
+    return true;
 }
 
-void music_player_set_volume(uint8_t vol_percent)
+bool music_player_set_volume(uint8_t vol_percent)
 {
     if (vol_percent > 100) vol_percent = 100;
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_SET_VOLUME;
     cmd.param = vol_percent;
-    if (enqueue_music_command(cmd))
-    {
-        Serial.printf("[MUSIC_PLAYER] 🔊 Đặt âm lượng: %d%%\n", vol_percent);
-    }
+    if (!enqueue_music_command(cmd)) return false;
+    Serial.printf("[MUSIC_PLAYER] 🔊 Đặt âm lượng: %d%%\n", vol_percent);
+    return true;
 }
 
 

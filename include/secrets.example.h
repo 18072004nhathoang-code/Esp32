@@ -15,9 +15,13 @@
 // Lấy key tại: https://console.cloud.google.com/
 #define GOOGLE_MAPS_STATIC_API_KEY ""
 
-// Google Gemini API Key / OpenAI API Key cho trợ lý giọng nói AI
-#define GEMINI_API_KEY          ""
-#define OPENAI_API_KEY          ""
+// Secure voice gateway contract:
+// AI_VOICE_ENDPOINT accepts POST audio/wav and returns JSON containing
+// "transcript" and "reply". The TTS endpoint returns mono PCM16 16kHz WAV.
+#define AI_VOICE_ENDPOINT       ""
+#define AI_VOICE_TTS_ENDPOINT   ""
+#define AI_VOICE_BEARER_TOKEN   ""
+#define AI_VOICE_CA_CERT        ""
 
 // PEM CA certificate used to verify HTTPS IP-camera endpoints. Keep empty until
 // a trusted CA for the camera has been provisioned; verified TLS then fails closed.

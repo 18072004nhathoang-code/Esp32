@@ -121,6 +121,11 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
     char filepath[128];
     sd_map_cache_get_filename(filepath, sizeof(filepath), lat, lon, zoom, maptype);
 
+    if (storage_get_fs().exists(filepath) && !storage_get_fs().remove(filepath))
+    {
+        sd_release_bus();
+        return false;
+    }
     File file = storage_get_fs().open(filepath, FILE_WRITE);
     if (!file)
     {

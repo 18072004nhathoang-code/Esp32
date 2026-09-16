@@ -32,6 +32,12 @@ static uint32_t reconnect_backoff_ms = 2000;
 static uint32_t last_disconnect_time = 0;
 static bool auto_reconnect_enabled = (WIFI_AUTO_RECONNECT != 0);
 static bool manual_disconnect = false;
+static char last_error[96] = "";
+
+static void set_error_locked(const char *message)
+{
+    strlcpy(last_error, message ? message : "Unknown WiFi error", sizeof(last_error));
+}
 
 static void lock_wifi()
 {
@@ -120,7 +126,8 @@ static void wifi_service_task(void *pvParameters)
                 // Lưu NVS Flash ngoài lock_wifi() -> Tuyệt đối không bao giờ deadlock giữa wifi_mutex và prefs_mutex
                 if (need_save)
                 {
-                    wifi_manager_save_credentials(save_s, save_p);
+                    if (!wifi_manager_save_credentials(save_s, save_p))
+                        log_e("WiFi connected but credentials could not be saved");
                 }
             }
             else if (millis() - connect_start_time > WIFI_CONNECT_TIMEOUT_MS)
@@ -128,6 +135,7 @@ static void wifi_service_task(void *pvParameters)
                 lock_wifi();
                 current_state = WIFI_STATE_FAILED;
                 last_disconnect_time = millis();
+                set_error_locked("Connection timed out");
                 log_w("Kết nối WiFi thất bại: Hết thời gian chờ (Timeout)!");
                 unlock_wifi();
             }
@@ -181,7 +189,17 @@ static void wifi_service_task(void *pvParameters)
                 WiFi.scanDelete();
                 scan_in_progress = false;
                 scan_completed = true;
+                last_error[0] = '\0';
                 log_i("Quét hoàn tất: Tìm thấy %d mạng WiFi", n);
+                unlock_wifi();
+            }
+            else if (n == WIFI_SCAN_FAILED)
+            {
+                lock_wifi();
+                WiFi.scanDelete();
+                scan_in_progress = false;
+                scan_completed = true;
+                set_error_locked("WiFi scan failed");
                 unlock_wifi();
             }
         }
@@ -197,6 +215,7 @@ bool wifi_manager_init(void)
     if (!wifi_mutex || !prefs_mutex)
     {
         current_state = WIFI_STATE_FAILED;
+        strlcpy(last_error, "Cannot create WiFi mutex", sizeof(last_error));
         log_e("WiFi degraded: không tạo được mutex");
         return false;
     }
@@ -215,23 +234,37 @@ bool wifi_manager_init(void)
     {
         wifi_task_handle = nullptr;
         current_state = WIFI_STATE_FAILED;
+        strlcpy(last_error, "Cannot create WiFi service task", sizeof(last_error));
         log_e("WiFi degraded: không tạo được service task");
         return false;
     }
     return true;
 }
 
-void wifi_manager_scan_async(void)
+bool wifi_manager_scan_async(void)
 {
+    if (!wifi_mutex) return false;
     lock_wifi();
-    if (!scan_in_progress)
+    if (scan_in_progress)
     {
-        scan_completed = false;
-        scan_in_progress = true;
-        WiFi.scanNetworks(true); // true = async scan
-        log_i("Bắt đầu quét mạng WiFi...");
+        unlock_wifi();
+        return true;
     }
+    scan_completed = false;
+    scan_results.clear();
+    const int result = WiFi.scanNetworks(true);
+    if (result == WIFI_SCAN_FAILED)
+    {
+        scan_completed = true;
+        set_error_locked("Cannot start WiFi scan");
+        unlock_wifi();
+        return false;
+    }
+    scan_in_progress = true;
+    last_error[0] = '\0';
+    log_i("Bắt đầu quét mạng WiFi...");
     unlock_wifi();
+    return true;
 }
 
 bool wifi_manager_is_scan_done(void)
@@ -240,6 +273,14 @@ bool wifi_manager_is_scan_done(void)
     bool done = scan_completed;
     unlock_wifi();
     return done;
+}
+
+String wifi_manager_get_last_error(void)
+{
+    lock_wifi();
+    String error(last_error);
+    unlock_wifi();
+    return error;
 }
 
 std::vector<WiFiNetworkInfo> wifi_manager_get_scan_results(void)
@@ -252,7 +293,8 @@ std::vector<WiFiNetworkInfo> wifi_manager_get_scan_results(void)
 
 bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
 {
-    if (ssid == nullptr || strlen(ssid) == 0) return false;
+    if (!wifi_mutex || ssid == nullptr || strlen(ssid) == 0 || strlen(ssid) > 32 ||
+        (pass && strlen(pass) > 64)) return false;
 
     lock_wifi();
     manual_disconnect = false;
@@ -273,6 +315,7 @@ bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
     connect_requested = true;
     current_state = WIFI_STATE_CONNECTING;
     should_save_credentials = save_to_nvs; // Chỉ lưu NVS khi người dùng chủ động cấu hình
+    last_error[0] = '\0';
     unlock_wifi();
 
     return true;
@@ -333,53 +376,73 @@ int8_t wifi_manager_get_rssi(void)
 
 bool wifi_manager_has_saved_credentials(void)
 {
+    if (!prefs_mutex) return false;
     lock_prefs();
-    prefs.begin(WIFI_PREFS_NAMESPACE, true);
-    String ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
-    prefs.end();
+    String ssid;
+    if (prefs.begin(WIFI_PREFS_NAMESPACE, true))
+    {
+        ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
+        prefs.end();
+    }
     unlock_prefs();
     return (ssid.length() > 0);
 }
 
-void wifi_manager_save_credentials(const char *ssid, const char *pass)
+bool wifi_manager_save_credentials(const char *ssid, const char *pass)
 {
-    if (!ssid || strlen(ssid) == 0) return;
+    if (!prefs_mutex || !ssid || strlen(ssid) == 0) return false;
     lock_prefs();
-    prefs.begin(WIFI_PREFS_NAMESPACE, false);
-    prefs.putString(WIFI_PREFS_KEY_SSID, ssid);
-    prefs.putString(WIFI_PREFS_KEY_PASS, pass ? pass : "");
-    prefs.end();
+    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
+    if (ok)
+    {
+        ok = prefs.putString(WIFI_PREFS_KEY_SSID, ssid) == strlen(ssid);
+        const char *safe_pass = pass ? pass : "";
+        ok = prefs.putString(WIFI_PREFS_KEY_PASS, safe_pass) == strlen(safe_pass) && ok;
+        prefs.end();
+    }
     unlock_prefs();
-    log_i("Đã lưu thông tin WiFi [%s] vào NVS Flash", ssid);
+    if (ok) log_i("Đã lưu thông tin WiFi [%s] vào NVS Flash", ssid);
+    return ok;
 }
 
 bool wifi_manager_load_credentials(String &ssid, String &pass)
 {
+    if (!prefs_mutex) return false;
     lock_prefs();
-    prefs.begin(WIFI_PREFS_NAMESPACE, true);
-    ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
-    pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
-    prefs.end();
+    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, true);
+    if (ok)
+    {
+        ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
+        pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
+        prefs.end();
+    }
     unlock_prefs();
-    return (ssid.length() > 0);
+    return ok && ssid.length() > 0;
 }
 
-void wifi_manager_clear_credentials(void)
+bool wifi_manager_clear_credentials(void)
 {
+    if (!prefs_mutex) return false;
     lock_prefs();
-    prefs.begin(WIFI_PREFS_NAMESPACE, false);
-    prefs.remove(WIFI_PREFS_KEY_SSID);
-    prefs.remove(WIFI_PREFS_KEY_PASS);
-    prefs.end();
+    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
+    if (ok)
+    {
+        bool ssid_ok = !prefs.isKey(WIFI_PREFS_KEY_SSID) || prefs.remove(WIFI_PREFS_KEY_SSID);
+        bool pass_ok = !prefs.isKey(WIFI_PREFS_KEY_PASS) || prefs.remove(WIFI_PREFS_KEY_PASS);
+        ok = ssid_ok && pass_ok;
+        prefs.end();
+    }
     unlock_prefs();
-    log_i("Đã xóa thông tin WiFi trong NVS Flash");
+    if (ok) log_i("Đã xóa thông tin WiFi trong NVS Flash");
+    return ok;
 }
 
-void wifi_manager_forget_network(void)
+bool wifi_manager_forget_network(void)
 {
-    wifi_manager_clear_credentials();
+    const bool cleared = wifi_manager_clear_credentials();
     wifi_manager_disconnect();
-    log_i("Đã quên mạng WiFi hiện tại: NVS đã xóa, runtime target đã dọn sạch, ngắt kết nối an toàn.");
+    if (cleared) log_i("Đã quên mạng WiFi hiện tại: NVS đã xóa, runtime target đã dọn sạch, ngắt kết nối an toàn.");
+    return cleared;
 }
 
 void wifi_manager_set_auto_reconnect(bool enable)

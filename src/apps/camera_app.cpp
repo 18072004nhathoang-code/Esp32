@@ -10,6 +10,7 @@
 #include <TJpg_Decoder.h>
 #include "../display/tjpg_guard.h"
 #include <esp_heap_caps.h>
+#include <stdlib.h>
 
 static_assert(sizeof(lv_color_t) == sizeof(uint16_t), "Camera preview requires LVGL RGB565");
 
@@ -107,9 +108,17 @@ static bool queue_ui_configuration(void)
 
     if (ta_name) strncpy(prof.name, lv_textarea_get_text(ta_name), sizeof(prof.name) - 1);
     if (ta_ip) strncpy(prof.ip, lv_textarea_get_text(ta_ip), sizeof(prof.ip) - 1);
-    if (ta_http_port) prof.http_port = (uint16_t)atoi(lv_textarea_get_text(ta_http_port));
-    if (ta_rtsp_port) prof.rtsp_port = (uint16_t)atoi(lv_textarea_get_text(ta_rtsp_port));
-    if (ta_onvif_port) prof.onvif_port = (uint16_t)atoi(lv_textarea_get_text(ta_onvif_port));
+    if (!prof.name[0]) strlcpy(prof.name, "IP Camera", sizeof(prof.name));
+    char *port_end = nullptr;
+    unsigned long parsed_port = ta_http_port ? strtoul(lv_textarea_get_text(ta_http_port), &port_end, 10) : 0;
+    if (!prof.ip[0] || !port_end || *port_end != '\0' || parsed_port == 0 || parsed_port > 65535)
+    {
+        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "IP/hostname hoặc port không hợp lệ");
+        return false;
+    }
+    prof.http_port = static_cast<uint16_t>(parsed_port);
+    prof.rtsp_port = 0;
+    prof.onvif_port = 0;
     if (ta_user) strncpy(prof.username, lv_textarea_get_text(ta_user), sizeof(prof.username) - 1);
     if (ta_pass) strncpy(prof.password, lv_textarea_get_text(ta_pass), sizeof(prof.password) - 1);
 
@@ -127,17 +136,7 @@ static bool queue_ui_configuration(void)
         }
     }
 
-    if (dd_proto)
-    {
-        uint16_t p_idx = lv_dropdown_get_selected(dd_proto);
-        switch (p_idx)
-        {
-            case 1: prof.protocol = CAM_PROTO_MJPEG; break;
-            case 2: prof.protocol = CAM_PROTO_RTSP; break;
-            case 0:
-            default: prof.protocol = CAM_PROTO_HTTP_SNAPSHOT; break;
-        }
-    }
+    prof.protocol = CAM_PROTO_HTTP_SNAPSHOT;
     prof.security_mode = dd_security
         ? static_cast<CameraSecurityMode>(lv_dropdown_get_selected(dd_security))
         : CAM_SECURITY_TLS_VERIFIED;
@@ -548,30 +547,26 @@ void camera_app_open(lv_obj_t *parent)
     };
 
     char buf_port[16];
-    snprintf(buf_port, sizeof(buf_port), "%u", cur_prof.http_port > 0 ? cur_prof.http_port : 80);
-    char buf_rtsp[16];
-    snprintf(buf_rtsp, sizeof(buf_rtsp), "%u", cur_prof.rtsp_port > 0 ? cur_prof.rtsp_port : 554);
-    char buf_onvif[16];
-    snprintf(buf_onvif, sizeof(buf_onvif), "%u", cur_prof.onvif_port > 0 ? cur_prof.onvif_port : 8000);
+    snprintf(buf_port, sizeof(buf_port), "%u", cur_prof.http_port > 0 ? cur_prof.http_port : 443);
 
     ta_name = make_input("Tên Camera:", cur_prof.name[0] ? cur_prof.name : "IP Camera", 36);
-    ta_ip = make_input("Địa chỉ IP:", cur_prof.ip[0] ? cur_prof.ip : "192.168.1.50", 84);
-    ta_http_port = make_input("HTTP Snapshot Port:", buf_port, 132);
-    ta_rtsp_port = make_input("RTSP Port:", buf_rtsp, 180);
-    ta_onvif_port = make_input("ONVIF Port:", buf_onvif, 228);
-    ta_user = make_input("Tài khoản (Username):", cur_prof.username[0] ? cur_prof.username : "admin", 276);
-    ta_pass = make_input("Mật khẩu (Password):", cur_prof.password, 324, true);
+    ta_ip = make_input("IP hoặc hostname:", cur_prof.ip, 84);
+    ta_http_port = make_input("HTTPS/HTTP Snapshot Port:", buf_port, 132);
+    ta_rtsp_port = nullptr;
+    ta_onvif_port = nullptr;
+    ta_user = make_input("Tài khoản (nếu cần):", cur_prof.username, 180);
+    ta_pass = make_input("Mật khẩu (chỉ giữ trong RAM):", cur_prof.password, 228, true);
 
     // Dropdown Hãng
     lv_obj_t *lbl_v = lv_label_create(cfg_modal);
     lv_label_set_text(lbl_v, "Nhà sản xuất (Vendor):");
     lv_obj_set_style_text_color(lbl_v, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(lbl_v, UI_FONT_SMALL, 0);
-    lv_obj_set_pos(lbl_v, 6, 372);
+    lv_obj_set_pos(lbl_v, 6, 276);
 
     dd_vendor = lv_dropdown_create(cfg_modal);
     lv_obj_set_size(dd_vendor, SCREEN_WIDTH - 28, 30);
-    lv_obj_set_pos(dd_vendor, 6, 388);
+    lv_obj_set_pos(dd_vendor, 6, 292);
     lv_dropdown_set_options(dd_vendor, "Generic ONVIF\nHikvision\nKBVision\nEZVIZ\nYoosee");
     lv_dropdown_set_selected(dd_vendor, (uint16_t)cur_prof.vendor);
     lv_obj_set_style_bg_color(dd_vendor, lv_color_hex(0x151B27), 0);
@@ -582,13 +577,14 @@ void camera_app_open(lv_obj_t *parent)
     lv_label_set_text(lbl_p, "Giao thức (Protocol):");
     lv_obj_set_style_text_color(lbl_p, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(lbl_p, UI_FONT_SMALL, 0);
-    lv_obj_set_pos(lbl_p, 6, 424);
+    lv_obj_set_pos(lbl_p, 6, 328);
 
     dd_proto = lv_dropdown_create(cfg_modal);
     lv_obj_set_size(dd_proto, SCREEN_WIDTH - 28, 30);
-    lv_obj_set_pos(dd_proto, 6, 440);
-    lv_dropdown_set_options(dd_proto, "HTTP Snapshot (OK)\nMJPEG (Chưa)\nRTSP/H.264 (Chưa)");
-    lv_dropdown_set_selected(dd_proto, (uint16_t)cur_prof.protocol);
+    lv_obj_set_pos(dd_proto, 6, 344);
+    lv_dropdown_set_options(dd_proto, "HTTP(S) Snapshot");
+    lv_dropdown_set_selected(dd_proto, 0);
+    lv_obj_add_state(dd_proto, LV_STATE_DISABLED);
     lv_obj_set_style_bg_color(dd_proto, lv_color_hex(0x151B27), 0);
     lv_obj_set_style_text_font(dd_proto, UI_FONT_SMALL, 0);
 
@@ -596,11 +592,11 @@ void camera_app_open(lv_obj_t *parent)
     lv_label_set_text(lbl_security, "Bảo mật transport:");
     lv_obj_set_style_text_color(lbl_security, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(lbl_security, UI_FONT_SMALL, 0);
-    lv_obj_set_pos(lbl_security, 6, 476);
+    lv_obj_set_pos(lbl_security, 6, 380);
 
     dd_security = lv_dropdown_create(cfg_modal);
     lv_obj_set_size(dd_security, SCREEN_WIDTH - 28, 30);
-    lv_obj_set_pos(dd_security, 6, 492);
+    lv_obj_set_pos(dd_security, 6, 396);
     lv_dropdown_set_options(dd_security,
         "HTTPS verified (CA required)\nHTTPS insecure - WARNING\nHTTP plaintext - WARNING");
     lv_dropdown_set_selected(dd_security, static_cast<uint16_t>(cur_prof.security_mode));
@@ -609,7 +605,7 @@ void camera_app_open(lv_obj_t *parent)
 
     lv_obj_t *security_warning = lv_label_create(cfg_modal);
     lv_obj_set_width(security_warning, SCREEN_WIDTH - 28);
-    lv_obj_set_pos(security_warning, 6, 526);
+    lv_obj_set_pos(security_warning, 6, 430);
     lv_label_set_text(security_warning, "Insecure/HTTP là opt-in và có nguy cơ lộ credential/MITM.");
     lv_label_set_long_mode(security_warning, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(security_warning, UI_FONT_SMALL, 0);
@@ -619,7 +615,7 @@ void camera_app_open(lv_obj_t *parent)
     btn_save_connect = lv_btn_create(cfg_modal);
     lv_obj_set_size(btn_save_connect, SCREEN_WIDTH - 28, 34);
     lv_obj_set_ext_click_area(btn_save_connect, 4);
-    lv_obj_set_pos(btn_save_connect, 6, 570);
+    lv_obj_set_pos(btn_save_connect, 6, 474);
     lv_obj_set_style_radius(btn_save_connect, 6, 0);
     lv_obj_set_style_bg_color(btn_save_connect, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_add_event_cb(btn_save_connect, btn_save_connect_cb, LV_EVENT_CLICKED, nullptr);
@@ -639,8 +635,14 @@ void camera_app_open(lv_obj_t *parent)
 
     CameraUiCommand start_command = {};
     start_command.type = CAM_UI_START;
-    if ((!preview_active || !enqueue_camera_command(start_command)) && lbl_cam_status)
+    if (cur_prof.protocol != CAM_PROTO_HTTP_SNAPSHOT)
+    {
+        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "Protocol đã lưu không được hỗ trợ");
+    }
+    else if ((!preview_active || !enqueue_camera_command(start_command)) && lbl_cam_status)
+    {
         lv_label_set_text(lbl_cam_status, "CAMERA/PREVIEW DEGRADED");
+    }
 }
 
 /* Đóng và dọn dẹp */
@@ -653,7 +655,14 @@ void camera_app_close(void)
     }
     CameraUiCommand stop_command = {};
     stop_command.type = CAM_UI_STOP;
-    (void)enqueue_camera_command(stop_command);
+    if (!enqueue_camera_command(stop_command))
+        Serial.println("[CAMERA_UI] Không thể gửi lệnh stop; service giữ trạng thái hiện tại");
+    if (cam_canvas) lv_obj_del(cam_canvas);
+    if (cam_canvas_buf)
+    {
+        free(cam_canvas_buf);
+        cam_canvas_buf = nullptr;
+    }
     main_container = nullptr;
     cam_canvas = nullptr;
     toolbar_box = nullptr;

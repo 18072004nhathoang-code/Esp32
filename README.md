@@ -130,7 +130,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và auto-reconnect, lưu NVS ngoài vùng lock_wifi chống deadlock. |
 | **Map_Worker** | **Core 0** | **2** | Tải tile HTTP/HTTPS qua FreeRTOS Queue, giải mã JPEG ping-pong buffer vào PSRAM, TLS Root CA bundle. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
-| **AI_Voice_Task** | **Core 0** | **2** | Demo/Mock mô phỏng tương tác hội thoại cục bộ (kiểm tra quyền mic trước khi ghi âm). |
+| **AI_Voice_Task** | **Core 0** | **2** | Gửi bản ghi WAV thật tới gateway HTTPS, nhận transcript/reply và phát TTS WAV qua I2S; tự vô hiệu hóa nếu thiếu cấu hình bảo mật. |
 
 ---
 
@@ -145,7 +145,10 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
    #define DEFAULT_WIFI_SSID           "Your_SSID"
    #define DEFAULT_WIFI_PASS           "Your_Password"
    #define GOOGLE_MAPS_STATIC_API_KEY  "AIzaSy..."
-   #define GEMINI_API_KEY              "AIzaSy..."
+   #define AI_VOICE_ENDPOINT           "https://voice-gateway.example/v1/query"
+   #define AI_VOICE_TTS_ENDPOINT       "https://voice-gateway.example/v1/tts"
+   #define AI_VOICE_BEARER_TOKEN       "..."
+   #define AI_VOICE_CA_CERT            "-----BEGIN CERTIFICATE-----..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
 4. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
@@ -175,17 +178,16 @@ pio device monitor -b 115200
 
 ## 📱 7. Các phân hệ ứng dụng
 
-1. **System Monitor**: Đo thời gian thực tần số CPU (240MHz), dung lượng RAM nội, 8MB Octal PSRAM, nhiệt độ lõi chip (°C), Uptime (CPU load mô phỏng gắn nhãn Demo).
-2. **Google Maps Pro**: Chế độ bản đồ Vector Offline WGS84 kèm chế độ Online Google Satellite / Roadmap Tiles với cơ chế đệm kép Ping-Pong Buffer và API tiêu thụ atomic dưới mutex trong PSRAM.
-3. **Music Player**: Trình phát nhạc MP3 điều khiển bằng FreeRTOS Command Queue tuần tự, animation đĩa than, quản lý sở hữu bus I2S độc quyền khi phát nhạc, bảo vệ I/O thẻ nhớ bằng `storage_lock()`.
-4. **XiaoZhi AI Voice (Demo/Mock)**: Giao diện chat bong bóng hội thoại phong cách iOS/iMessage, nút Push-To-Talk, kiểm tra quyền sở hữu Micro I2S thực tế, mô phỏng phản hồi giả lập nội bộ (không kết nối API Gemini giả).
-5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, ghi nhớ mạng với Preferences thread-safe, loại bỏ deadlock giữa wifi_mutex và prefs_mutex, không ghi đè NVS khi tự động kết nối từ cấu hình cũ.
-6. **Sensors & Telemetry**: Dữ liệu cảm biến la bàn/IMU/áp suất được gắn nhãn rõ ràng là **Demo / Mock** (phần cứng không gắn cảm biến vật lý).
+1. **System Monitor**: Đọc tần số CPU, tải CPU ước lượng từ idle hooks của hai core, heap/PSRAM, nhiệt độ chip, uptime 64-bit, dung lượng MicroSD, WiFi/RSSI và số task FreeRTOS thật.
+2. **Network Map**: Tải ảnh bản đồ HTTPS từ Google Static Maps khi có key, hoặc roadmap OpenStreetMap khi không có key; hỗ trợ pan/zoom, cache MicroSD, ping-pong RGB565 và empty/error state khi mất mạng. Satellite bị vô hiệu hóa nếu chưa cấu hình Google key.
+3. **Music Player**: Quét file MP3 thật trong `/music`, phát/tạm dừng/tua/chuyển bài qua command queue, lấy thời lượng từ decoder, quản lý độc quyền I2S và khóa I/O MicroSD.
+4. **AI Voice**: Thu PCM thật từ micro, đóng gói WAV và POST tới `AI_VOICE_ENDPOINT`; gateway phải trả JSON `transcript`/`reply`. TTS endpoint phải trả WAV PCM16 mono 16 kHz để phát qua I2S. Cả hai endpoint bắt buộc HTTPS với CA và bearer token; firmware không log secret.
+5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, kết nối/ngắt/quên mạng, ghi nhớ credential trong NVS, báo lỗi scan/connect/NVS thật và hỗ trợ auto-reconnect có backoff.
+6. **Sensors & Diagnostics**: Đọc trạng thái thật của FT6336, ES8311, MicroSD và camera DVP. Hai profile hiện không khai báo IMU/la bàn/barometer nên UI vô hiệu hóa và báo “không khả dụng”, không sinh số đo giả.
 7. **Camera Subsystem**:
    - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, kiểm tra tính toàn vẹn SOI `0xFF 0xD8` và EOI `0xFF 0xD9`, cơ chế Ping-Pong Double Buffer với per-buffer capacity độc lập lên tới 512KB chống heap overflow, giải mã tự động bằng TJpg_Decoder theo scale lũy thừa 2 và letterbox/center-crop căn giữa hiển thị trực tiếp lên LVGL Canvas kèm đo FPS thực tế).
-   - **ONVIF Client**: `NOT_IMPLEMENTED` (Hỗ trợ cấu trúc SOAP cơ bản, không trả kết quả thành công giả khi chưa parse được profile).
-   - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
-8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
+   - **ONVIF/MJPEG/RTSP**: không được bật trong UI vì firmware chưa có decoder/protocol hoàn chỉnh; chỉ Snapshot HTTP(S) được cho phép.
+8. **Settings & Power**: Độ sáng, accent, auto-reconnect và timeout dim/display-sleep được lưu NVS. Power đọc ADC pin nếu board khai báo, báo `Uncalibrated` khi hệ số chia áp chưa xác minh, vô hiệu hóa pin/sạc trên board không có driver, đồng thời cung cấp display sleep và restart thật.
 9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc (`UI_FONT_SMALL` 12px, `UI_FONT_BODY` 14px, `UI_FONT_BUTTON` 14px, `UI_FONT_TITLE` 16px), không phụ thuộc font runtime ngoài.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. ES3C28P rotation 2 dùng `x=239-raw_x`, `y=319-raw_y`; không đọc hay ghi NVS `touch_cal`. Touch Diagnostic là màn hình quan sát tùy chọn 40 Hz, không hiệu chỉnh và không chặn boot.
 

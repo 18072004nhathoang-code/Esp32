@@ -363,8 +363,8 @@ bool NetworkCameraService::saveProfileToNVS()
 
     NetworkCameraProfile prof = getActiveProfile();
     bool saved = true;
-    saved = (prefs.putString("name", prof.name) > 0) && saved;
-    saved = (prefs.putString("ip", prof.ip) > 0) && saved;
+    saved = (prefs.putString("name", prof.name) == strlen(prof.name)) && saved;
+    saved = (prefs.putString("ip", prof.ip) == strlen(prof.ip)) && saved;
     saved = (prefs.putUShort("http_port", prof.http_port) > 0) && saved;
     saved = (prefs.putUShort("rtsp_port", prof.rtsp_port) > 0) && saved;
     saved = (prefs.putUShort("onvif_port", prof.onvif_port) > 0) && saved;
@@ -372,7 +372,7 @@ bool NetworkCameraService::saveProfileToNVS()
     saved = (prefs.putUChar("proto", (uint8_t)prof.protocol) > 0) && saved;
     saved = (prefs.putUChar("ch", prof.channel) > 0) && saved;
     saved = (prefs.putUChar("security", (uint8_t)prof.security_mode) > 0) && saved;
-    saved = (prefs.putString("user", prof.username) > 0) && saved;
+    saved = (prefs.putString("user", prof.username) == strlen(prof.username)) && saved;
     // Lưu ý bảo mật: Mật khẩu không bao giờ được lưu plaintext vào Flash
     prefs.end();
     if (saved) Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS (mật khẩu không được lưu).");
@@ -408,7 +408,7 @@ bool NetworkCameraService::loadProfileFromNVS()
     prof.security_mode = (CameraSecurityMode)prefs.getUChar("security", (uint8_t)CAM_SECURITY_TLS_VERIFIED);
     if (prof.security_mode < CAM_SECURITY_TLS_VERIFIED || prof.security_mode > CAM_SECURITY_HTTP_PLAINTEXT)
         prof.security_mode = CAM_SECURITY_TLS_VERIFIED;
-    String user = prefs.getString("user", "admin");
+    String user = prefs.getString("user", "");
     strncpy(prof.username, user.c_str(), sizeof(prof.username) - 1);
     prof.password[0] = '\0'; // Mật khẩu không lưu để bảo mật
 

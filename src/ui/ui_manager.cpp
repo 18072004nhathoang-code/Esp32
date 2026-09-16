@@ -21,7 +21,14 @@
 #include "../ai/ai_voice_service.h"
 #include "../os/wifi_manager.h"
 #include "../os/power_manager.h"
+#include "../os/settings_service.h"
+#include "../storage/storage_manager.h"
+#include "shared_i2c_bus.h"
 #include "../camera/camera_service.h"
+
+#ifndef FW_GIT_SHA
+#define FW_GIT_SHA "unknown"
+#endif
 
 // Biến giao diện chính
 static lv_obj_t *status_bar = nullptr;
@@ -48,13 +55,18 @@ static lv_chart_series_t *ser_ram = nullptr;
 static lv_obj_t *lbl_temp_chip = nullptr;
 static lv_obj_t *lbl_uptime_chip = nullptr;
 static lv_obj_t *lbl_psram_chip = nullptr;
+static lv_obj_t *lbl_runtime_chip = nullptr;
 
 // Widget của Settings App
 static lv_obj_t *slider_brightness = nullptr;
 static lv_obj_t *lbl_brightness_val = nullptr;
+static lv_obj_t *lbl_settings_status = nullptr;
+static lv_obj_t *sw_wifi_reconnect = nullptr;
 
 // Widget của Power Manager App
 static lv_obj_t *lbl_power_state = nullptr;
+static lv_obj_t *lbl_power_details = nullptr;
+static lv_obj_t *lbl_power_timeouts = nullptr;
 
 // Widget của Tools & Sensors App
 static lv_obj_t *lbl_compass_val = nullptr;
@@ -96,6 +108,14 @@ static void open_power_app(void);
 static void close_current_app(void);
 static void prepare_app_window(const char *title, AppID app_id);
 
+static void apply_accent_theme(void)
+{
+    if (dock_bar) lv_obj_set_style_border_color(dock_bar, theme_accent, 0);
+    if (app_title_lbl) lv_obj_set_style_text_color(app_title_lbl, theme_accent, 0);
+    if (lbl_wifi_icon && wifi_manager_is_connected())
+        lv_obj_set_style_text_color(lbl_wifi_icon, theme_accent, 0);
+}
+
 /* Callback khi bấm nút đóng cửa sổ app */
 static void close_btn_event_cb(lv_event_t *e)
 {
@@ -135,6 +155,13 @@ static void brightness_slider_event_cb(lv_event_t *e)
     {
         lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %d%%", val);
     }
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED && lbl_settings_status)
+    {
+        bool ok = settings_service_set_brightness((uint8_t)val);
+        lv_label_set_text(lbl_settings_status, ok ? "Đã lưu NVS" : settings_service_get_last_error());
+        lv_obj_set_style_text_color(lbl_settings_status,
+            lv_color_hex(ok ? COLOR_ACCENT_GREEN : COLOR_ACCENT_RED), 0);
+    }
 }
 
 /* Callback chọn màu chủ đề */
@@ -142,6 +169,52 @@ static void theme_color_event_cb(lv_event_t *e)
 {
     uintptr_t color_val = (uintptr_t)lv_event_get_user_data(e);
     theme_accent = lv_color_hex(color_val);
+    apply_accent_theme();
+    bool ok = settings_service_set_accent((uint32_t)color_val);
+    if (lbl_settings_status)
+    {
+        lv_label_set_text(lbl_settings_status, ok ? "Đã lưu màu chủ đề" : settings_service_get_last_error());
+        lv_obj_set_style_text_color(lbl_settings_status,
+            lv_color_hex(ok ? COLOR_ACCENT_GREEN : COLOR_ACCENT_RED), 0);
+    }
+}
+
+static void wifi_reconnect_event_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+    bool enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    if (settings_service_set_wifi_auto_reconnect(enabled))
+    {
+        wifi_manager_set_auto_reconnect(enabled);
+        if (lbl_settings_status) lv_label_set_text(lbl_settings_status, "Đã lưu tự động kết nối WiFi");
+    }
+    else if (lbl_settings_status)
+    {
+        lv_label_set_text(lbl_settings_status, settings_service_get_last_error());
+        lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_RED), 0);
+    }
+}
+
+static void power_timeout_cycle_cb(lv_event_t *e)
+{
+    (void)e;
+    uint32_t dim = power_manager_get_dim_timeout();
+    uint32_t new_dim = 30, new_sleep = 60;
+    if (dim <= 30) { new_dim = 60; new_sleep = 120; }
+    else if (dim <= 60) { new_dim = 120; new_sleep = 300; }
+    power_manager_set_timeouts(new_dim, new_sleep);
+    bool ok = settings_service_set_power_timeouts(new_dim, new_sleep);
+    if (lbl_power_timeouts)
+    {
+        lv_label_set_text_fmt(lbl_power_timeouts, "%s Mờ: %lus • Tắt LCD: %lus",
+                              ok ? "" : "Lỗi lưu •", (unsigned long)new_dim, (unsigned long)new_sleep);
+    }
+}
+
+static void restart_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP.restart();
 }
 
 
@@ -428,9 +501,14 @@ static void invalidate_active_app_widgets(void)
     lbl_temp_chip = nullptr;
     lbl_uptime_chip = nullptr;
     lbl_psram_chip = nullptr;
+    lbl_runtime_chip = nullptr;
     slider_brightness = nullptr;
     lbl_brightness_val = nullptr;
+    lbl_settings_status = nullptr;
+    sw_wifi_reconnect = nullptr;
     lbl_power_state = nullptr;
+    lbl_power_details = nullptr;
+    lbl_power_timeouts = nullptr;
     lbl_compass_val = nullptr;
     lbl_pitch_val = nullptr;
     active_app = APP_NONE;
@@ -461,6 +539,7 @@ static void close_current_app(void)
 static void open_system_monitor_app(void)
 {
     prepare_app_window("System Monitor", APP_SYSTEM);
+    SystemStats initial = system_get_stats();
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 6, 0);
 
@@ -482,7 +561,7 @@ static void open_system_monitor_app(void)
     lv_arc_set_rotation(arc_cpu, 135);
     lv_arc_set_bg_angles(arc_cpu, 0, 270);
     lv_arc_set_range(arc_cpu, 0, 100);
-    lv_arc_set_value(arc_cpu, 35);
+    lv_arc_set_value(arc_cpu, initial.cpu_usage_available ? initial.cpu_usage_percent : 0);
     lv_obj_set_style_arc_color(arc_cpu, lv_color_hex(COLOR_ACCENT_CYAN), LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(arc_cpu, 5, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc_cpu, lv_color_hex(0x1F2937), LV_PART_MAIN);
@@ -490,7 +569,10 @@ static void open_system_monitor_app(void)
     lv_obj_clear_flag(arc_cpu, LV_OBJ_FLAG_CLICKABLE);
 
     lbl_cpu_arc_val = lv_label_create(arc_cpu);
-    lv_label_set_text(lbl_cpu_arc_val, "35%\nCPU (Demo)");
+    if (initial.cpu_usage_available)
+        lv_label_set_text_fmt(lbl_cpu_arc_val, "%u%%\nCPU", initial.cpu_usage_percent);
+    else
+        lv_label_set_text(lbl_cpu_arc_val, "--\nCPU");
     lv_obj_set_style_text_align(lbl_cpu_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_cpu_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(lbl_cpu_arc_val, UI_FONT_SMALL, 0);
@@ -503,7 +585,7 @@ static void open_system_monitor_app(void)
     lv_arc_set_rotation(arc_ram, 135);
     lv_arc_set_bg_angles(arc_ram, 0, 270);
     lv_arc_set_range(arc_ram, 0, 100);
-    lv_arc_set_value(arc_ram, 28);
+    lv_arc_set_value(arc_ram, initial.heap_usage_percent);
     lv_obj_set_style_arc_color(arc_ram, lv_color_hex(COLOR_ACCENT_GREEN), LV_PART_INDICATOR);
     lv_obj_set_style_arc_width(arc_ram, 5, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(arc_ram, lv_color_hex(0x1F2937), LV_PART_MAIN);
@@ -511,7 +593,7 @@ static void open_system_monitor_app(void)
     lv_obj_clear_flag(arc_ram, LV_OBJ_FLAG_CLICKABLE);
 
     lbl_ram_arc_val = lv_label_create(arc_ram);
-    lv_label_set_text(lbl_ram_arc_val, "28%\nRAM");
+    lv_label_set_text_fmt(lbl_ram_arc_val, "%u%%\nRAM", initial.heap_usage_percent);
     lv_obj_set_style_text_align(lbl_ram_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_ram_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(lbl_ram_arc_val, UI_FONT_SMALL, 0);
@@ -532,15 +614,12 @@ static void open_system_monitor_app(void)
 
     ser_cpu = lv_chart_add_series(chart_system, lv_color_hex(COLOR_ACCENT_CYAN), LV_CHART_AXIS_PRIMARY_Y);
     ser_ram = lv_chart_add_series(chart_system, lv_color_hex(COLOR_ACCENT_GREEN), LV_CHART_AXIS_PRIMARY_Y);
-    for (int i = 0; i < 24; i++)
-    {
-        lv_chart_set_next_value(chart_system, ser_cpu, 25 + (i % 15));
-        lv_chart_set_next_value(chart_system, ser_ram, 28);
-    }
+    lv_chart_set_all_value(chart_system, ser_cpu, LV_CHART_POINT_NONE);
+    lv_chart_set_all_value(chart_system, ser_ram, LV_CHART_POINT_NONE);
 
     // Card 3: Telemetry & Memory Box
     lv_obj_t *telemetry_box = lv_obj_create(app_content_container);
-    lv_obj_set_size(telemetry_box, SCREEN_WIDTH - 12, 85);
+    lv_obj_set_size(telemetry_box, SCREEN_WIDTH - 12, 112);
     lv_obj_align(telemetry_box, LV_ALIGN_TOP_MID, 0, 178);
     lv_obj_set_style_radius(telemetry_box, 8, 0);
     lv_obj_set_style_bg_color(telemetry_box, lv_color_hex(COLOR_CARD_BG), 0);
@@ -550,22 +629,33 @@ static void open_system_monitor_app(void)
     lv_obj_clear_flag(telemetry_box, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_temp_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_temp_chip, "Nhiệt độ: 41.8 °C");
+    lv_label_set_text_fmt(lbl_temp_chip, "Nhiệt độ chip: %.1f °C", initial.core_temp_c);
     lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(lbl_temp_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_temp_chip, 4, 4);
 
     lbl_psram_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_psram_chip, LV_SYMBOL_SD_CARD " PSRAM: 1.1 / 8.0 MB");
+    lv_label_set_text_fmt(lbl_psram_chip, "PSRAM: %.1f / %.1f MB",
+                          (float)initial.used_psram / 1048576.0f,
+                          (float)initial.total_psram / 1048576.0f);
     lv_obj_set_style_text_color(lbl_psram_chip, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     lv_obj_set_style_text_font(lbl_psram_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_psram_chip, 4, 26);
 
     lbl_uptime_chip = lv_label_create(telemetry_box);
-    lv_label_set_text(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: 00:01:25");
+    lv_label_set_text_fmt(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: %s", initial.uptime_str);
     lv_obj_set_style_text_color(lbl_uptime_chip, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(lbl_uptime_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_uptime_chip, 4, 48);
+
+    lbl_runtime_chip = lv_label_create(telemetry_box);
+    lv_label_set_text_fmt(lbl_runtime_chip, "Task: %lu • SD: %s • WiFi: %s",
+                          (unsigned long)initial.task_count,
+                          initial.storage_available ? "OK" : "N/A",
+                          initial.wifi_connected ? "OK" : "OFF");
+    lv_obj_set_style_text_color(lbl_runtime_chip, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_runtime_chip, UI_FONT_SMALL, 0);
+    lv_obj_set_pos(lbl_runtime_chip, 4, 70);
 }
 
 /* =========================================================================
@@ -574,6 +664,9 @@ static void open_system_monitor_app(void)
 static void open_settings_app(void)
 {
     prepare_app_window("Settings", APP_SETTINGS);
+    MiniOsSettings cfg = settings_service_get();
+    theme_accent = lv_color_hex(cfg.accent_rgb);
+    apply_accent_theme();
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
@@ -588,7 +681,7 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_bright, LV_OBJ_FLAG_SCROLLABLE);
 
     lbl_brightness_val = lv_label_create(card_bright);
-    lv_label_set_text(lbl_brightness_val, "Độ sáng Màn hình: 85%");
+    lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng Màn hình: %u%%", cfg.brightness);
     lv_obj_set_style_text_color(lbl_brightness_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
     lv_obj_set_style_text_font(lbl_brightness_val, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_brightness_val, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -597,10 +690,10 @@ static void open_settings_app(void)
     lv_obj_set_size(slider_brightness, SCREEN_WIDTH - 44, 14);
     lv_obj_align(slider_brightness, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_slider_set_range(slider_brightness, 10, 100);
-    lv_slider_set_value(slider_brightness, lvgl_port_get_brightness(), LV_ANIM_OFF);
+    lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(slider_brightness, lv_color_hex(COLOR_ACCENT_AMBER), LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(slider_brightness, lv_color_hex(0xFFD54F), LV_PART_KNOB);
-    lv_obj_add_event_cb(slider_brightness, brightness_slider_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
+    lv_obj_add_event_cb(slider_brightness, brightness_slider_event_cb, LV_EVENT_ALL, nullptr);
 
     // Card 2: Màu chủ đề Accent
     lv_obj_t *card_theme = lv_obj_create(app_content_container);
@@ -638,7 +731,7 @@ static void open_settings_app(void)
     create_color_pill(2, COLOR_ACCENT_RED, "Red");
     create_color_pill(3, COLOR_ACCENT_PURPLE, "Purp");
 
-    // Card 3: Phím tắt mở nhanh Power Manager
+    // Card 3: cấu hình WiFi thật, lưu NVS
     lv_obj_t *card_pwr = lv_obj_create(app_content_container);
     lv_obj_set_size(card_pwr, SCREEN_WIDTH - 16, 54);
     lv_obj_align(card_pwr, LV_ALIGN_TOP_MID, 0, 164);
@@ -649,22 +742,16 @@ static void open_settings_app(void)
     lv_obj_clear_flag(card_pwr, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *lbl_pwr_t = lv_label_create(card_pwr);
-    lv_label_set_text(lbl_pwr_t, "Quản Lý Nguồn Điện");
+    lv_label_set_text(lbl_pwr_t, "WiFi tự kết nối lại");
     lv_obj_set_style_text_color(lbl_pwr_t, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(lbl_pwr_t, UI_FONT_12, 0);
     lv_obj_align(lbl_pwr_t, LV_ALIGN_LEFT_MID, 0, 0);
 
-    lv_obj_t *btn_to_pwr = lv_btn_create(card_pwr);
-    lv_obj_set_size(btn_to_pwr, 72, 32);
-    lv_obj_align(btn_to_pwr, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_radius(btn_to_pwr, 6, 0);
-    lv_obj_set_style_bg_color(btn_to_pwr, lv_color_hex(0x1F2A38), 0);
-    lv_obj_add_event_cb(btn_to_pwr, app_icon_event_cb, LV_EVENT_CLICKED, (void *)APP_POWER);
-
-    lv_obj_t *lbl_btn_p = lv_label_create(btn_to_pwr);
-    lv_label_set_text(lbl_btn_p, "Mở " LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(lbl_btn_p, UI_FONT_12, 0);
-    lv_obj_center(lbl_btn_p);
+    sw_wifi_reconnect = lv_switch_create(card_pwr);
+    lv_obj_set_size(sw_wifi_reconnect, 48, 26);
+    lv_obj_align(sw_wifi_reconnect, LV_ALIGN_RIGHT_MID, 0, 0);
+    if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(sw_wifi_reconnect, wifi_reconnect_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
 
     // Card 4: Chẩn đoán màu màn hình
     lv_obj_t *card_diag = lv_obj_create(app_content_container);
@@ -696,6 +783,12 @@ static void open_settings_app(void)
     lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_text_font(lbl_ct, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_ct);
+
+    lbl_settings_status = lv_label_create(app_content_container);
+    lv_label_set_text(lbl_settings_status, "Cấu hình được lưu trong NVS");
+    lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(lbl_settings_status, UI_FONT_SMALL, 0);
+    lv_obj_align(lbl_settings_status, LV_ALIGN_TOP_LEFT, 8, 306);
 }
 
 /* =========================================================================
@@ -704,12 +797,13 @@ static void open_settings_app(void)
 static void open_power_app(void)
 {
     prepare_app_window("Power Manager", APP_POWER);
+    BatteryInfo battery = system_get_battery_info();
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
     // Card 1: Trạng thái nguồn hiện tại
     lv_obj_t *card_stat = lv_obj_create(app_content_container);
-    lv_obj_set_size(card_stat, SCREEN_WIDTH - 16, 75);
+    lv_obj_set_size(card_stat, SCREEN_WIDTH - 16, 92);
     lv_obj_align(card_stat, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(card_stat, 10, 0);
     lv_obj_set_style_bg_color(card_stat, lv_color_hex(COLOR_CARD_BG), 0);
@@ -729,10 +823,19 @@ static void open_power_app(void)
     lv_obj_set_style_text_font(lbl_power_state, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_power_state, LV_ALIGN_BOTTOM_LEFT, 0, -4);
 
+    lbl_power_details = lv_label_create(card_stat);
+    lv_label_set_text_fmt(lbl_power_details, "Pin: %s • Sạc: không có driver",
+                          battery.has_battery ? battery.status_str : "không hỗ trợ");
+    lv_obj_set_width(lbl_power_details, SCREEN_WIDTH - 38);
+    lv_label_set_long_mode(lbl_power_details, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_color(lbl_power_details, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_power_details, UI_FONT_SMALL, 0);
+    lv_obj_align(lbl_power_details, LV_ALIGN_CENTER, 0, 6);
+
     // Card 2: Hẹn giờ tự động mờ và ngủ
     lv_obj_t *card_timer = lv_obj_create(app_content_container);
-    lv_obj_set_size(card_timer, SCREEN_WIDTH - 16, 75);
-    lv_obj_align(card_timer, LV_ALIGN_TOP_MID, 0, 82);
+    lv_obj_set_size(card_timer, SCREEN_WIDTH - 16, 90);
+    lv_obj_align(card_timer, LV_ALIGN_TOP_MID, 0, 99);
     lv_obj_set_style_radius(card_timer, 10, 0);
     lv_obj_set_style_bg_color(card_timer, lv_color_hex(COLOR_CARD_BG), 0);
     lv_obj_set_style_border_color(card_timer, lv_color_hex(COLOR_CARD_BORDER), 0);
@@ -745,16 +848,27 @@ static void open_power_app(void)
     lv_obj_set_style_text_font(t_t, UI_FONT_SMALL, 0);
     lv_obj_align(t_t, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    lv_obj_t *lbl_t_info = lv_label_create(card_timer);
-    lv_label_set_text(lbl_t_info, "• Mờ sau: 30 giây\n• Tắt màn hình sau: 60 giây");
-    lv_obj_set_style_text_color(lbl_t_info, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_t_info, UI_FONT_SMALL, 0);
-    lv_obj_align(lbl_t_info, LV_ALIGN_BOTTOM_LEFT, 0, -4);
+    lbl_power_timeouts = lv_label_create(card_timer);
+    lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
+                          (unsigned long)power_manager_get_dim_timeout(),
+                          (unsigned long)power_manager_get_sleep_timeout());
+    lv_obj_set_style_text_color(lbl_power_timeouts, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_power_timeouts, UI_FONT_SMALL, 0);
+    lv_obj_align(lbl_power_timeouts, LV_ALIGN_LEFT_MID, 0, 8);
+
+    lv_obj_t *btn_timeout = lv_btn_create(card_timer);
+    lv_obj_set_size(btn_timeout, 62, 30);
+    lv_obj_align(btn_timeout, LV_ALIGN_RIGHT_MID, 0, 8);
+    lv_obj_add_event_cb(btn_timeout, power_timeout_cycle_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_timeout = lv_label_create(btn_timeout);
+    lv_label_set_text(lbl_timeout, "Đổi");
+    lv_obj_set_style_text_font(lbl_timeout, UI_FONT_BUTTON, 0);
+    lv_obj_center(lbl_timeout);
 
     // Card 3: Thao tác Ngủ Ngay (Sleep Now)
     lv_obj_t *btn_sleep = lv_btn_create(app_content_container);
     lv_obj_set_size(btn_sleep, SCREEN_WIDTH - 16, 36);
-    lv_obj_align(btn_sleep, LV_ALIGN_TOP_MID, 0, 164);
+    lv_obj_align(btn_sleep, LV_ALIGN_TOP_MID, 0, 196);
     lv_obj_set_style_radius(btn_sleep, 8, 0);
     lv_obj_set_style_bg_color(btn_sleep, lv_color_hex(0x281A22), 0);
     lv_obj_set_style_border_color(btn_sleep, lv_color_hex(COLOR_ACCENT_RED), 0);
@@ -766,6 +880,17 @@ static void open_power_app(void)
     lv_obj_set_style_text_color(lbl_slp, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_set_style_text_font(lbl_slp, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_slp);
+
+    lv_obj_t *btn_restart = lv_btn_create(app_content_container);
+    lv_obj_set_size(btn_restart, SCREEN_WIDTH - 16, 36);
+    lv_obj_align(btn_restart, LV_ALIGN_TOP_MID, 0, 238);
+    lv_obj_set_style_radius(btn_restart, 8, 0);
+    lv_obj_set_style_bg_color(btn_restart, lv_color_hex(0x1F2937), 0);
+    lv_obj_add_event_cb(btn_restart, restart_btn_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_restart = lv_label_create(btn_restart);
+    lv_label_set_text(lbl_restart, LV_SYMBOL_REFRESH " Khởi động lại ESP32");
+    lv_obj_set_style_text_font(lbl_restart, UI_FONT_BUTTON, 0);
+    lv_obj_center(lbl_restart);
 }
 
 /* =========================================================================
@@ -785,22 +910,30 @@ static void open_tools_app(void)
     lv_obj_set_style_border_width(compass_card, 1, 0);
 
     lv_obj_t *t = lv_label_create(compass_card);
-    lv_label_set_text(t, "Sensors & IMU (Demo)");
+    lv_label_set_text(t, "Hardware Sensors");
     lv_obj_set_style_text_color(t, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_text_font(t, UI_FONT_12, 0);
     lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 2);
 
     lbl_compass_val = lv_label_create(compass_card);
-    lv_label_set_text(lbl_compass_val, "[DEMO]\nHướng: 180.5° Nam\nTừ trường: 48.2 µT");
+    lv_label_set_text(lbl_compass_val,
+        "IMU / La bàn: không khả dụng\nÁp suất: không khả dụng\nBoard không khai báo driver cảm biến.");
     lv_obj_set_style_text_color(lbl_compass_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(lbl_compass_val, UI_FONT_12, 0);
-    lv_obj_align(lbl_compass_val, LV_ALIGN_CENTER, 0, -32);
+    lv_obj_set_width(lbl_compass_val, SCREEN_WIDTH - 40);
+    lv_label_set_long_mode(lbl_compass_val, LV_LABEL_LONG_WRAP);
+    lv_obj_align(lbl_compass_val, LV_ALIGN_TOP_LEFT, 0, 34);
 
     lbl_pitch_val = lv_label_create(compass_card);
-    lv_label_set_text(lbl_pitch_val, "Pitch/Roll: 0.2° | -0.5°\nGia tốc: 9.81 m/s²\nÁp suất: 1013.25 hPa");
+    lv_label_set_text_fmt(lbl_pitch_val,
+        "Touch FT6336: %s\nAudio ES8311: %s\nMicroSD: %s\nCamera DVP: %s",
+        shared_i2c_touch_is_detected() ? "OK" : "không phát hiện",
+        shared_i2c_codec_is_detected() ? "OK" : "không phát hiện",
+        storage_is_available() ? "OK" : "không phát hiện",
+        camera_feature_status_to_string(camera_service_get_local_dvp_status()));
     lv_obj_set_style_text_color(lbl_pitch_val, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_pitch_val, UI_FONT_12, 0);
-    lv_obj_align(lbl_pitch_val, LV_ALIGN_CENTER, 0, 8);
+    lv_obj_align(lbl_pitch_val, LV_ALIGN_TOP_LEFT, 0, 104);
 
     // Nút mở Color Self-Test
     lv_obj_t *btn_ct = lv_btn_create(compass_card);
@@ -857,18 +990,27 @@ static void open_about_app(void)
 
     lv_obj_t *desc = lv_label_create(card);
     BatteryInfo bat = system_get_battery_info();
+    SystemStats stats = system_get_stats();
     lv_label_set_text_fmt(desc,
-        "Phiên bản: Mini OS v3.0\n"
-        "Màn hình: %dx%d (%s)\n"
-        "Đồ họa: LovyanGFX + LVGL 8\n"
-        "Vi xử lý: ESP32-S3 Dual-Core\n"
-        "Flash 16MB • PSRAM 8MB\n"
+        "Commit: %.12s\n"
+        "Board: %s\n"
+        "LCD: %dx%d • rotation %d (%s)\n"
+        "LVGL: %d.%d.%d\n"
+        "MCU: %s @ %uMHz\n"
+        "Flash: %uMB • PSRAM: %uMB\n"
         "Pin: %s\n"
-        "Âm thanh: ES8311 Codec\n"
-        "Cảm ứng: FT6336 (Shared Bus)",
-        DISP_HOR_RES, DISP_VER_RES,
+        "Audio: %s • Touch: %s",
+        FW_GIT_SHA, BOARD_PROFILE_NAME,
+        DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION,
         display_orientation_name(BOARD_LCD_ROTATION),
-        bat.status_str);
+        LVGL_VERSION_MAJOR, LVGL_VERSION_MINOR, LVGL_VERSION_PATCH,
+        ESP.getChipModel(), stats.cpu_freq_mhz,
+        stats.flash_size_mb, stats.total_psram / 1048576U,
+        bat.status_str,
+        audio_is_driver_installed() ? "OK" : "DEGRADED",
+        shared_i2c_touch_is_detected() ? "OK" : "MISSING");
+    lv_obj_set_width(desc, SCREEN_WIDTH - 40);
+    lv_label_set_long_mode(desc, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_color(desc, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(desc, UI_FONT_12, 0);
     lv_obj_align(desc, LV_ALIGN_CENTER, 0, 10);
@@ -879,7 +1021,7 @@ static void open_about_app(void)
  * ========================================================================= */
 static void open_map_app(void)
 {
-    prepare_app_window("Google Maps", APP_MAP);
+    prepare_app_window("Network Map", APP_MAP);
     map_app_open(app_content_container);
 }
 
@@ -954,11 +1096,13 @@ void ui_open_camera_app(void)
  * ========================================================================= */
 void ui_init(void)
 {
+    theme_accent = lv_color_hex(settings_service_get().accent_rgb);
     if (lvgl_port_lock(1000))
     {
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(COLOR_OS_BG), 0);
         create_status_bar();
         create_desktop();
+        apply_accent_theme();
         lvgl_port_unlock();
     }
 }
@@ -997,13 +1141,15 @@ void ui_update_periodic(const SystemStats &stats)
     // 4. Cập nhật System Monitor (nếu đang mở)
     if (arc_cpu && lbl_cpu_arc_val)
     {
-        int simulated_cpu = 25 + (stats.uptime_sec % 20);
-        lv_arc_set_value(arc_cpu, simulated_cpu);
-        lv_label_set_text_fmt(lbl_cpu_arc_val, "%d%%\nCPU (Demo)", simulated_cpu);
+        const int cpu = stats.cpu_usage_available ? stats.cpu_usage_percent : 0;
+        lv_arc_set_value(arc_cpu, cpu);
+        if (stats.cpu_usage_available) lv_label_set_text_fmt(lbl_cpu_arc_val, "%d%%\nCPU", cpu);
+        else lv_label_set_text(lbl_cpu_arc_val, "--\nCPU");
 
         if (chart_system && ser_cpu)
         {
-            lv_chart_set_next_value(chart_system, ser_cpu, simulated_cpu);
+            lv_chart_set_next_value(chart_system, ser_cpu,
+                                    stats.cpu_usage_available ? cpu : LV_CHART_POINT_NONE);
         }
     }
 
@@ -1025,12 +1171,31 @@ void ui_update_periodic(const SystemStats &stats)
 
     if (lbl_psram_chip)
     {
-        lv_label_set_text_fmt(lbl_psram_chip, LV_SYMBOL_SD_CARD " PSRAM: %.1f / 8.0 MB", (float)stats.used_psram / (1024.0f * 1024.0f));
+        lv_label_set_text_fmt(lbl_psram_chip, "PSRAM: %.1f / %.1f MB",
+                              (float)stats.used_psram / 1048576.0f,
+                              (float)stats.total_psram / 1048576.0f);
     }
 
     if (lbl_uptime_chip)
     {
         lv_label_set_text_fmt(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: %s", stats.uptime_str);
+    }
+
+    if (lbl_runtime_chip)
+    {
+        if (stats.storage_available)
+        {
+            lv_label_set_text_fmt(lbl_runtime_chip, "Task: %lu • SD: %llu/%lluMB • WiFi: %ddBm",
+                                  (unsigned long)stats.task_count,
+                                  stats.storage_free_mb, stats.storage_total_mb,
+                                  stats.wifi_rssi);
+        }
+        else
+        {
+            lv_label_set_text_fmt(lbl_runtime_chip, "Task: %lu • SD: N/A • WiFi: %s",
+                                  (unsigned long)stats.task_count,
+                                  stats.wifi_connected ? "OK" : "OFF");
+        }
     }
 
     // 5. Cập nhật Power State (nếu đang mở)
@@ -1043,6 +1208,13 @@ void ui_update_periodic(const SystemStats &stats)
             lv_label_set_text(lbl_power_state, LV_SYMBOL_EYE_CLOSE " Mờ Màn Hình (20%)");
         else
             lv_label_set_text(lbl_power_state, LV_SYMBOL_POWER " Tắt Màn Hình");
+    }
+
+    if (lbl_power_details)
+    {
+        BatteryInfo battery = system_get_battery_info();
+        lv_label_set_text_fmt(lbl_power_details, "Pin: %s • Sạc: không có driver",
+                              battery.has_battery ? battery.status_str : "không hỗ trợ");
     }
 
     // 6. Cập nhật icon Loa trên Status Bar

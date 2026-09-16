@@ -9,6 +9,7 @@
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
 #include <math.h>
+#include "../storage/storage_manager.h"
 
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
@@ -24,6 +25,9 @@ static bool recording_active = false;
 // Trạng thái phát lại
 static bool playback_active = false;
 static uint32_t playback_sample_idx = 0;
+static volatile AudioRecordingFileState recording_file_state = AUDIO_FILE_NONE;
+static TaskHandle_t recording_export_task_handle = nullptr;
+static constexpr const char *kRecordingPath = "/voice/last_recording.wav";
 
 // Đo lường Microphone thời gian thực
 static uint8_t current_mic_level = 0;     // 0 - 100%
@@ -52,6 +56,78 @@ enum AudioTaskState
 };
 static volatile AudioTaskState audio_task_state = AUDIO_TASK_ACTIVE;
 static SemaphoreHandle_t audio_task_ack_sem = nullptr;
+
+static void put_le16(uint8_t *p, uint16_t value)
+{
+    p[0] = value & 0xFF;
+    p[1] = (value >> 8) & 0xFF;
+}
+
+static void put_le32(uint8_t *p, uint32_t value)
+{
+    p[0] = value & 0xFF;
+    p[1] = (value >> 8) & 0xFF;
+    p[2] = (value >> 16) & 0xFF;
+    p[3] = (value >> 24) & 0xFF;
+}
+
+static void recording_export_task(void *)
+{
+    bool ok = false;
+    if (storage_is_available() && storage_lock(1000))
+    {
+        fs::FS &fs = storage_get_fs();
+        bool directory_ready = fs.exists("/voice") || fs.mkdir("/voice");
+        bool old_file_removed = !fs.exists(kRecordingPath) || fs.remove(kRecordingPath);
+        File file = (directory_ready && old_file_removed) ? fs.open(kRecordingPath, FILE_WRITE) : File();
+        if (file)
+        {
+            const uint32_t data_bytes = recorded_samples_count * sizeof(int16_t);
+            uint8_t header[44] = {};
+            memcpy(header, "RIFF", 4); put_le32(header + 4, 36 + data_bytes);
+            memcpy(header + 8, "WAVEfmt ", 8); put_le32(header + 16, 16);
+            put_le16(header + 20, 1); put_le16(header + 22, 1);
+            put_le32(header + 24, AUDIO_SAMPLE_RATE);
+            put_le32(header + 28, AUDIO_SAMPLE_RATE * sizeof(int16_t));
+            put_le16(header + 32, sizeof(int16_t)); put_le16(header + 34, 16);
+            memcpy(header + 36, "data", 4); put_le32(header + 40, data_bytes);
+            ok = file.write(header, sizeof(header)) == sizeof(header);
+            const uint8_t *raw = reinterpret_cast<const uint8_t *>(psram_record_buf);
+            size_t remaining = data_bytes;
+            while (ok && remaining > 0)
+            {
+                size_t chunk = remaining > 4096 ? 4096 : remaining;
+                ok = file.write(raw, chunk) == chunk;
+                raw += chunk;
+                remaining -= chunk;
+                vTaskDelay(1);
+            }
+            file.close();
+        }
+        storage_unlock();
+    }
+    recording_file_state = ok ? AUDIO_FILE_SAVED : AUDIO_FILE_ERROR;
+    recording_export_task_handle = nullptr;
+    vTaskDelete(nullptr);
+}
+
+static void schedule_recording_export(void)
+{
+    if (recorded_samples_count == 0 || recording_export_task_handle) return;
+    if (!storage_is_available())
+    {
+        recording_file_state = AUDIO_FILE_ERROR;
+        return;
+    }
+    recording_file_state = AUDIO_FILE_SAVING;
+    BaseType_t created = xTaskCreatePinnedToCore(recording_export_task, "VoiceWavSave", 4096,
+                                                 nullptr, 1, &recording_export_task_handle, 0);
+    if (created != pdPASS)
+    {
+        recording_export_task_handle = nullptr;
+        recording_file_state = AUDIO_FILE_ERROR;
+    }
+}
 
 /* Cấu hình và cài đặt Driver I2S Duplex (16kHz 16-bit Duplex) cho Microphone & Tone/Voice */
 bool audio_install_duplex_driver(void)
@@ -398,6 +474,7 @@ static void audio_background_task(void *pvParameters)
                 {
                     recording_active = false;
                     audio_release_ownership(AUDIO_OWNER_RECORDER);
+                    schedule_recording_export();
                 }
             }
 
@@ -656,6 +733,7 @@ void audio_play_sound_effect(SoundEffect fx)
 bool audio_start_recording(uint32_t max_duration_sec)
 {
     if (!psram_record_buf) return false;
+    if (recording_export_task_handle) return false;
     if (recording_active) return true;
     audio_stop_playback();
     if (!audio_request_ownership(AUDIO_OWNER_RECORDER)) return false;
@@ -666,6 +744,7 @@ bool audio_start_recording(uint32_t max_duration_sec)
         record_sample_capacity = AUDIO_MAX_SAMPLES;
     }
     recorded_samples_count = 0;
+    recording_file_state = AUDIO_FILE_NONE;
     recording_active = true;
     Serial.printf("[AUDIO] Bắt đầu ghi âm Mic vào PSRAM (Tối đa %u giây)...\n", max_duration_sec);
     return true;
@@ -679,6 +758,7 @@ void audio_stop_recording(void)
         audio_release_ownership(AUDIO_OWNER_RECORDER);
         Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
                       recorded_samples_count, (float)recorded_samples_count / AUDIO_SAMPLE_RATE);
+        schedule_recording_export();
     }
 }
 
@@ -727,6 +807,65 @@ uint32_t audio_get_recorded_duration_ms(void)
 uint32_t audio_get_playback_progress_ms(void)
 {
     return (playback_sample_idx * 1000) / AUDIO_SAMPLE_RATE;
+}
+
+size_t audio_get_recorded_sample_count(void)
+{
+    return recording_active ? 0 : recorded_samples_count;
+}
+
+size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples)
+{
+    if (!dest || max_samples == 0 || recording_active || !psram_record_buf || offset >= recorded_samples_count)
+        return 0;
+    size_t count = recorded_samples_count - offset;
+    if (count > max_samples) count = max_samples;
+    memcpy(dest, psram_record_buf + offset, count * sizeof(int16_t));
+    return count;
+}
+
+AudioRecordingFileState audio_get_recording_file_state(void)
+{
+    return recording_file_state;
+}
+
+const char *audio_get_recording_file_path(void)
+{
+    return recording_file_state == AUDIO_FILE_SAVED ? kRecordingPath : "";
+}
+
+bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeout_ms)
+{
+    if (!samples || count == 0 || !i2s_duplex_installed || current_audio_owner == AUDIO_OWNER_NONE)
+        return false;
+    if (!audio_i2s_tx_mutex || xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+        return false;
+
+    bool ok = true;
+    int16_t stereo[256];
+    size_t offset = 0;
+    while (offset < count)
+    {
+        size_t chunk = count - offset;
+        if (chunk > 128) chunk = 128;
+        for (size_t i = 0; i < chunk; ++i)
+        {
+            int32_t scaled = ((int32_t)samples[offset + i] * master_volume) / 100;
+            stereo[i * 2] = (int16_t)scaled;
+            stereo[i * 2 + 1] = (int16_t)scaled;
+        }
+        size_t written = 0;
+        esp_err_t err = i2s_write(I2S_NUM_0, stereo, chunk * 2 * sizeof(int16_t),
+                                  &written, pdMS_TO_TICKS(timeout_ms));
+        if (err != ESP_OK || written != chunk * 2 * sizeof(int16_t))
+        {
+            ok = false;
+            break;
+        }
+        offset += chunk;
+    }
+    xSemaphoreGive(audio_i2s_tx_mutex);
+    return ok;
 }
 
 /* =========================================================================

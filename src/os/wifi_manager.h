@@ -43,12 +43,15 @@ bool wifi_manager_init(void);
 /**
  * @brief Bắt đầu quét mạng WiFi xung quanh (bất đồng bộ)
  */
-void wifi_manager_scan_async(void);
+bool wifi_manager_scan_async(void);
 
 /**
  * @brief Kiểm tra xem quá trình quét mạng đã hoàn thành chưa
  */
 bool wifi_manager_is_scan_done(void);
+
+/** @brief Lỗi gần nhất từ scan/connect/NVS; không chứa mật khẩu. */
+String wifi_manager_get_last_error(void);
 
 /**
  * @brief Lấy danh sách các mạng WiFi vừa quét được
@@ -102,7 +105,7 @@ bool wifi_manager_has_saved_credentials(void);
 /**
  * @brief Lưu thông tin WiFi vào bộ nhớ Flash NVS (Preferences)
  */
-void wifi_manager_save_credentials(const char *ssid, const char *pass);
+bool wifi_manager_save_credentials(const char *ssid, const char *pass);
 
 /**
  * @brief Đọc thông tin WiFi đã lưu từ NVS Flash
@@ -112,12 +115,12 @@ bool wifi_manager_load_credentials(String &ssid, String &pass);
 /**
  * @brief Xóa thông tin WiFi đã lưu trong NVS Flash
  */
-void wifi_manager_clear_credentials(void);
+bool wifi_manager_clear_credentials(void);
 
 /**
  * @brief Quên mạng hiện tại (Xóa NVS, xóa mục tiêu kết nối và chặn tự động reconnect)
  */
-void wifi_manager_forget_network(void);
+bool wifi_manager_forget_network(void);
 
 /**
  * @brief Bật hoặc tắt tính năng tự động kết nối lại khi mất sóng

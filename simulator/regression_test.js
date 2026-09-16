@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const { BASE_DIR, HOST, resolveRequestPath } = require('./server');
 
@@ -155,5 +156,33 @@ assert.strictEqual(buffers.back.capacity, 8);
 const headerHeight = 30, titleLineHeight = 25;
 assert.ok((headerHeight - titleLineHeight) / 2 >= 2);
 assert.strictEqual(320 - 22 - headerHeight, 268);
+
+// Firmware regressions: các app phải dùng service thật hoặc fail rõ ràng.
+const repoRoot = path.resolve(__dirname, '..');
+const source = relative => fs.readFileSync(path.join(repoRoot, relative), 'utf8');
+const aiService = source('src/ai/ai_voice_service.cpp');
+const aiUi = source('src/apps/ai_voice_app.cpp');
+const musicService = source('src/audio/music_player.cpp');
+const mapService = source('src/apps/map_tile_downloader.cpp');
+const mapUi = source('src/apps/map_app.cpp');
+const settingsService = source('src/os/settings_service.cpp');
+const wifiService = source('src/os/wifi_manager.cpp');
+const cameraUi = source('src/apps/camera_app.cpp');
+
+assert.match(aiService, /https:\/\//);
+assert.match(aiService, /Content-Type", "audio\/wav/);
+assert.match(aiService, /audio_write_pcm16_mono/);
+assert.doesNotMatch(aiUi, /Demo|Mock|Mô phỏng/);
+assert.doesNotMatch(musicService, /demo_playlist|210\s*;/);
+assert.match(musicService, /connecttoFS/);
+assert.doesNotMatch(mapUi, /render_offline_vector_map/);
+assert.match(mapService, /OpenStreetMap/);
+assert.match(mapService, /map_tile_downloader_supports_satellite/);
+assert.match(settingsService, /Preferences/);
+assert.match(settingsService, /putUChar\("brightness"/);
+assert.match(wifiService, /WIFI_SCAN_FAILED/);
+assert.match(wifiService, /xQueue|xTaskCreatePinnedToCore/);
+assert.doesNotMatch(cameraUi, /MJPEG \(Chưa\)|RTSP\/H\.264 \(Chưa\)/);
+assert.match(cameraUi, /HTTP\(S\) Snapshot/);
 
 console.log('Behavioral regression tests: PASS');

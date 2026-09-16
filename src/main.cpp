@@ -17,6 +17,7 @@
 #include "ai/ai_voice_service.h"
 #include "camera/camera_service.h"
 #include "os/power_manager.h"
+#include "os/settings_service.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -32,6 +33,11 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
+
+    system_info_init();
+    bool settings_ok = settings_service_init();
+    MiniOsSettings saved_settings = settings_service_get();
+    Serial.printf("[SETTINGS] Status: %s\n", settings_ok ? "Ready (NVS)" : settings_service_get_last_error());
 
     // In thông tin phần cứng nhận diện thực tế
     SystemStats init_stats = system_get_stats();
@@ -135,29 +141,32 @@ void setup()
         Serial.println("[AI] Status: ⚠️ AI Voice Service khởi tạo thất bại!");
     }
 
-    // 6. Khởi tạo Desktop.
+    // 6. [WIFI] Khởi tạo dịch vụ mạng WiFi chạy nền trên Core 0
+    Serial.println("[WIFI] Khởi tạo WiFi Manager Service trên Core 0...");
+    bool wifi_ok = wifi_manager_init();
+    wifi_manager_set_auto_reconnect(saved_settings.wifi_auto_reconnect);
+    Serial.printf("[WIFI] Status: %s\n", wifi_ok ? "Ready" : "DEGRADED");
+
+    // 7. Khởi tạo Module Quản lý Nguồn và áp dụng cấu hình đã lưu.
+    power_manager_init();
+    power_manager_set_timeouts(saved_settings.dim_timeout_sec, saved_settings.sleep_timeout_sec);
+    power_manager_set_active_brightness(saved_settings.brightness);
+
+    // 8. Khởi tạo Desktop sau khi các service nền đã có trạng thái thật.
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
     ui_init();
 
-    // 7. [WIFI] Khởi tạo dịch vụ mạng WiFi chạy nền trên Core 0
-    Serial.println("[WIFI] Khởi tạo WiFi Manager Service trên Core 0...");
-    bool wifi_ok = wifi_manager_init();
-    Serial.printf("[WIFI] Status: %s\n", wifi_ok ? "Ready" : "DEGRADED");
-
-    // 8. [CAMERA] Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
+    // 9. [CAMERA] Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
     bool camera_ok = camera_service_init();
+    (void)camera_ok;
     Serial.printf("[CAMERA] Status: %s\n", camera_service_get_status_text());
 
-    // 9. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
+    // 10. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
     if (!wifi_manager_has_saved_credentials())
     {
         Serial.println("[SYSTEM] Chưa tìm thấy mạng WiFi trong NVS Flash! Tự động mở WiFi Settings App...");
         ui_open_wifi_app();
     }
-
-    // 10. Khởi tạo Module Quản lý Nguồn & Tiết kiệm Năng lượng
-    Serial.println("[SYSTEM] Khởi tạo Power Manager (60s Dimming -> 120s Sleep)...");
-    power_manager_init();
 
     Serial.println("[SYSTEM] Mini OS Pro Max đã sẵn sàng hoạt động!");
 }

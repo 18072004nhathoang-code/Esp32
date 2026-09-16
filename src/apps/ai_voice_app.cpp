@@ -22,7 +22,6 @@ static lv_obj_t *wave_bars[NUM_WAVE_BARS] = {nullptr};
 
 static int last_msg_count = 0;
 static bool is_button_held = false;
-static uint32_t anim_tick = 0;
 
 /* Tạo một bong bóng tin nhắn chat */
 static void add_chat_bubble(const ChatMessage *msg)
@@ -61,9 +60,9 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_set_style_border_width(bubble, 1, 0);
         lv_obj_set_style_radius(bubble, 12, 0);
 
-        // Header nhỏ: XiaoZhi AI (Demo/Mock)
+        // Header nhỏ: dịch vụ HTTPS đã cấu hình
         lv_obj_t *lbl_hdr = lv_label_create(bubble);
-        lv_label_set_text(lbl_hdr, "XiaoZhi AI (Demo)");
+        lv_label_set_text(lbl_hdr, "AI Voice");
         lv_obj_set_style_text_color(lbl_hdr, lv_color_hex(0x00F2FE), 0);
         lv_obj_set_style_text_font(lbl_hdr, UI_FONT_SMALL, 0);
         lv_obj_align(lbl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -89,8 +88,7 @@ static void ptt_btn_event_cb(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED)
     {
-        ai_voice_start_recording();
-        if (ai_voice_get_state() == AI_STATE_LISTENING)
+        if (ai_voice_start_recording())
         {
             is_button_held = true;
             // Hiệu ứng phát sáng mạnh khi đang giữ
@@ -108,7 +106,7 @@ static void ptt_btn_event_cb(lv_event_t *e)
             is_button_held = false;
             if (lbl_status_text)
             {
-                lv_label_set_text(lbl_status_text, "Lỗi: Micro đang bận (Audio bus occupied)");
+                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
             }
         }
     }
@@ -117,7 +115,8 @@ static void ptt_btn_event_cb(lv_event_t *e)
         if (is_button_held)
         {
             is_button_held = false;
-            ai_voice_stop_and_process();
+            if (!ai_voice_stop_and_process() && lbl_status_text)
+                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
 
             // Trở về kiểu dáng bình thường
             lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x1F2937), 0);
@@ -162,8 +161,8 @@ void ai_voice_app_open(lv_obj_t *parent)
     int count = ai_voice_get_message_count();
     for (int i = 0; i < count; i++)
     {
-        const ChatMessage *msg = ai_voice_get_message(i);
-        if (msg) add_chat_bubble(msg);
+        ChatMessage msg;
+        if (ai_voice_get_message_copy(i, &msg)) add_chat_bubble(&msg);
     }
     last_msg_count = count;
 
@@ -224,15 +223,23 @@ void ai_voice_app_open(lv_obj_t *parent)
 
     // 2.3 Nhãn trạng thái AI & Hướng dẫn sử dụng
     lbl_status_text = lv_label_create(bottom_bar);
-    lv_label_set_text(lbl_status_text, "Giữ nút để nói");
+    lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
     lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
     lv_obj_set_style_text_font(lbl_status_text, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_status_text, LV_ALIGN_RIGHT_MID, -4, 0);
+
+    if (!ai_voice_is_available())
+    {
+        lv_obj_add_state(btn_push_to_talk, LV_STATE_DISABLED);
+        lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+    }
 }
 
 /* Đóng và giải phóng tài nguyên */
 void ai_voice_app_close(void)
 {
+    ai_voice_cancel();
+    is_button_held = false;
     main_container = nullptr;
     chat_container = nullptr;
     bottom_bar = nullptr;
@@ -249,8 +256,6 @@ void ai_voice_app_close(void)
 void ai_voice_app_update(void)
 {
     if (!main_container) return;
-
-    anim_tick++;
 
     // 1. Kiểm tra và thêm tin nhắn mới vào khung chat nếu có
     int current_count = ai_voice_get_message_count();
@@ -282,20 +287,20 @@ void ai_voice_app_update(void)
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
     }
 
-    // 3. Cập nhật dải sóng âm Waveform Animation
+    // 3. Hiển thị biên độ microphone thật; không tạo hoạt ảnh giả khi không thu.
     AIVoiceState state = ai_voice_get_state();
-    bool is_active = (state == AI_STATE_LISTENING || state == AI_STATE_SPEAKING);
+    int16_t samples[NUM_WAVE_BARS] = {};
+    if (state == AI_STATE_LISTENING) audio_get_waveform_samples(samples, NUM_WAVE_BARS);
 
     for (int i = 0; i < NUM_WAVE_BARS; i++)
     {
         if (wave_bars[i])
         {
             int h = 6;
-            if (is_active)
+            if (state == AI_STATE_LISTENING)
             {
-                // Mô phỏng dao động sóng âm theo nhịp
-                int offset = ((anim_tick * 4 + i * 3) % 10);
-                h = 8 + offset * 3;
+                int32_t amplitude = samples[i] < 0 ? -(int32_t)samples[i] : samples[i];
+                h = 6 + (amplitude * 30 / 32767);
                 if (h > 36) h = 36;
             }
             lv_obj_set_height(wave_bars[i], h);

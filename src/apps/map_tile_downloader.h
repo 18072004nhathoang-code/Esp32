@@ -24,7 +24,7 @@
 #endif
 
 // Cấu hình Google Maps Static API Key
-// Người dùng có thể truyền trực tiếp hoặc để trống để sử dụng Maps Demo Key / OpenStreetMap Fallback
+// Để trống để dùng dịch vụ static-map OpenStreetMap cho lớp roadmap.
 #ifndef GOOGLE_MAPS_STATIC_API_KEY
 #define GOOGLE_MAPS_STATIC_API_KEY ""
 #endif
@@ -45,8 +45,7 @@ enum TileDownloadStatus {
 enum TileSource {
     TILE_SOURCE_NONE = 0,
     TILE_SOURCE_SD_CACHE,     // Đọc trực tiếp từ thẻ nhớ MicroSD FAT32 (Tức thì, không tốn quota)
-    TILE_SOURCE_NETWORK,      // Tải mới từ Google Maps Static API qua WiFi
-    TILE_SOURCE_OFFLINE_VECTOR// Chế độ vector nội suy offline
+    TILE_SOURCE_NETWORK       // Tải mới qua HTTPS (Google Static API hoặc OpenStreetMap)
 };
 
 /**
@@ -106,4 +105,5 @@ TileSource map_tile_downloader_get_source(void);
 /**
  * @brief Thiết lập động Google Maps API Key
  */
-void map_tile_downloader_set_api_key(const char *key);
+bool map_tile_downloader_supports_satellite(void);
+const char *map_tile_downloader_get_network_provider(void);

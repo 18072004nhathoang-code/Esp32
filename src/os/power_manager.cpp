@@ -109,9 +109,20 @@ uint32_t power_manager_get_inactivity_seconds(void)
 
 void power_manager_set_timeouts(uint32_t dim_sec, uint32_t sleep_sec)
 {
+    if (dim_sec < 10 || sleep_sec <= dim_sec) return;
     timeout_dim_sec = dim_sec;
     timeout_sleep_sec = sleep_sec;
     Serial.printf("[POWER] Đã cập nhật ngưỡng thời gian: Dim %u s | Sleep %u s\n", dim_sec, sleep_sec);
+}
+
+uint32_t power_manager_get_dim_timeout(void)
+{
+    return timeout_dim_sec;
+}
+
+uint32_t power_manager_get_sleep_timeout(void)
+{
+    return timeout_sleep_sec;
 }
 
 uint8_t power_manager_get_active_brightness(void)

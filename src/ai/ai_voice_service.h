@@ -31,16 +31,21 @@ struct ChatMessage
  * @brief Khởi tạo phân hệ AI Voice Service và Task FreeRTOS trên Core 0
  */
 bool ai_voice_init(void);
+bool ai_voice_is_available(void);
+const char *ai_voice_get_last_error(void);
 
 /**
  * @brief Bắt đầu ghi âm từ Micro MEMS khi nhấn giữ nút Push-to-Talk
  */
-void ai_voice_start_recording(void);
+bool ai_voice_start_recording(void);
 
 /**
  * @brief Dừng ghi âm khi thả nút và gửi âm thanh lên luồng xử lý AI
  */
-void ai_voice_stop_and_process(void);
+bool ai_voice_stop_and_process(void);
+
+/** @brief Hủy lần thu hiện tại khi UI đóng, không gửi dữ liệu lên mạng. */
+void ai_voice_cancel(void);
 
 /**
  * @brief Lấy trạng thái hiện tại của AI Voice Assistant
@@ -63,11 +68,6 @@ int ai_voice_get_message_count(void);
 bool ai_voice_get_message_copy(int index, ChatMessage *out_msg);
 
 /**
- * @brief Lấy tin nhắn theo chỉ số index (Deprecated / Non-thread-safe)
- */
-const ChatMessage* ai_voice_get_message(int index);
-
-/**
  * @brief Thêm một tin nhắn vào lịch sử hội thoại
  */
 void ai_voice_add_message(bool is_user, const char *text);
@@ -80,9 +80,4 @@ void ai_voice_clear_history(void);
 /**
  * @brief Phát âm thanh phản hồi từ văn bản qua TTS ra Loa ngoài
  */
-void ai_voice_play_tts(const char *text);
-
-/**
- * @brief Cấu hình khóa API Google Gemini
- */
-void ai_voice_set_gemini_key(const char *api_key);
+bool ai_voice_play_tts(const char *text);

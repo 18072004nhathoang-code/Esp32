@@ -63,42 +63,42 @@ bool music_player_play_index(int index);
 /**
  * @brief Chuyển đổi trạng thái Play / Pause
  */
-void music_player_toggle_play(void);
+bool music_player_toggle_play(void);
 
 /**
  * @brief Chuyển sang bài hát tiếp theo
  */
-void music_player_next(void);
+bool music_player_next(void);
 
 /**
  * @brief Quay lại bài hát trước đó
  */
-void music_player_prev(void);
+bool music_player_prev(void);
 
 /**
  * @brief Tạm dừng phát nhạc
  */
-void music_player_pause(void);
+bool music_player_pause(void);
 
 /**
  * @brief Tiếp tục phát nhạc
  */
-void music_player_resume(void);
+bool music_player_resume(void);
 
 /**
  * @brief Dừng phát nhạc
  */
-void music_player_stop(void);
+bool music_player_stop(void);
 
 /**
  * @brief Tua thời lượng bài hát đến giây thứ sec
  */
-void music_player_seek(uint32_t sec);
+bool music_player_seek(uint32_t sec);
 
 /**
  * @brief Cài đặt âm lượng phát ra loa (0 - 100%)
  */
-void music_player_set_volume(uint8_t vol_percent);
+bool music_player_set_volume(uint8_t vol_percent);
 uint8_t music_player_get_volume(void);
 
 /**

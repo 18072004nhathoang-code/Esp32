@@ -6,6 +6,7 @@
 
 #include "music_app.h"
 #include "../audio/music_player.h"
+#include "../storage/storage_manager.h"
 #include "../ui/ui_theme.h"
 
 // Các thành phần widget giao diện
@@ -29,6 +30,15 @@ static bool vinyl_anim_running = false;
 static int32_t current_vinyl_angle = 0;
 static bool is_user_dragging_slider = false;
 
+static void show_command_error(void)
+{
+    if (lbl_track_meta)
+    {
+        lv_label_set_text(lbl_track_meta, "Không thể gửi lệnh tới audio task");
+        lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(COLOR_ACCENT_RED), 0);
+    }
+}
+
 /* Callback cập nhật góc xoay cho đĩa than Vinyl */
 static void anim_vinyl_rotate_cb(void *var, int32_t v)
 {
@@ -43,7 +53,7 @@ static void anim_vinyl_rotate_cb(void *var, int32_t v)
 static void track_item_click_cb(lv_event_t *e)
 {
     uintptr_t track_idx = (uintptr_t)lv_event_get_user_data(e);
-    music_player_play_index((int)track_idx);
+    if (!music_player_play_index((int)track_idx)) show_command_error();
     if (playlist_modal)
     {
         lv_obj_add_flag(playlist_modal, LV_OBJ_FLAG_HIDDEN);
@@ -53,19 +63,19 @@ static void track_item_click_cb(lv_event_t *e)
 /* Callback bấm nút Play / Pause */
 static void play_btn_click_cb(lv_event_t *e)
 {
-    music_player_toggle_play();
+    if (!music_player_toggle_play()) show_command_error();
 }
 
 /* Callback bấm nút Next */
 static void next_btn_click_cb(lv_event_t *e)
 {
-    music_player_next();
+    if (!music_player_next()) show_command_error();
 }
 
 /* Callback bấm nút Previous */
 static void prev_btn_click_cb(lv_event_t *e)
 {
-    music_player_prev();
+    if (!music_player_prev()) show_command_error();
 }
 
 /* Callback mở / đóng danh sách phát nhạc */
@@ -94,7 +104,7 @@ static void progress_slider_event_cb(lv_event_t *e)
     {
         is_user_dragging_slider = false;
         int val = lv_slider_get_value(slider_progress);
-        music_player_seek((uint32_t)val);
+        if (!music_player_seek((uint32_t)val)) show_command_error();
     }
 }
 
@@ -102,7 +112,12 @@ static void progress_slider_event_cb(lv_event_t *e)
 static void volume_slider_event_cb(lv_event_t *e)
 {
     int val = lv_slider_get_value(slider_volume);
-    music_player_set_volume((uint8_t)val);
+    if (!music_player_set_volume((uint8_t)val))
+    {
+        show_command_error();
+        lv_slider_set_value(slider_volume, music_player_get_volume(), LV_ANIM_OFF);
+        return;
+    }
     if (lbl_vol_val)
     {
         lv_label_set_text_fmt(lbl_vol_val, "%d%%", val);
@@ -116,6 +131,7 @@ void music_app_open(lv_obj_t *parent)
 
     main_container = parent;
     const bool portrait = SCREEN_WIDTH <= SCREEN_HEIGHT;
+    const bool has_tracks = music_player_get_track_count() > 0;
     const lv_coord_t detail_w = portrait ? (SCREEN_WIDTH - 28) : 186;
     lv_obj_set_style_pad_all(main_container, 4, 0);
     lv_obj_clear_flag(main_container, LV_OBJ_FLAG_SCROLLABLE);
@@ -197,11 +213,13 @@ void music_app_open(lv_obj_t *parent)
     }
     else
     {
-        lv_label_set_text(lbl_track_title, "Chưa chọn bài hát");
+        lv_label_set_text(lbl_track_title, storage_is_available() ? "Thư mục /music trống" : "Không có thẻ MicroSD");
     }
 
     lbl_track_meta = lv_label_create(player_card);
-    lv_label_set_text_fmt(lbl_track_meta, "SD Card MP3 • %d bài", music_player_get_track_count());
+    lv_label_set_text_fmt(lbl_track_meta, "%s • %d bài",
+                          storage_is_available() ? "MicroSD" : "Storage unavailable",
+                          music_player_get_track_count());
     lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_track_meta, UI_FONT_12, 0);
     lv_obj_set_width(lbl_track_meta, detail_w);
@@ -254,6 +272,7 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_border_color(btn_prev, lv_color_hex(0x374151), 0);
     lv_obj_set_style_border_width(btn_prev, 1, 0);
     lv_obj_add_event_cb(btn_prev, prev_btn_click_cb, LV_EVENT_CLICKED, nullptr);
+    if (!has_tracks) lv_obj_add_state(btn_prev, LV_STATE_DISABLED);
 
     lv_obj_t *lbl_prev = lv_label_create(btn_prev);
     lv_label_set_text(lbl_prev, LV_SYMBOL_PREV);
@@ -270,6 +289,7 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_shadow_color(btn_play, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
     lv_obj_set_style_shadow_opa(btn_play, LV_OPA_50, 0);
     lv_obj_add_event_cb(btn_play, play_btn_click_cb, LV_EVENT_CLICKED, nullptr);
+    if (!has_tracks) lv_obj_add_state(btn_play, LV_STATE_DISABLED);
 
     lbl_play_icon = lv_label_create(btn_play);
     lv_label_set_text(lbl_play_icon, music_player_is_playing() ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
@@ -286,6 +306,7 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_border_color(btn_next, lv_color_hex(0x374151), 0);
     lv_obj_set_style_border_width(btn_next, 1, 0);
     lv_obj_add_event_cb(btn_next, next_btn_click_cb, LV_EVENT_CLICKED, nullptr);
+    if (!has_tracks) lv_obj_add_state(btn_next, LV_STATE_DISABLED);
 
     lv_obj_t *lbl_next = lv_label_create(btn_next);
     lv_label_set_text(lbl_next, LV_SYMBOL_NEXT);
@@ -391,6 +412,15 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(music_list, 2, 0);
 
     int count = music_player_get_track_count();
+    if (count == 0)
+    {
+        lv_obj_t *empty = lv_label_create(music_list);
+        lv_label_set_text(empty, storage_is_available()
+            ? "Không có file MP3 trong /music"
+            : "MicroSD không khả dụng");
+        lv_obj_set_style_text_font(empty, UI_FONT_12, 0);
+        lv_obj_set_style_text_color(empty, lv_color_hex(COLOR_TEXT_MUTED), 0);
+    }
     for (int i = 0; i < count; i++)
     {
         const MusicTrack *track = music_player_get_track(i);

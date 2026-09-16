@@ -177,7 +177,11 @@ static void scan_btn_event_cb(lv_event_t *e)
         lv_label_set_text(lbl_scan_info, "Đang quét...");
         lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     }
-    wifi_manager_scan_async();
+    if (!wifi_manager_scan_async() && lbl_scan_info)
+    {
+        lv_label_set_text(lbl_scan_info, wifi_manager_get_last_error().c_str());
+        lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_RED), 0);
+    }
 }
 
 // Đóng modal nhập mật khẩu
@@ -207,16 +211,21 @@ static void connect_btn_event_cb(lv_event_t *e)
         lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
     }
 
-    wifi_manager_connect(current_selected_ssid, pwd);
+    if (!wifi_manager_connect(current_selected_ssid, pwd) && lbl_status)
+    {
+        lv_label_set_text(lbl_status, "Yêu cầu kết nối không hợp lệ");
+        lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_RED), 0);
+    }
 }
 
 // Bấm nút Quên Mạng (Xóa NVS)
 static void forget_btn_event_cb(lv_event_t *e)
 {
-    wifi_manager_forget_network();
+    const bool forgotten = wifi_manager_forget_network();
     if (lbl_status)
     {
-        lv_label_set_text(lbl_status, LV_SYMBOL_TRASH " Đã quên mạng khỏi hệ thống");
+        lv_label_set_text(lbl_status, forgotten ? LV_SYMBOL_TRASH " Đã quên mạng khỏi hệ thống"
+                                                : LV_SYMBOL_CLOSE " Không thể xóa mạng khỏi NVS");
         lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_RED), 0);
     }
     if (ta_password)
@@ -513,7 +522,8 @@ void wifi_app_update(void)
             if (cached_scan_results.empty())
             {
                 lv_obj_t *empty_lbl = lv_label_create(network_list);
-                lv_label_set_text(empty_lbl, "Không tìm thấy mạng nào.");
+                String scan_error = wifi_manager_get_last_error();
+                lv_label_set_text(empty_lbl, scan_error.length() ? scan_error.c_str() : "Không tìm thấy mạng nào.");
                 lv_obj_set_style_text_color(empty_lbl, lv_color_hex(COLOR_TEXT_MUTED), 0);
                 lv_obj_set_style_text_font(empty_lbl, UI_FONT_12, 0);
             }
@@ -581,7 +591,8 @@ void wifi_app_update(void)
         }
         else if (state == WIFI_STATE_FAILED)
         {
-            lv_label_set_text(lbl_status, LV_SYMBOL_CLOSE " Kết nối thất bại!");
+            String error = wifi_manager_get_last_error();
+            lv_label_set_text_fmt(lbl_status, LV_SYMBOL_CLOSE " %s", error.length() ? error.c_str() : "Kết nối thất bại");
             lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_RED), 0);
         }
     }

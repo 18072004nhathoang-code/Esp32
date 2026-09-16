@@ -72,6 +72,8 @@ uint32_t power_manager_get_inactivity_seconds(void);
  * @brief Thiết lập ngưỡng thời gian Dimming và Sleep tùy biến (giây)
  */
 void power_manager_set_timeouts(uint32_t dim_sec, uint32_t sleep_sec);
+uint32_t power_manager_get_dim_timeout(void);
+uint32_t power_manager_get_sleep_timeout(void);
 
 /**
  * @brief Lấy mức độ sáng hoạt động đang dùng (%)

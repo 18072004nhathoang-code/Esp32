@@ -58,8 +58,8 @@ static void record_btn_cb(lv_event_t *e)
         if (lbl_recorder_status)
         {
             uint32_t dur = audio_get_recorded_duration_ms();
-            lv_label_set_text_fmt(lbl_recorder_status, "[OK] Đã lưu: %.1fs", (float)dur / 1000.0f);
-            lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+            lv_label_set_text_fmt(lbl_recorder_status, "Đã thu %.1fs • đang lưu WAV...", (float)dur / 1000.0f);
+            lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
         }
     }
     else
@@ -249,7 +249,7 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_clear_flag(memo_box, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *t_memo = lv_label_create(memo_box);
-    lv_label_set_text(t_memo, "Ghi Âm PSRAM (Max 10s)");
+    lv_label_set_text(t_memo, "Voice Memo WAV /voice (Max 10s)");
     lv_obj_set_style_text_color(t_memo, lv_color_hex(COLOR_ACCENT_GREEN), 0);
     lv_obj_set_style_text_font(t_memo, UI_FONT_SMALL, 0);
     lv_obj_align(t_memo, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -374,6 +374,25 @@ void audio_app_update(void)
             {
                 lv_label_set_text_fmt(lbl_recorder_status, "[PLAY] Phát: %.1fs / %.1fs",
                                       (float)prog / 1000.0f, (float)total / 1000.0f);
+            }
+        }
+        else if (lbl_recorder_status)
+        {
+            AudioRecordingFileState file_state = audio_get_recording_file_state();
+            if (file_state == AUDIO_FILE_SAVING)
+            {
+                lv_label_set_text(lbl_recorder_status, "Đang lưu /voice/last_recording.wav...");
+                lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+            }
+            else if (file_state == AUDIO_FILE_SAVED)
+            {
+                lv_label_set_text(lbl_recorder_status, "/voice/last_recording.wav • đã lưu");
+                lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+            }
+            else if (file_state == AUDIO_FILE_ERROR && audio_get_recorded_duration_ms() > 0)
+            {
+                lv_label_set_text(lbl_recorder_status, "Không lưu được WAV: MicroSD không khả dụng");
+                lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_RED), 0);
             }
         }
     }
