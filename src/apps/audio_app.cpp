@@ -1,6 +1,6 @@
 /**
  * @file audio_app.cpp
- * @brief Giao diện ứng dụng Voice AI & Audio Lab cho màn hình Portrait 240x320
+ * @brief Giao diện ứng dụng Voice AI & Audio Lab cho màn hình 320x240 Landscape Flipped
  * Bố cục: Cuộn dọc các card chuyên biệt: Mic Oscilloscope, Speaker & Soundboard, PSRAM Voice Memo
  */
 
@@ -122,7 +122,7 @@ static void play_btn_cb(lv_event_t *e)
 }
 
 /* =========================================================================
- * KHỞI TẠO GIAO DIỆN AUDIO LAB 240x320 PORTRAIT
+ * KHỞI TẠO GIAO DIỆN AUDIO LAB 320x240 LANDSCAPE FLIPPED
  * ========================================================================= */
 void audio_app_open(lv_obj_t *parent)
 {
@@ -151,7 +151,7 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_t *t_mic = lv_label_create(card_mic);
     lv_label_set_text(t_mic, "Mic Live Waveform");
     lv_obj_set_style_text_color(t_mic, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(t_mic, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(t_mic, UI_FONT_SMALL, 0);
     lv_obj_align(t_mic, LV_ALIGN_TOP_LEFT, 0, 0);
 
     bar_vu_meter = lv_bar_create(card_mic);
@@ -166,7 +166,7 @@ void audio_app_open(lv_obj_t *parent)
     lbl_vu_val = lv_label_create(card_mic);
     lv_label_set_text(lbl_vu_val, "Mức thu: 0% | -60.0 dB");
     lv_obj_set_style_text_color(lbl_vu_val, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_vu_val, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_vu_val, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_vu_val, LV_ALIGN_TOP_LEFT, 0, 28);
 
     chart_waveform = lv_chart_create(card_mic);
@@ -203,7 +203,7 @@ void audio_app_open(lv_obj_t *parent)
     lbl_vol_val = lv_label_create(card_spk);
     lv_label_set_text_fmt(lbl_vol_val, LV_SYMBOL_VOLUME_MAX " Loa: %d%%", audio_get_volume());
     lv_obj_set_style_text_color(lbl_vol_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_vol_val, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_vol_val, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_vol_val, LV_ALIGN_TOP_LEFT, 0, 0);
 
     slider_vol = lv_slider_create(card_spk);
@@ -226,7 +226,7 @@ void audio_app_open(lv_obj_t *parent)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_color(l, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(l, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(l, UI_FONT_SMALL, 0);
         lv_obj_center(l);
     };
 
@@ -251,7 +251,7 @@ void audio_app_open(lv_obj_t *parent)
     lv_obj_t *t_memo = lv_label_create(memo_box);
     lv_label_set_text(t_memo, "Ghi Âm PSRAM (Max 10s)");
     lv_obj_set_style_text_color(t_memo, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(t_memo, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(t_memo, UI_FONT_SMALL, 0);
     lv_obj_align(t_memo, LV_ALIGN_TOP_LEFT, 0, 0);
 
     btn_record = lv_btn_create(memo_box);
@@ -263,7 +263,7 @@ void audio_app_open(lv_obj_t *parent)
 
     lbl_record_btn = lv_label_create(btn_record);
     lv_label_set_text(lbl_record_btn, LV_SYMBOL_PLAY " Thu");
-    lv_obj_set_style_text_font(lbl_record_btn, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_record_btn, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_record_btn);
 
     btn_play = lv_btn_create(memo_box);
@@ -275,13 +275,13 @@ void audio_app_open(lv_obj_t *parent)
 
     lbl_play_btn = lv_label_create(btn_play);
     lv_label_set_text(lbl_play_btn, LV_SYMBOL_AUDIO " Phát");
-    lv_obj_set_style_text_font(lbl_play_btn, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_play_btn, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_play_btn);
 
     lbl_recorder_status = lv_label_create(memo_box);
     lv_label_set_text(lbl_recorder_status, "Sẵn sàng ghi âm");
     lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_recorder_status, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_recorder_status, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_recorder_status, LV_ALIGN_BOTTOM_LEFT, 2, -10);
 
     bar_record_progress = lv_bar_create(memo_box);

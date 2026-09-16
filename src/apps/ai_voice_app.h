@@ -1,6 +1,6 @@
 /**
  * @file ai_voice_app.h
- * @brief Giao diện ứng dụng AI Voice Assistant trên màn hình 3.5" IPS 480x320
+ * @brief Giao diện ứng dụng AI Voice Assistant trên Mini OS
  * Bong bóng chat Messenger/iMessage, nút tròn Push-to-Talk và sóng âm Waveform động
  */
 
@@ -10,7 +10,7 @@
 
 /**
  * @brief Khởi tạo và hiển thị ứng dụng AI Voice Assistant
- * @param parent Container chứa giao diện (kích thước 480x266)
+ * @param parent Container chứa giao diện (kích thước dynamic)
  */
 void ai_voice_app_open(lv_obj_t *parent);
 

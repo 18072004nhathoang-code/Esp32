@@ -50,7 +50,7 @@ void ui_color_test_open(lv_obj_t *parent)
         lv_obj_t *lbl = lv_label_create(bar);
         lv_label_set_text(lbl, COLOR_BARS[i].name);
         lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_BARS[i].text_color), 0);
-        lv_obj_set_style_text_font(lbl, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_SMALL, 0);
         lv_obj_center(lbl);
     }
 
@@ -68,6 +68,6 @@ void ui_color_test_open(lv_obj_t *parent)
     lv_obj_t *diag_lbl = lv_label_create(diag_box);
     lv_label_set_text(diag_lbl, "Kiem tra: Do=Red, Xanh=Green/Blue");
     lv_obj_set_style_text_color(diag_lbl, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(diag_lbl, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(diag_lbl, UI_FONT_SMALL, 0);
     lv_obj_center(diag_lbl);
 }

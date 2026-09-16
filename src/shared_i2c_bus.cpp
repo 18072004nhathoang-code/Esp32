@@ -196,14 +196,18 @@ static uint16_t s_last_raw_y = 0;
 static uint16_t s_last_mapped_x = 0;
 static uint16_t s_last_mapped_y = 0;
 static bool s_is_touched = false;
+static portMUX_TYPE s_touch_debug_mux = portMUX_INITIALIZER_UNLOCKED;
 
 bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y, uint16_t *mapped_x, uint16_t *mapped_y)
 {
+    portENTER_CRITICAL(&s_touch_debug_mux);
     if (raw_x) *raw_x = s_last_raw_x;
     if (raw_y) *raw_y = s_last_raw_y;
     if (mapped_x) *mapped_x = s_last_mapped_x;
     if (mapped_y) *mapped_y = s_last_mapped_y;
-    return s_is_touched;
+    bool touched = s_is_touched;
+    portEXIT_CRITICAL(&s_touch_debug_mux);
+    return touched;
 }
 
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
@@ -237,7 +241,9 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
     uint8_t touches = buf[0] & 0x0F;
     if (touches == 0 || touches > 2)
     {
+        portENTER_CRITICAL(&s_touch_debug_mux);
         s_is_touched = false;
+        portEXIT_CRITICAL(&s_touch_debug_mux);
         return false;
     }
 
@@ -288,11 +294,13 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
     if (mapped_y < 0) mapped_y = 0;
     if (mapped_y >= BOARD_LCD_HEIGHT) mapped_y = BOARD_LCD_HEIGHT - 1;
 
+    portENTER_CRITICAL(&s_touch_debug_mux);
     s_last_raw_x = raw_x;
     s_last_raw_y = raw_y;
     s_last_mapped_x = (uint16_t)mapped_x;
     s_last_mapped_y = (uint16_t)mapped_y;
     s_is_touched = true;
+    portEXIT_CRITICAL(&s_touch_debug_mux);
 
     *x = (uint16_t)mapped_x;
     *y = (uint16_t)mapped_y;

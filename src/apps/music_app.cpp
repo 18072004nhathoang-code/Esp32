@@ -1,6 +1,6 @@
 /**
  * @file music_app.cpp
- * @brief Triển khai giao diện ứng dụng Music Player trên LVGL 8 cho màn hình Portrait 240x320
+ * @brief Triển khai giao diện ứng dụng Music Player trên LVGL 8 cho màn hình 320x240 Landscape Flipped
  * Bố cục 1 cột dọc: Artwork đĩa than xoay ở trên, tên bài hát + thanh tiến trình + điều khiển cảm ứng
  */
 
@@ -109,7 +109,7 @@ static void volume_slider_event_cb(lv_event_t *e)
     }
 }
 
-/* Mở ứng dụng Music Player cho màn hình 240x320 */
+/* Mở ứng dụng Music Player cho màn hình 320x240 */
 void music_app_open(lv_obj_t *parent)
 {
     if (!parent) return;
@@ -219,13 +219,13 @@ void music_app_open(lv_obj_t *parent)
     lbl_cur_time = lv_label_create(player_card);
     lv_label_set_text(lbl_cur_time, "00:00");
     lv_obj_set_style_text_color(lbl_cur_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_cur_time, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_cur_time, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_cur_time, LV_ALIGN_TOP_RIGHT, -152, 54);
 
     lbl_total_time = lv_label_create(player_card);
     lv_label_set_text(lbl_total_time, "00:00");
     lv_obj_set_style_text_color(lbl_total_time, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_total_time, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_total_time, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_total_time, LV_ALIGN_TOP_RIGHT, -6, 54);
 
     // 4. HÀNG ĐIỀU KHIỂN CẢM ỨNG: PREV - PLAY/PAUSE - NEXT (Nút tối thiểu >= 36px)

@@ -69,7 +69,7 @@ void map_tile_downloader_request(double lat, double lon, int zoom, const char *m
 bool map_tile_downloader_has_new_data(void);
 
 /**
- * @brief Lấy con trỏ đến bộ đệm ảnh RGB565 (480x320 pixel) trong PSRAM
+ * @brief Lấy con trỏ đến bộ đệm ảnh RGB565 trong PSRAM
  */
 const lv_color_t* map_tile_downloader_get_buffer(void);
 
@@ -81,7 +81,7 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels);
 /**
  * @brief Tiêu thụ nguyên tử frame mới: kiểm tra cờ, sao chép dữ liệu, lấy TileSource và xóa cờ trong 1 critical section
  * @param dest Bộ đệm đích để nhận điểm ảnh RGB565
- * @param count_pixels Số điểm ảnh (480x320)
+ * @param count_pixels Số điểm ảnh
  * @param out_source Con trỏ nhận nguồn ảnh (SD Cache hoặc Network)
  * @return true nếu có frame mới được tiêu thụ thành công
  */

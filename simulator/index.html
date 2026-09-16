@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ES3C28P ESP32-S3 2.8" IPS (240x320 Portrait) • Mini OS Simulator</title>
+    <title>ES3C28P ESP32-S3 2.8" IPS (320x240 Landscape Flipped) • Mini OS Simulator</title>
     <style>
         * {
             box-sizing: border-box;
@@ -80,7 +80,7 @@
             50% { opacity: 0.4; transform: scale(0.85); }
         }
 
-        /* Màn hình 2.8" IPS Portrait (240x320 scale 1.5x = 360x480) */
+        /* Màn hình 2.8" IPS Landscape Flipped (320x240 scale 1.5x = 480x360) */
         .display-bezel {
             background: #000;
             padding: 8px;
@@ -89,8 +89,8 @@
         }
 
         .lcd-screen {
-            width: 360px;
-            height: 480px;
+            width: 480px;
+            height: 360px;
             background: #0a0d14;
             border-radius: 8px;
             position: relative;

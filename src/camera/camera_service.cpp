@@ -65,9 +65,27 @@ bool camera_service_save_network_profile(void)
     return g_network_camera.saveProfileToNVS();
 }
 
-const NetworkCameraProfile& camera_service_get_network_profile(void)
+NetworkCameraProfile camera_service_get_network_profile(void)
 {
     return g_network_camera.getActiveProfile();
+}
+
+CameraRuntimeState camera_service_get_runtime_state(void)
+{
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        return g_local_camera.isAvailable() ? CAM_STATE_CONNECTED : CAM_STATE_NOT_CONFIGURED;
+    }
+    return g_network_camera.getRuntimeState();
+}
+
+bool camera_service_is_connected(void)
+{
+    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    {
+        return g_local_camera.isAvailable();
+    }
+    return g_network_camera.isConnected();
 }
 
 bool camera_service_start(void)
@@ -143,12 +161,13 @@ const char* camera_service_get_status_text(void)
     CameraRuntimeState st = g_network_camera.getRuntimeState();
     switch (st)
     {
-        case CAM_STATE_CONNECTING: return "CONNECTING";
-        case CAM_STATE_CONNECTED:  return "CONNECTED";
-        case CAM_STATE_ERROR:      return "ERROR";
-        case CAM_STATE_STOPPED:    return "STOPPED";
+        case CAM_STATE_CONNECTING:        return "CONNECTING";
+        case CAM_STATE_CONNECTED:         return "CONNECTED";
+        case CAM_STATE_PASSWORD_REQUIRED: return "PASSWORD_REQUIRED";
+        case CAM_STATE_ERROR:             return "ERROR";
+        case CAM_STATE_STOPPED:           return "STOPPED";
         case CAM_STATE_NOT_CONFIGURED:
-        default:                   return "NOT_CONFIGURED";
+        default:                          return "NOT_CONFIGURED";
     }
 }
 

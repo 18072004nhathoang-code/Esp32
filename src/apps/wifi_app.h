@@ -1,7 +1,7 @@
 /**
  * @file wifi_app.h
- * @brief Module WiFi Settings App (LVGL 8 cho màn hình 3.5" IPS 480x320)
- * Giao diện chia 2 nửa: Quét mạng (trái) và Bàn phím ảo cảm ứng / Nhập mật khẩu (phải)
+ * @brief Module WiFi Settings App (LVGL 8)
+ * Danh sách quét mạng, bàn phím ảo cảm ứng và quản lý kết nối
  * Tích hợp Preferences.h NVS Flash lưu trữ thông tin mạng
  */
 
@@ -16,7 +16,7 @@ void wifi_app_init(void);
 
 /**
  * @brief Mở và hiển thị giao diện WiFi Settings App
- * @param parent Khung chứa ứng dụng (480x266)
+ * @param parent Khung chứa ứng dụng (kích thước dynamic)
  */
 void wifi_app_open(lv_obj_t *parent);
 

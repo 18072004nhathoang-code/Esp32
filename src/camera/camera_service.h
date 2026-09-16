@@ -32,9 +32,19 @@ bool camera_service_configure_network(const NetworkCameraProfile &profile);
 bool camera_service_save_network_profile(void);
 
 /**
- * @brief Lấy cấu hình IP Camera hiện tại
+ * @brief Lấy cấu hình IP Camera hiện tại (bản sao an toàn luồng)
  */
-const NetworkCameraProfile& camera_service_get_network_profile(void);
+NetworkCameraProfile camera_service_get_network_profile(void);
+
+/**
+ * @brief Lấy trạng thái runtime hiện tại của camera
+ */
+CameraRuntimeState camera_service_get_runtime_state(void);
+
+/**
+ * @brief Kiểm tra camera đã kết nối và sẵn sàng truyền frame
+ */
+bool camera_service_is_connected(void);
 
 /**
  * @brief Khởi chạy luồng bắt hình / phát video

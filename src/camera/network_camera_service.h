@@ -15,7 +15,7 @@ public:
     bool start();
     void stop();
     bool isConnected() const;
-    const NetworkCameraProfile& getActiveProfile() const;
+    NetworkCameraProfile getActiveProfile();
 
     // Lấy trạng thái khả năng thực tế của từng tính năng
     CameraFeatureStatus getSnapshotStatus() const;
@@ -37,10 +37,10 @@ public:
     bool onvifGetSnapshotUri(const char *profile_token, char *out_uri, size_t max_len);
     bool onvifGetStreamUri(const char *profile_token, char *out_uri, size_t max_len);
 
-    // Tải ảnh trực tiếp qua HTTP Snapshot (hỗ trợ Content-Length và Chunked/Stream)
-    int fetchHttpSnapshot(uint8_t *out_buf, size_t max_size);
+    // Tải ảnh trực tiếp qua HTTP Snapshot (nhận pointer & capacity theo tham chiếu để realloc an toàn)
+    int fetchHttpSnapshot(uint8_t *&out_buf, size_t &current_cap);
 
-    // Lấy trạng thái runtime thật (NOT_CONFIGURED, CONNECTING, CONNECTED, ERROR, STOPPED)
+    // Lấy trạng thái runtime thật (NOT_CONFIGURED, CONNECTING, CONNECTED, PASSWORD_REQUIRED, ERROR, STOPPED)
     CameraRuntimeState getRuntimeState() const;
 
     // Lưu & Nạp cấu hình Camera từ NVS Flash (không lưu password dạng plaintext)
@@ -55,19 +55,22 @@ public:
 private:
     bool _configured;
     bool _connected;
-    bool _running;
+    volatile bool _running;
     CameraRuntimeState _runtime_state;
     uint32_t _frame_sequence;
     NetworkCameraProfile _profile;
+    SemaphoreHandle_t _config_mutex;
+    SemaphoreHandle_t _worker_exit_sem;
 
     char _onvif_snapshot_url[192];
     char _onvif_stream_url[192];
     bool _onvif_probed;
 
-    // Ping-pong / Double Buffering để worker không bao giờ overwrite khi consumer đang đọc
+    // Ping-pong / Double Buffering với dung lượng độc lập cho từng buffer
     uint8_t *_buf_front;
     uint8_t *_buf_back;
-    size_t _buf_capacity;
+    size_t _front_capacity;
+    size_t _back_capacity;
     CameraFrame _frame_front;
     CameraFrame _frame_back;
     bool _front_in_use;

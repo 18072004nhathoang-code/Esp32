@@ -23,10 +23,11 @@ extern const lv_font_t ui_font_16;
 #define UI_FONT_14 (&ui_font_14)
 #define UI_FONT_16 (&ui_font_16)
 
-#define UI_FONT_SMALL  (&ui_font_10)
-#define UI_FONT_BODY   (&ui_font_14)
-#define UI_FONT_BUTTON (&ui_font_14)
-#define UI_FONT_TITLE  (&ui_font_16)
+#define UI_FONT_TINY   (&ui_font_10)   // 10px: chỉ dùng cho badge nhỏ, superscript
+#define UI_FONT_SMALL  (&ui_font_12)   // 12px: font nhỏ mặc định
+#define UI_FONT_BODY   (&ui_font_14)   // 14px: text bình thường
+#define UI_FONT_BUTTON (&ui_font_14)   // 14px: text nút bấm
+#define UI_FONT_TITLE  (&ui_font_16)   // 16px: tiêu đề
 
 #ifdef __cplusplus
 }

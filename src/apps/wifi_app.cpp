@@ -1,6 +1,6 @@
 /**
  * @file wifi_app.cpp
- * @brief Triển khai module WiFi Settings App trên LVGL 8 cho màn hình Portrait 240x320
+ * @brief Triển khai module WiFi Settings App trên LVGL 8 cho màn hình 320x240 Landscape Flipped
  * Bố cục: Danh sách mạng full-width, chọn WiFi mở modal nhập mật khẩu, không chia đôi màn hình.
  */
 
@@ -284,7 +284,7 @@ static void network_item_clicked_cb(lv_event_t *e)
 }
 
 /* =========================================================================
- * XÂY DỰNG GIAO DIỆN FULL-WIDTH 240x320
+ * XÂY DỰNG GIAO DIỆN 320x240 LANDSCAPE FLIPPED
  * ========================================================================= */
 void wifi_app_open(lv_obj_t *parent)
 {

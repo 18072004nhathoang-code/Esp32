@@ -1,6 +1,6 @@
 /**
  * @file ai_voice_app.cpp
- * @brief Giao diện ứng dụng AI Voice Assistant trên LVGL 8 (480x266)
+ * @brief Giao diện ứng dụng AI Voice Assistant trên LVGL 8
  * Khung hội thoại bong bóng chat Messenger/iMessage, nút Push-to-Talk và sóng âm Waveform
  */
 
@@ -65,7 +65,7 @@ static void add_chat_bubble(const ChatMessage *msg)
         lv_obj_t *lbl_hdr = lv_label_create(bubble);
         lv_label_set_text(lbl_hdr, "XiaoZhi AI (Demo)");
         lv_obj_set_style_text_color(lbl_hdr, lv_color_hex(0x00F2FE), 0);
-        lv_obj_set_style_text_font(lbl_hdr, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(lbl_hdr, UI_FONT_SMALL, 0);
         lv_obj_align(lbl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         lv_obj_t *lbl_text = lv_label_create(bubble);
@@ -226,7 +226,7 @@ void ai_voice_app_open(lv_obj_t *parent)
     lbl_status_text = lv_label_create(bottom_bar);
     lv_label_set_text(lbl_status_text, "Giữ nút để nói");
     lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
-    lv_obj_set_style_text_font(lbl_status_text, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_status_text, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_status_text, LV_ALIGN_RIGHT_MID, -4, 0);
 }
 

@@ -624,9 +624,9 @@ void audio_play_sound_effect(SoundEffect fx)
 bool audio_start_recording(uint32_t max_duration_sec)
 {
     if (!psram_record_buf) return false;
+    audio_stop_playback();
     if (!audio_request_ownership(AUDIO_OWNER_RECORDER)) return false;
 
-    audio_stop_playback();
     record_sample_capacity = AUDIO_SAMPLE_RATE * max_duration_sec;
     if (record_sample_capacity > AUDIO_MAX_SAMPLES)
     {
@@ -640,10 +640,13 @@ bool audio_start_recording(uint32_t max_duration_sec)
 
 void audio_stop_recording(void)
 {
-    recording_active = false;
-    audio_release_ownership(AUDIO_OWNER_RECORDER);
-    Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
-                  recorded_samples_count, (float)recorded_samples_count / AUDIO_SAMPLE_RATE);
+    if (recording_active)
+    {
+        recording_active = false;
+        audio_release_ownership(AUDIO_OWNER_RECORDER);
+        Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
+                      recorded_samples_count, (float)recorded_samples_count / AUDIO_SAMPLE_RATE);
+    }
 }
 
 bool audio_is_recording(void)
@@ -654,9 +657,9 @@ bool audio_is_recording(void)
 bool audio_start_playback(void)
 {
     if (!psram_record_buf || recorded_samples_count == 0) return false;
+    audio_stop_recording();
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return false;
 
-    audio_stop_recording();
     playback_sample_idx = 0;
     playback_active = true;
     Serial.printf("[AUDIO] Bắt đầu phát lại đoạn ghi âm (%u mẫu)...\n", recorded_samples_count);
@@ -665,9 +668,16 @@ bool audio_start_playback(void)
 
 void audio_stop_playback(void)
 {
-    playback_active = false;
-    playback_sample_idx = 0;
-    audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    if (playback_active)
+    {
+        playback_active = false;
+        playback_sample_idx = 0;
+        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    }
+    else
+    {
+        playback_sample_idx = 0;
+    }
 }
 
 bool audio_is_playing(void)

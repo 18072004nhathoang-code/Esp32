@@ -63,3 +63,8 @@ void lvgl_port_set_brightness(uint8_t percent);
  * @brief Lấy phần trăm độ sáng hiện tại
  */
 uint8_t lvgl_port_get_brightness(void);
+
+/**
+ * @brief Lấy tên định danh của chiều xoay màn hình (Orientation)
+ */
+const char* display_orientation_name(uint8_t rotation);

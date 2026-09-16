@@ -1,7 +1,6 @@
 /**
  * @file camera_app.cpp
- * @brief Giao diện ứng dụng Camera & RTSP Streamer: Tối ưu cho màn hình Portrait 240x320
- * Ưu tiên vùng ảnh Canvas lớn, toolbar phía dưới với touch target >= 32px, bàn phím ảo tích hợp
+ * @brief Giao diện ứng dụng Camera & RTSP Streamer: Tối ưu cho màn hình 320x240 Landscape Flipped
  */
 
 #include "camera_app.h"
@@ -190,7 +189,7 @@ static void kb_event_cb(lv_event_t *e)
 }
 
 /* =========================================================================
- * KHỞI TẠO GIAO DIỆN CAMERA 240x320 PORTRAIT
+ * KHỞI TẠO GIAO DIỆN CAMERA 320x240 LANDSCAPE FLIPPED
  * ========================================================================= */
 void camera_app_open(lv_obj_t *parent)
 {
@@ -204,7 +203,12 @@ void camera_app_open(lv_obj_t *parent)
     last_fps_calc_time = millis();
     last_frame_time_ms = millis();
 
-    // 1. CẤP PHÁT BỘ ĐỆM CANVAS (236 x 176 RGB565 = ~83 KB trong PSRAM)
+    // 1. TÍNH TOÁN KÍCH THƯỚC ĐÁP ỨNG CHO KHUNG HÌNH (Responsive Canvas)
+    uint16_t toolbar_w = (SCREEN_WIDTH > 320) ? 96 : 84;
+    canvas_w = SCREEN_WIDTH - toolbar_w - 12;
+    canvas_h = APP_CONTENT_HEIGHT - 6;
+
+    // CẤP PHÁT BỘ ĐỆM CANVAS TRONG PSRAM
     if (!cam_canvas_buf)
     {
         cam_canvas_buf = (lv_color_t *)heap_caps_malloc(canvas_w * canvas_h * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -216,14 +220,13 @@ void camera_app_open(lv_obj_t *parent)
 
     if (cam_canvas_buf)
     {
-        // Khởi tạo màu đen cho canvas
         for (int i = 0; i < canvas_w * canvas_h; i++)
         {
             cam_canvas_buf[i] = lv_color_hex(0x0A0D14);
         }
     }
 
-    // 2. VÙNG KHUNG HÌNH CAMERA ƯU TIÊN LỚN (224x188) BÊN TRÁI
+    // 2. VÙNG KHUNG HÌNH CAMERA ƯU TIÊN LỚN BÊN TRÁI
     cam_canvas = lv_canvas_create(parent);
     if (cam_canvas_buf)
     {
@@ -237,7 +240,7 @@ void camera_app_open(lv_obj_t *parent)
 
     // 3. TOOLBAR ĐIỀU KHIỂN DỌC BÊN PHẢI (84x188)
     toolbar_box = lv_obj_create(parent);
-    lv_obj_set_size(toolbar_box, 84, 188);
+    lv_obj_set_size(toolbar_box, toolbar_w, canvas_h);
     lv_obj_align(toolbar_box, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_bg_color(toolbar_box, lv_color_hex(COLOR_CARD_BG), 0);
     lv_obj_set_style_border_color(toolbar_box, lv_color_hex(COLOR_CARD_BORDER), 0);
@@ -246,9 +249,11 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(toolbar_box, 4, 0);
     lv_obj_clear_flag(toolbar_box, LV_OBJ_FLAG_SCROLLABLE);
 
+    uint16_t btn_w = toolbar_w - 10;
+
     // Nút Snapshot (36px height)
     btn_snap = lv_btn_create(toolbar_box);
-    lv_obj_set_size(btn_snap, 74, 36);
+    lv_obj_set_size(btn_snap, btn_w, 36);
     lv_obj_set_ext_click_area(btn_snap, 4);
     lv_obj_align(btn_snap, LV_ALIGN_TOP_MID, 0, 2);
     lv_obj_set_style_radius(btn_snap, 6, 0);
@@ -263,7 +268,7 @@ void camera_app_open(lv_obj_t *parent)
 
     // Nút Cấu hình (36px height)
     btn_cfg = lv_btn_create(toolbar_box);
-    lv_obj_set_size(btn_cfg, 74, 36);
+    lv_obj_set_size(btn_cfg, btn_w, 36);
     lv_obj_set_ext_click_area(btn_cfg, 4);
     lv_obj_align(btn_cfg, LV_ALIGN_TOP_MID, 0, 42);
     lv_obj_set_style_radius(btn_cfg, 6, 0);
@@ -280,7 +285,7 @@ void camera_app_open(lv_obj_t *parent)
 
     // Nút Dừng (36px height)
     btn_disconnect = lv_btn_create(toolbar_box);
-    lv_obj_set_size(btn_disconnect, 74, 36);
+    lv_obj_set_size(btn_disconnect, btn_w, 36);
     lv_obj_set_ext_click_area(btn_disconnect, 4);
     lv_obj_align(btn_disconnect, LV_ALIGN_TOP_MID, 0, 82);
     lv_obj_set_style_radius(btn_disconnect, 6, 0);
@@ -295,19 +300,21 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_style_text_font(lbl_dis, UI_FONT_12, 0);
     lv_obj_center(lbl_dis);
 
-    // Dòng thông số thực tế (FPS, Latency)
+    // Dòng thông số thực tế (FPS, Kích thước, Dung lượng, Latency dạng multiline gọn)
     lbl_metrics = lv_label_create(toolbar_box);
-    lv_label_set_text(lbl_metrics, "FPS: 0.0\n0x0 • 0ms");
+    lv_label_set_text(lbl_metrics, "FPS 0.0\n0x0\n0 KB\n0 ms");
+    lv_obj_set_width(lbl_metrics, btn_w);
     lv_obj_set_style_text_color(lbl_metrics, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_metrics, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_metrics, UI_FONT_12, 0);
     lv_obj_align(lbl_metrics, LV_ALIGN_TOP_MID, 0, 122);
     lv_obj_set_style_text_align(lbl_metrics, LV_TEXT_ALIGN_CENTER, 0);
 
-    // Dòng trạng thái nguồn & Năng lực thực
+    // Dòng trạng thái kết nối & Nguồn Camera
     lbl_cam_status = lv_label_create(toolbar_box);
-    lv_label_set_text(lbl_cam_status, "HTTP Snap");
+    lv_label_set_text(lbl_cam_status, "READY");
+    lv_obj_set_width(lbl_cam_status, btn_w);
     lv_obj_set_style_text_color(lbl_cam_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(lbl_cam_status, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_cam_status, UI_FONT_12, 0);
     lv_obj_align(lbl_cam_status, LV_ALIGN_BOTTOM_MID, 0, -2);
     lv_obj_set_style_text_align(lbl_cam_status, LV_TEXT_ALIGN_CENTER, 0);
 
@@ -351,7 +358,7 @@ void camera_app_open(lv_obj_t *parent)
         lv_obj_t *lbl = lv_label_create(cfg_modal);
         lv_label_set_text(lbl, label_text);
         lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_font(lbl, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(lbl, UI_FONT_SMALL, 0);
         lv_obj_set_pos(lbl, 6, y_pos);
 
         lv_obj_t *ta = lv_textarea_create(cfg_modal);
@@ -363,7 +370,7 @@ void camera_app_open(lv_obj_t *parent)
         lv_obj_set_style_bg_color(ta, lv_color_hex(0x151B27), 0);
         lv_obj_set_style_border_color(ta, lv_color_hex(0x2A354A), 0);
         lv_obj_set_style_text_color(ta, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(ta, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(ta, UI_FONT_SMALL, 0);
         lv_obj_add_event_cb(ta, ta_focus_cb, LV_EVENT_FOCUSED, nullptr);
         return ta;
     };
@@ -387,7 +394,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_t *lbl_v = lv_label_create(cfg_modal);
     lv_label_set_text(lbl_v, "Nhà sản xuất (Vendor):");
     lv_obj_set_style_text_color(lbl_v, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_v, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_v, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_v, 6, 372);
 
     dd_vendor = lv_dropdown_create(cfg_modal);
@@ -396,13 +403,13 @@ void camera_app_open(lv_obj_t *parent)
     lv_dropdown_set_options(dd_vendor, "Generic ONVIF\nHikvision\nKBVision\nEZVIZ\nYoosee");
     lv_dropdown_set_selected(dd_vendor, (uint16_t)cur_prof.vendor);
     lv_obj_set_style_bg_color(dd_vendor, lv_color_hex(0x151B27), 0);
-    lv_obj_set_style_text_font(dd_vendor, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(dd_vendor, UI_FONT_SMALL, 0);
 
     // Dropdown Giao thức
     lv_obj_t *lbl_p = lv_label_create(cfg_modal);
     lv_label_set_text(lbl_p, "Giao thức (Protocol):");
     lv_obj_set_style_text_color(lbl_p, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_p, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_p, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_p, 6, 424);
 
     dd_proto = lv_dropdown_create(cfg_modal);
@@ -411,7 +418,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_dropdown_set_options(dd_proto, "HTTP Snapshot (OK)\nMJPEG (Chưa)\nRTSP/H.264 (Chưa)");
     lv_dropdown_set_selected(dd_proto, (uint16_t)cur_prof.protocol);
     lv_obj_set_style_bg_color(dd_proto, lv_color_hex(0x151B27), 0);
-    lv_obj_set_style_text_font(dd_proto, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(dd_proto, UI_FONT_SMALL, 0);
 
     // Nút Lưu & Kết nối (Touch target >= 32px)
     btn_save_connect = lv_btn_create(cfg_modal);
@@ -484,21 +491,22 @@ void camera_app_update(void)
                                ? (now - frame->timestamp_ms) : (now - last_frame_time_ms);
             last_frame_time_ms = now;
 
-            // Đọc kích thước ảnh JPEG gốc và tính tỷ lệ thu nhỏ
+            // Đọc kích thước ảnh JPEG gốc và tính tỷ lệ thu nhỏ chuẩn
             uint16_t orig_w = 0, orig_h = 0;
             uint8_t scale = 1;
             if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == 0 && orig_w > 0 && orig_h > 0)
             {
-                if (orig_w >= canvas_w * 8 || orig_h >= canvas_h * 8) scale = 8;
-                else if (orig_w >= canvas_w * 4 || orig_h >= canvas_h * 4) scale = 4;
-                else if (orig_w >= canvas_w * 2 || orig_h >= canvas_h * 2) scale = 2;
-                else scale = 1;
+                scale = 1;
+                while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
+                {
+                    scale *= 2;
+                }
 
                 TJpgDec.setJpgScale(scale);
                 uint16_t scaled_w = orig_w / scale;
                 uint16_t scaled_h = orig_h / scale;
-                draw_offset_x = (canvas_w > scaled_w) ? (canvas_w - scaled_w) / 2 : 0;
-                draw_offset_y = (canvas_h > scaled_h) ? (canvas_h - scaled_h) / 2 : 0;
+                draw_offset_x = ((int16_t)canvas_w - (int16_t)scaled_w) / 2;
+                draw_offset_y = ((int16_t)canvas_h - (int16_t)scaled_h) / 2;
             }
             else
             {
@@ -519,7 +527,7 @@ void camera_app_update(void)
 
             if (lbl_metrics)
             {
-                lv_label_set_text_fmt(lbl_metrics, "FPS: %.1f • %dx%d • %uKB • %ums",
+                lv_label_set_text_fmt(lbl_metrics, "FPS: %.1f\n%dx%d\n%u KB\n%u ms",
                     real_fps,
                     orig_w > 0 ? orig_w : (frame->width > 0 ? frame->width : canvas_w),
                     orig_h > 0 ? orig_h : (frame->height > 0 ? frame->height : canvas_h),
@@ -533,8 +541,6 @@ void camera_app_update(void)
 
     if (lbl_cam_status)
     {
-        lv_label_set_text_fmt(lbl_cam_status, "%s (Snapshot: %s)",
-            camera_service_get_status_text(),
-            camera_feature_status_to_string(camera_service_get_snapshot_status()));
+        lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
     }
 }

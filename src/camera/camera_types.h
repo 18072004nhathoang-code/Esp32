@@ -89,6 +89,7 @@ enum CameraRuntimeState
     CAM_STATE_NOT_CONFIGURED = 0,
     CAM_STATE_CONNECTING,
     CAM_STATE_CONNECTED,
+    CAM_STATE_PASSWORD_REQUIRED,
     CAM_STATE_ERROR,
     CAM_STATE_STOPPED
 };
@@ -97,12 +98,13 @@ inline const char* camera_runtime_state_to_string(CameraRuntimeState st)
 {
     switch (st)
     {
-        case CAM_STATE_CONNECTING: return "CONNECTING";
-        case CAM_STATE_CONNECTED:  return "CONNECTED";
-        case CAM_STATE_ERROR:      return "ERROR";
-        case CAM_STATE_STOPPED:    return "STOPPED";
+        case CAM_STATE_CONNECTING:        return "CONNECTING";
+        case CAM_STATE_CONNECTED:         return "CONNECTED";
+        case CAM_STATE_PASSWORD_REQUIRED: return "PASSWORD_REQUIRED";
+        case CAM_STATE_ERROR:             return "ERROR";
+        case CAM_STATE_STOPPED:           return "STOPPED";
         case CAM_STATE_NOT_CONFIGURED:
-        default:                   return "NOT_CONFIGURED";
+        default:                          return "NOT_CONFIGURED";
     }
 }
 

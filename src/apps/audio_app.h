@@ -1,6 +1,6 @@
 /**
  * @file audio_app.h
- * @brief Ứng dụng Voice AI & Audio Lab Pro Max (480x266)
+ * @brief Ứng dụng Voice AI & Audio Lab Pro Max
  * Trực quan hóa sóng âm thanh Mic, Soundboard Loa, Máy ghi âm PSRAM và Trợ lý XiaoZhi AI
  */
 
@@ -10,7 +10,7 @@
 
 /**
  * @brief Khởi tạo và hiển thị ứng dụng Audio Lab
- * @param parent Container chứa giao diện (kích thước 480x266)
+ * @param parent Container chứa giao diện (kích thước dynamic)
  */
 void audio_app_open(lv_obj_t *parent);
 

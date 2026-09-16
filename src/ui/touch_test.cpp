@@ -12,6 +12,7 @@
 static lv_obj_t *test_container = nullptr;
 static lv_obj_t *lbl_info = nullptr;
 static lv_obj_t *crosshair = nullptr;
+static lv_timer_t *touch_timer = nullptr;
 
 struct TargetPoint {
     const char *name;
@@ -30,6 +31,12 @@ static TargetPoint targets[5] = {
     {"BR", 296, 170, nullptr, nullptr, false, 999},
     {"Center", 160, 97, nullptr, nullptr, false, 999}
 };
+
+static void touch_test_timer_cb(lv_timer_t *timer)
+{
+    (void)timer;
+    ui_touch_test_update();
+}
 
 void ui_touch_test_open(lv_obj_t *parent)
 {
@@ -79,7 +86,7 @@ void ui_touch_test_open(lv_obj_t *parent)
         targets[i].lbl = lv_label_create(targets[i].circle);
         lv_label_set_text(targets[i].lbl, targets[i].name);
         lv_obj_set_style_text_color(targets[i].lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
-        lv_obj_set_style_text_font(targets[i].lbl, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(targets[i].lbl, UI_FONT_TINY, 0);
         lv_obj_center(targets[i].lbl);
     }
 
@@ -92,6 +99,12 @@ void ui_touch_test_open(lv_obj_t *parent)
     lv_obj_set_style_border_color(crosshair, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_set_style_border_width(crosshair, 2, 0);
     lv_obj_clear_flag(crosshair, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Dedicated timer 25ms (40Hz) để refresh mượt mà
+    if (!touch_timer)
+    {
+        touch_timer = lv_timer_create(touch_test_timer_cb, 25, NULL);
+    }
 }
 
 void ui_touch_test_update(void)
@@ -103,16 +116,21 @@ void ui_touch_test_update(void)
 
     if (touched)
     {
+        lv_area_t a;
+        lv_obj_get_coords(test_container, &a);
+        int16_t local_x = (int16_t)mx - a.x1;
+        int16_t local_y = (int16_t)my - a.y1;
+
         if (crosshair)
         {
-            lv_obj_set_pos(crosshair, mx - 10, my - 10);
+            lv_obj_set_pos(crosshair, local_x - 10, local_y - 10);
         }
 
-        // Kiểm tra khoảng cách tới 5 điểm chuẩn
+        // Kiểm tra khoảng cách tới 5 điểm chuẩn (dùng local coordinates)
         for (int i = 0; i < 5; i++)
         {
-            int dx = (int)mx - (int)targets[i].x;
-            int dy = (int)my - (int)targets[i].y;
+            int dx = (int)local_x - (int)targets[i].x;
+            int dy = (int)local_y - (int)targets[i].y;
             int dist = (int)sqrt(dx * dx + dy * dy);
 
             if (dist < targets[i].min_err)
@@ -145,6 +163,11 @@ void ui_touch_test_update(void)
 
 void ui_touch_test_close(void)
 {
+    if (touch_timer)
+    {
+        lv_timer_del(touch_timer);
+        touch_timer = nullptr;
+    }
     test_container = nullptr;
     lbl_info = nullptr;
     crosshair = nullptr;

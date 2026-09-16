@@ -1,6 +1,6 @@
 /**
  * @file ui_manager.cpp
- * @brief Giao diện hệ điều hành Mini OS cho màn hình Portrait 240x320
+ * @brief Giao diện hệ điều hành Mini OS cho màn hình 320x240 Landscape Flipped
  * Phong cách TikTok / Modern Mobile OS: Dynamic Status Bar, Grid 3 Cột, Floating Bottom Dock,
  * Card bo góc Squircle, Dark Mode Obsidian và chuyển cảnh mượt mà.
  */
@@ -232,9 +232,8 @@ static void create_status_bar(void)
  * ========================================================================= */
 static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const char *title, lv_color_t accent, uintptr_t app_id, int col, int row)
 {
-    // Cột 0..3: x = 15, 90, 165, 240 (w = 66)
-    // Hàng 0..1: y = 8, 84 (h = 70)
-    int x = 15 + col * 75;
+    int col_width = SCREEN_WIDTH / 4;
+    int x = col * col_width + (col_width - 66) / 2;
     int y = 8 + row * 76;
 
     lv_obj_t *container = lv_obj_create(parent);
@@ -476,7 +475,7 @@ static void open_system_monitor_app(void)
     lv_label_set_text(lbl_cpu_arc_val, "35%\nCPU (Demo)");
     lv_obj_set_style_text_align(lbl_cpu_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_cpu_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_cpu_arc_val, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_cpu_arc_val, UI_FONT_SMALL, 0);
     lv_obj_center(lbl_cpu_arc_val);
 
     // RAM Arc
@@ -497,7 +496,7 @@ static void open_system_monitor_app(void)
     lv_label_set_text(lbl_ram_arc_val, "28%\nRAM");
     lv_obj_set_style_text_align(lbl_ram_arc_val, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(lbl_ram_arc_val, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_ram_arc_val, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_ram_arc_val, UI_FONT_SMALL, 0);
     lv_obj_center(lbl_ram_arc_val);
 
     // Card 2: Live Chart
@@ -535,19 +534,19 @@ static void open_system_monitor_app(void)
     lbl_temp_chip = lv_label_create(telemetry_box);
     lv_label_set_text(lbl_temp_chip, "Nhiệt độ: 41.8 °C");
     lv_obj_set_style_text_color(lbl_temp_chip, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(lbl_temp_chip, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_temp_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_temp_chip, 4, 4);
 
     lbl_psram_chip = lv_label_create(telemetry_box);
     lv_label_set_text(lbl_psram_chip, LV_SYMBOL_SD_CARD " PSRAM: 1.1 / 8.0 MB");
     lv_obj_set_style_text_color(lbl_psram_chip, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_psram_chip, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_psram_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_psram_chip, 4, 26);
 
     lbl_uptime_chip = lv_label_create(telemetry_box);
     lv_label_set_text(lbl_uptime_chip, LV_SYMBOL_REFRESH " Uptime: 00:01:25");
     lv_obj_set_style_text_color(lbl_uptime_chip, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_uptime_chip, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_uptime_chip, UI_FONT_SMALL, 0);
     lv_obj_set_pos(lbl_uptime_chip, 4, 48);
 }
 
@@ -577,7 +576,7 @@ static void open_settings_app(void)
     lbl_brightness_val = lv_label_create(card_bright);
     lv_label_set_text(lbl_brightness_val, "Độ sáng Màn hình: 85%");
     lv_obj_set_style_text_color(lbl_brightness_val, lv_color_hex(COLOR_ACCENT_AMBER), 0);
-    lv_obj_set_style_text_font(lbl_brightness_val, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_brightness_val, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_brightness_val, LV_ALIGN_TOP_LEFT, 0, 0);
 
     slider_brightness = lv_slider_create(card_bright);
@@ -602,7 +601,7 @@ static void open_settings_app(void)
     lv_obj_t *theme_title = lv_label_create(card_theme);
     lv_label_set_text(theme_title, "Màu Chủ Đề Accent:");
     lv_obj_set_style_text_color(theme_title, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(theme_title, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(theme_title, UI_FONT_SMALL, 0);
     lv_obj_align(theme_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     int pill_w = (SCREEN_WIDTH - 48) / 4;
@@ -616,7 +615,7 @@ static void open_settings_app(void)
         lv_obj_t *l = lv_label_create(b);
         lv_label_set_text(l, txt);
         lv_obj_set_style_text_color(l, lv_color_hex(0x0A0D14), 0);
-        lv_obj_set_style_text_font(l, UI_FONT_10, 0);
+        lv_obj_set_style_text_font(l, UI_FONT_SMALL, 0);
         lv_obj_center(l);
     };
 
@@ -726,13 +725,13 @@ static void open_power_app(void)
     lv_obj_t *t_pwr = lv_label_create(card_stat);
     lv_label_set_text(t_pwr, "Trạng Thái Nguồn");
     lv_obj_set_style_text_color(t_pwr, lv_color_hex(COLOR_ACCENT_GREEN), 0);
-    lv_obj_set_style_text_font(t_pwr, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(t_pwr, UI_FONT_SMALL, 0);
     lv_obj_align(t_pwr, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lbl_power_state = lv_label_create(card_stat);
     lv_label_set_text(lbl_power_state, LV_SYMBOL_OK " Hoạt Động (100%)");
     lv_obj_set_style_text_color(lbl_power_state, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(lbl_power_state, UI_FONT_12, 0);
+    lv_obj_set_style_text_font(lbl_power_state, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_power_state, LV_ALIGN_BOTTOM_LEFT, 0, -4);
 
     // Card 2: Hẹn giờ tự động mờ và ngủ
@@ -748,13 +747,13 @@ static void open_power_app(void)
     lv_obj_t *t_t = lv_label_create(card_timer);
     lv_label_set_text(t_t, "Thời Gian Chờ:");
     lv_obj_set_style_text_color(t_t, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(t_t, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(t_t, UI_FONT_SMALL, 0);
     lv_obj_align(t_t, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *lbl_t_info = lv_label_create(card_timer);
     lv_label_set_text(lbl_t_info, "• Mờ sau: 30 giây\n• Tắt màn hình sau: 60 giây");
     lv_obj_set_style_text_color(lbl_t_info, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_t_info, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_t_info, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_t_info, LV_ALIGN_BOTTOM_LEFT, 0, -4);
 
     // Card 3: Thao tác Ngủ Ngay (Sleep Now)
@@ -770,7 +769,7 @@ static void open_power_app(void)
     lv_obj_t *lbl_slp = lv_label_create(btn_sleep);
     lv_label_set_text(lbl_slp, LV_SYMBOL_POWER " Tắt Màn Hình & Ngủ Ngay");
     lv_obj_set_style_text_color(lbl_slp, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(lbl_slp, UI_FONT_10, 0);
+    lv_obj_set_style_text_font(lbl_slp, UI_FONT_BUTTON, 0);
     lv_obj_center(lbl_slp);
 }
 

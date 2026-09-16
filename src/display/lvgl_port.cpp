@@ -144,6 +144,18 @@ void lvgl_port_unlock(void)
     }
 }
 
+const char* display_orientation_name(uint8_t rotation)
+{
+    switch (rotation)
+    {
+        case 0: return "PORTRAIT";
+        case 1: return "LANDSCAPE";
+        case 2: return "PORTRAIT_FLIPPED";
+        case 3: return "LANDSCAPE_FLIPPED";
+        default: return "UNKNOWN";
+    }
+}
+
 bool lvgl_port_init(void)
 {
     spi_bus_guard_init();
@@ -157,12 +169,13 @@ bool lvgl_port_init(void)
 
     // Cấu hình xoay màn hình (Landscape Flipped 320x240 trên ES3C28P)
 #if defined(BOARD_LCD_ROTATION)
-    gfx.setRotation(BOARD_LCD_ROTATION);
+    uint8_t rot = BOARD_LCD_ROTATION;
 #else
-    gfx.setRotation(3); // Mặc định Landscape Flipped (320x240)
+    uint8_t rot = 3; // Mặc định Landscape Flipped (320x240)
 #endif
-    log_i("Màn hình: %dx%d, Rotation: %d (Landscape Flipped)", DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION);
-    Serial.printf("[LVGL] Màn hình: %dx%d, Rotation: %d (Landscape Flipped)\n", DISP_HOR_RES, DISP_VER_RES, BOARD_LCD_ROTATION);
+    gfx.setRotation(rot);
+    log_i("Màn hình: %dx%d, Rotation: %d (%s)", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
+    Serial.printf("[LVGL] Màn hình: %dx%d, Rotation: %d (%s)\n", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     
     // Thiết lập độ sáng ban đầu
     lvgl_port_set_brightness(current_brightness);

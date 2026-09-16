@@ -19,10 +19,11 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
    - Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
    - Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> Tự động chuyển toàn diện sang Network IP Camera (Hikvision, KBVision, Ezviz, Yoosee, ONVIF).
 
-2. **DIYMORE ESP32-S3 3.5" IPS (Legacy Profile)**:
-   - Màn hình 3.5 inch IPS ST7796.
-   - Cảm ứng điện dung FT6336U.
+2. **DIYMORE ESP32-S3 3.5" IPS (Compile-Supported Legacy Board với Partial UI Optimization)**:
+   - Bo mạch cũ hỗ trợ biên dịch và tương thích HAL (`pio run -e esp32-s3-mini-os`).
+   - Màn hình 3.5 inch IPS ST7796 (480x320), cảm ứng điện dung FT6336U.
    - Thẻ nhớ MicroSD kết nối qua SPI Bus dùng chung (FSPI) được bảo vệ bằng `spi_bus_guard`.
+   - *Lưu ý*: UI layout hiện tại được tập trung tối ưu hóa cho ES3C28P (320x240 Landscape Flipped), trên bo mạch DIYMORE UI hiển thị thông qua responsive scaling.
 
 ```text
 +-------------------------------------------------------------------------------+
@@ -147,7 +148,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
    #define GEMINI_API_KEY              "AIzaSy..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
-4. Thông tin xác thực Camera IP (Username / Password / Custom URL) được che chắn tự động (`***:***`) khi build URL và log ra Serial Monitor.
+4. **Bảo mật mật khẩu Camera IP**: Firmware tuyệt đối không lưu plaintext password vào NVS Flash. Sau mỗi lần khởi động lại thiết bị (Reboot), nếu profile có username nhưng password rỗng, hệ thống sẽ đưa camera vào trạng thái `PASSWORD_REQUIRED` và không tự động gửi request lặp vô hạn. Người dùng cần nhập lại mật khẩu trên UI để kích hoạt kết nối. Thông tin xác thực và URL camera được che chắn tự động (`***:***`) khi ghi log Serial Monitor.
 
 ---
 
@@ -181,12 +182,12 @@ pio device monitor -b 115200
 5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, ghi nhớ mạng với Preferences thread-safe, loại bỏ deadlock giữa wifi_mutex và prefs_mutex, không ghi đè NVS khi tự động kết nối từ cấu hình cũ.
 6. **Sensors & Telemetry**: Dữ liệu cảm biến la bàn/IMU/áp suất được gắn nhãn rõ ràng là **Demo / Mock** (phần cứng không gắn cảm biến vật lý).
 7. **Camera Subsystem**:
-   - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, giải mã bằng TJpg_Decoder và hiển thị trực tiếp lên LVGL Canvas kèm đo FPS thực tế).
+   - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, kiểm tra tính toàn vẹn SOI `0xFF 0xD8` và EOI `0xFF 0xD9`, cơ chế Ping-Pong Double Buffer với per-buffer capacity độc lập lên tới 512KB chống heap overflow, giải mã tự động bằng TJpg_Decoder theo scale lũy thừa 2 và letterbox/center-crop căn giữa hiển thị trực tiếp lên LVGL Canvas kèm đo FPS thực tế).
    - **ONVIF Client**: `NOT_IMPLEMENTED` (Hỗ trợ cấu trúc SOAP cơ bản, không trả kết quả thành công giả khi chưa parse được profile).
    - **MJPEG HTTP Stream**: `NOT_IMPLEMENTED`.
 8. **Battery & Power Management**: Đọc ADC điện áp pin trên GPIO 9 của ES3C28P, tự động ẩn trên bo mạch không hỗ trợ (DIYMORE pin = -1), hiển thị trạng thái `Uncalibrated` khi chưa cấu hình hệ số phân áp phần cứng thực tế.
-9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc, không phụ thuộc font runtime ngoài.
-10. **Touch Architecture & Calibration Tool (Touch Test)**: Cảm ứng FT6336G chia sẻ bus phần cứng an toàn qua `shared_i2c_bus`. Hệ thống hỗ trợ bộ cờ hiệu chuẩn (`BOARD_TOUCH_SWAP_XY`, `BOARD_TOUCH_INVERT_X`, `BOARD_TOUCH_INVERT_Y`) và ma trận chuyển đổi tọa độ theo hướng quay màn hình (`BOARD_LCD_ROTATION 3` - Landscape Flipped: `mapped_x = PANEL_HEIGHT - 1 - raw_y; mapped_y = raw_x;`). Đi kèm ứng dụng **Touch Test** hiển thị trực tiếp tọa độ raw, tọa độ mapped, crosshair tâm ngón tay và 5 điểm hiệu chuẩn (TL, TR, BL, BR, Center) để xác thực độ chính xác cảm ứng theo thời gian thực.
+9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc (`UI_FONT_SMALL` 12px, `UI_FONT_BODY` 14px, `UI_FONT_BUTTON` 14px, `UI_FONT_TITLE` 16px), không phụ thuộc font runtime ngoài.
+10. **Touch Architecture & Calibration Tool (Touch Test)**: Cảm ứng FT6336G chia sẻ bus phần cứng an toàn qua `shared_i2c_bus` với critical section đồng bộ snapshot. Hệ thống hỗ trợ bộ cờ hiệu chuẩn (`BOARD_TOUCH_SWAP_XY`, `BOARD_TOUCH_INVERT_X`, `BOARD_TOUCH_INVERT_Y`) và ma trận chuyển đổi tọa độ theo hướng quay màn hình (`BOARD_LCD_ROTATION 3` - Landscape Flipped: `mapped_x = PANEL_HEIGHT - 1 - raw_y; mapped_y = raw_x;`). Đi kèm ứng dụng **Touch Test** chạy timer 25ms (40Hz), tính toán tọa độ container local chuẩn xác (`local_x = mapped_x - a.x1`, `local_y = mapped_y - a.y1`), hiển thị trực tiếp crosshair bám sát ngón tay và 5 điểm hiệu chuẩn (TL, TR, BL, BR, Center) để xác thực độ chính xác cảm ứng theo thời gian thực.
 
 
 ---

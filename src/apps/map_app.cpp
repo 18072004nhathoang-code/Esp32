@@ -1,7 +1,7 @@
 /**
  * @file map_app.cpp
  * @brief Triển khai ứng dụng xem bản đồ Google Maps trên ESP32-S3
- * Hỗ trợ Google Maps Static API (480x320, solution_id=gmp_git_agentskills_v1),
+ * Hỗ trợ Google Maps Static API (320x240, solution_id=gmp_git_agentskills_v1),
  * bộ nhớ đệm thẻ nhớ MicroSD FAT32, chuyển đổi Roadmap/Satellite và giao diện cảm ứng Zoom/Pan.
  */
 
@@ -349,7 +349,7 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_clean(parent);
     lv_obj_set_style_pad_all(parent, 0, 0);
 
-    // 1. Cấp phát bộ đệm Canvas trong 8MB PSRAM (480x266 x 2 byte = 255.3 KB)
+    // 1. Cấp phát bộ đệm Canvas trong 8MB PSRAM (320x240 x 2 byte)
     if (canvas_buffer == nullptr)
     {
         size_t buf_size = MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT * sizeof(lv_color_t);
@@ -371,7 +371,7 @@ void map_app_open(lv_obj_t *parent)
     // 2. Khởi tạo tác vụ tải ảnh nền và thẻ MicroSD FAT32
     map_tile_downloader_init();
 
-    // 3. Tạo Canvas tràn viền 480x266
+    // 3. Tạo Canvas tràn viền MAP_CANVAS_WIDTH x MAP_CANVAS_HEIGHT
     map_canvas = lv_canvas_create(parent);
     lv_canvas_set_buffer(map_canvas, canvas_buffer, MAP_CANVAS_WIDTH, MAP_CANVAS_HEIGHT, LV_IMG_CF_TRUE_COLOR);
     lv_obj_set_pos(map_canvas, 0, 0);
@@ -380,6 +380,7 @@ void map_app_open(lv_obj_t *parent)
     // 4. FLOATING HUD TOP: Nút chuyển đổi kiểu bản đồ (Roadmap / Satellite)
     hud_type_btn = lv_btn_create(parent);
     lv_obj_set_size(hud_type_btn, 46, 24);
+    lv_obj_set_ext_click_area(hud_type_btn, 6);
     lv_obj_set_pos(hud_type_btn, 6, 6);
     lv_obj_set_style_radius(hud_type_btn, 8, 0);
     lv_obj_set_style_bg_color(hud_type_btn, lv_color_hex(0x0A0E17), 0);
@@ -416,6 +417,7 @@ void map_app_open(lv_obj_t *parent)
     // Nút chuyển địa điểm tiếp theo (Phải)
     lv_obj_t *btn_next_city = lv_btn_create(parent);
     lv_obj_set_size(btn_next_city, 34, 24);
+    lv_obj_set_ext_click_area(btn_next_city, 6);
     lv_obj_set_pos(btn_next_city, 236, 6);
     lv_obj_set_style_radius(btn_next_city, 8, 0);
     lv_obj_set_style_bg_color(btn_next_city, lv_color_hex(0x0A0E17), 0);
@@ -433,6 +435,7 @@ void map_app_open(lv_obj_t *parent)
     // 6. CỤM NÚT FLOATING ZOOM [+] VÀ [-] (Góc phải)
     lv_obj_t *btn_zin = lv_btn_create(parent);
     lv_obj_set_size(btn_zin, 32, 32);
+    lv_obj_set_ext_click_area(btn_zin, 6);
     lv_obj_set_pos(btn_zin, 280, 36);
     lv_obj_set_style_radius(btn_zin, 16, 0);
     lv_obj_set_style_bg_color(btn_zin, lv_color_hex(0x161B26), 0);
@@ -447,6 +450,7 @@ void map_app_open(lv_obj_t *parent)
 
     lv_obj_t *btn_zout = lv_btn_create(parent);
     lv_obj_set_size(btn_zout, 32, 32);
+    lv_obj_set_ext_click_area(btn_zout, 6);
     lv_obj_set_pos(btn_zout, 280, 72);
     lv_obj_set_style_radius(btn_zout, 16, 0);
     lv_obj_set_style_bg_color(btn_zout, lv_color_hex(0x161B26), 0);
@@ -463,6 +467,7 @@ void map_app_open(lv_obj_t *parent)
     auto create_dpad_btn = [&](lv_coord_t x, lv_coord_t y, const char *sym, uintptr_t dir) {
         lv_obj_t *btn = lv_btn_create(parent);
         lv_obj_set_size(btn, 26, 22);
+        lv_obj_set_ext_click_area(btn, 6);
         lv_obj_set_pos(btn, x, y);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x121824), 0);

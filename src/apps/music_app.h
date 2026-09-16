@@ -1,7 +1,7 @@
 /**
  * @file music_app.h
- * @brief Ứng dụng Music Player Pro Max trên màn hình 3.5" IPS 480x320
- * Giao diện chia đôi: Cột trái danh sách MP3 từ /music, Cột phải đĩa than quay và điều khiển cảm ứng
+ * @brief Ứng dụng Music Player Pro Max trên Mini OS
+ * Artwork đĩa than xoay, danh sách MP3, thanh tiến trình và điều khiển cảm ứng
  */
 
 #pragma once
@@ -10,7 +10,7 @@
 
 /**
  * @brief Khởi tạo và hiển thị ứng dụng Music Player
- * @param parent Container chứa giao diện (kích thước 480x266)
+ * @param parent Container chứa giao diện (kích thước dynamic)
  */
 void music_app_open(lv_obj_t *parent);
 

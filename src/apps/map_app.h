@@ -1,7 +1,7 @@
 /**
  * @file map_app.h
  * @brief Ứng dụng xem bản đồ Google Maps tương tác trên Mini OS cho ESP32-S3
- * Hỗ trợ Google Maps Static API (480x320, solution_id=gmp_git_agentskills_v1),
+ * Hỗ trợ Google Maps Static API (320x240, solution_id=gmp_git_agentskills_v1),
  * bộ nhớ đệm MicroSD FAT32 Cache, chuyển đổi Roadmap/Satellite và giao diện cảm ứng Zoom/Pan.
  */
 
@@ -13,7 +13,7 @@
 #include "../ui/ui_theme.h"
 #include "../display/lvgl_port.h"
 
-// Kích thước khung hình bản đồ tương thích màn hình 240x320 Portrait
+// Kích thước khung hình bản đồ tương thích màn hình 320x240 Landscape Flipped
 #ifndef MAP_CANVAS_WIDTH
 #define MAP_CANVAS_WIDTH  SCREEN_WIDTH
 #endif
