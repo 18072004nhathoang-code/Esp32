@@ -37,7 +37,8 @@ enum TileDownloadStatus {
     TILE_IDLE = 0,
     TILE_DOWNLOADING,
     TILE_READY,
-    TILE_ERROR
+    TILE_ERROR,
+    TILE_DEGRADED
 };
 
 // Nguồn cung cấp ảnh bản đồ hiện tại
@@ -51,7 +52,7 @@ enum TileSource {
 /**
  * @brief Khởi tạo bộ đệm trong 8MB Octal PSRAM, thẻ MicroSD và FreeRTOS Task chạy ngầm trên Core 0
  */
-void map_tile_downloader_init(void);
+bool map_tile_downloader_init(void);
 
 /**
  * @brief Gửi yêu cầu tải hoặc nạp ảnh bản đồ cho tọa độ và mức zoom
@@ -60,7 +61,7 @@ void map_tile_downloader_init(void);
  * @param zoom Mức thu phóng (5 đến 20)
  * @param maptype Kiểu bản đồ: "roadmap" (mặc định) hoặc "satellite"
  */
-void map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype = "roadmap");
+bool map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype = "roadmap");
 
 /**
  * @brief Kiểm tra xem đã có ảnh bản đồ mới giải mã xong chưa

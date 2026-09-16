@@ -8,6 +8,7 @@
 #include "map_app.h"
 #include "sd_map_cache.h"
 #include "../os/wifi_manager.h"
+#include "../display/tjpg_guard.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -133,7 +134,7 @@ static char active_api_key[128] = GOOGLE_MAPS_STATIC_API_KEY;
 static bool tjpg_output_callback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
     if (!tile_buf_back) return false;
-    if (y >= MAP_TILE_HEIGHT) return false;
+    if (x < 0 || y < 0 || x >= MAP_TILE_WIDTH || y >= MAP_TILE_HEIGHT) return false;
 
     for (int16_t row = 0; row < h; row++)
     {
@@ -177,13 +178,18 @@ static void map_download_task(void *pvParameters)
                 int bytes_read = sd_map_cache_read(target_lat, target_lon, target_zoom, target_type, jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
                 if (bytes_read > 200)
                 {
-                    TJpgDec.setJpgScale(1);
-                    TJpgDec.setSwapBytes(false); // Chuẩn RGB565 byte order cho LovyanGFX & LVGL 8
-                    TJpgDec.setCallback(tjpg_output_callback);
-
-                    JRESULT res = TJpgDec.drawJpg(0, 0, (const uint8_t *)jpeg_raw_buffer, bytes_read);
+                    JRESULT res = JDR_INTR;
+                    if (tjpg_guard_lock())
+                    {
+                        TJpgDec.setJpgScale(1);
+                        TJpgDec.setSwapBytes(false); // Chuẩn RGB565 byte order cho LovyanGFX & LVGL 8
+                        TJpgDec.setCallback(tjpg_output_callback);
+                        res = TJpgDec.drawJpg(0, 0, (const uint8_t *)jpeg_raw_buffer, bytes_read);
+                        tjpg_guard_unlock();
+                    }
                     if (res == JDR_OK)
                     {
+                        bool published = false;
                         if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                         {
                             lv_color_t *tmp = tile_buf_front;
@@ -192,11 +198,16 @@ static void map_download_task(void *pvParameters)
                             current_source = TILE_SOURCE_SD_CACHE;
                             has_new_tile = true;
                             current_status = TILE_READY;
+                            published = true;
                             xSemaphoreGive(tile_swap_mutex);
                         }
-                        Serial.println("[MAP_TASK] ✔ Nạp ảnh từ thẻ SD & giải mã thành công!");
-                        vTaskDelay(pdMS_TO_TICKS(50));
-                        continue;
+                        if (published)
+                        {
+                            Serial.println("[MAP_TASK] ✔ Nạp ảnh từ thẻ SD & giải mã thành công!");
+                            vTaskDelay(pdMS_TO_TICKS(50));
+                            continue;
+                        }
+                        current_status = TILE_DEGRADED;
                     }
                     else
                     {
@@ -297,13 +308,18 @@ static void map_download_task(void *pvParameters)
                         {
                             Serial.printf("[MAP_TASK] Đã tải về: %d bytes. Bắt đầu giải mã TJpgDec...\n", bytes_read);
 
-                            TJpgDec.setJpgScale(1);
-                            TJpgDec.setSwapBytes(false);
-                            TJpgDec.setCallback(tjpg_output_callback);
-
-                            JRESULT res = TJpgDec.drawJpg(0, 0, (const uint8_t *)jpeg_raw_buffer, bytes_read);
+                            JRESULT res = JDR_INTR;
+                            if (tjpg_guard_lock())
+                            {
+                                TJpgDec.setJpgScale(1);
+                                TJpgDec.setSwapBytes(false);
+                                TJpgDec.setCallback(tjpg_output_callback);
+                                res = TJpgDec.drawJpg(0, 0, (const uint8_t *)jpeg_raw_buffer, bytes_read);
+                                tjpg_guard_unlock();
+                            }
                             if (res == JDR_OK)
                             {
+                                bool published = false;
                                 if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                                 {
                                     lv_color_t *tmp = tile_buf_front;
@@ -312,7 +328,15 @@ static void map_download_task(void *pvParameters)
                                     current_source = TILE_SOURCE_NETWORK;
                                     has_new_tile = true;
                                     current_status = TILE_READY;
+                                    published = true;
                                     xSemaphoreGive(tile_swap_mutex);
+                                }
+                                if (!published)
+                                {
+                                    current_status = TILE_DEGRADED;
+                                    Serial.println("[MAP_TASK] ❌ Không thể công bố frame bản đồ");
+                                    http.end();
+                                    continue;
                                 }
                                 Serial.println("[MAP_TASK] ✔ Giải mã thành công dữ liệu ảnh mạng!");
 
@@ -352,7 +376,7 @@ static void map_download_task(void *pvParameters)
     }
 }
 
-void map_tile_downloader_init(void)
+bool map_tile_downloader_init(void)
 {
     // 1. Khởi tạo bộ nhớ đệm thẻ nhớ MicroSD FAT32
     sd_map_cache_init();
@@ -360,6 +384,12 @@ void map_tile_downloader_init(void)
     if (tile_swap_mutex == nullptr)
     {
         tile_swap_mutex = xSemaphoreCreateMutex();
+    }
+    if (!tile_swap_mutex || !tjpg_guard_init())
+    {
+        current_status = TILE_DEGRADED;
+        Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được mutex");
+        return false;
     }
 
     // 2. Cấp phát bộ đệm thô và bộ đệm điểm ảnh kép (Front & Back) trong 8MB Octal PSRAM
@@ -387,7 +417,8 @@ void map_tile_downloader_init(void)
     if (!jpeg_raw_buffer || !tile_buf_front || !tile_buf_back)
     {
         Serial.println("[MAP_TASK] ❌ Lỗi cấp phát bộ đệm kép PSRAM cho bản đồ!");
-        return;
+        current_status = TILE_DEGRADED;
+        return false;
     }
 
     // 3. Khởi tạo hàng đợi FreeRTOS (Queue size 1 với overwrite)
@@ -395,11 +426,17 @@ void map_tile_downloader_init(void)
     {
         map_request_queue = xQueueCreate(1, sizeof(MapTileRequest));
     }
+    if (!map_request_queue)
+    {
+        current_status = TILE_DEGRADED;
+        Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được queue");
+        return false;
+    }
 
     // 4. Khởi tạo Task FreeRTOS chạy ngầm trên Core 0 (Priority 2: Background network)
     if (download_task_handle == nullptr)
     {
-        xTaskCreatePinnedToCore(
+        BaseType_t created = xTaskCreatePinnedToCore(
             map_download_task,
             "Map_Static_Task",
             8192,
@@ -408,10 +445,19 @@ void map_tile_downloader_init(void)
             &download_task_handle,
             0  // Pin Core 0 (Cách ly hoàn toàn khỏi LVGL Core 1)
         );
+        if (created != pdPASS)
+        {
+            download_task_handle = nullptr;
+            current_status = TILE_DEGRADED;
+            Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được task tải bản đồ");
+            return false;
+        }
     }
+    current_status = TILE_IDLE;
+    return true;
 }
 
-void map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype)
+bool map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype)
 {
     MapTileRequest req;
     req.lat = lat;
@@ -420,10 +466,13 @@ void map_tile_downloader_request(double lat, double lon, int zoom, const char *m
     strncpy(req.maptype, (maptype && strlen(maptype) > 0) ? maptype : "roadmap", sizeof(req.maptype) - 1);
     req.maptype[sizeof(req.maptype) - 1] = '\0';
 
-    if (map_request_queue)
+    if (map_request_queue && xQueueOverwrite(map_request_queue, &req) == pdPASS)
     {
-        xQueueOverwrite(map_request_queue, &req);
+        return true;
     }
+    current_status = TILE_DEGRADED;
+    Serial.println("[MAP_TASK] ❌ Không thể đưa yêu cầu bản đồ vào queue");
+    return false;
 }
 
 bool map_tile_downloader_has_new_data(void)
@@ -439,10 +488,11 @@ const lv_color_t* map_tile_downloader_get_buffer(void)
 bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels)
 {
     if (!dest || !tile_buf_front) return false;
+    size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
+    size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
+    if (copy_rows == 0 || copy_cols == 0 || count_pixels < (copy_rows * (size_t)MAP_CANVAS_WIDTH)) return false;
     if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
-        size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
-        size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
         for (size_t r = 0; r < copy_rows; r++)
         {
             memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));
@@ -456,12 +506,13 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels)
 bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, TileSource *out_source)
 {
     if (!dest || !tile_buf_front) return false;
+    size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
+    size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
+    if (copy_rows == 0 || copy_cols == 0 || count_pixels < (copy_rows * (size_t)MAP_CANVAS_WIDTH)) return false;
     if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
         if (has_new_tile)
         {
-            size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
-            size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
             for (size_t r = 0; r < copy_rows; r++)
             {
                 memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));

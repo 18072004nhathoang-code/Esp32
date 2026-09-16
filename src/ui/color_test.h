@@ -13,3 +13,4 @@
  * @param parent Container cha để vẽ giao diện kiểm tra
  */
 void ui_color_test_open(lv_obj_t *parent);
+void ui_color_test_close(void);

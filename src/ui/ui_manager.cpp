@@ -64,6 +64,7 @@ static lv_obj_t *lbl_pitch_val = nullptr;
 static lv_color_t theme_accent = lv_color_hex(COLOR_ACCENT_CYAN);
 
 enum AppID : uintptr_t {
+    APP_NONE = 0,
     APP_SYSTEM = 1,
     APP_SETTINGS = 2,
     APP_WIFI = 3,
@@ -75,8 +76,10 @@ enum AppID : uintptr_t {
     APP_AI_VOICE = 9,
     APP_CAMERA = 10,
     APP_POWER = 11,
-    APP_TOUCH_TEST = 12
+    APP_TOUCH_TEST = 12,
+    APP_COLOR_TEST = 13
 };
+static AppID active_app = APP_NONE;
 
 // Khai báo trước các hàm mở app
 static void open_system_monitor_app(void);
@@ -92,16 +95,20 @@ static void open_camera_app(void);
 static void open_power_app(void);
 static void open_touch_test_app(void);
 static void close_current_app(void);
+static void prepare_app_window(const char *title, AppID app_id);
 
 /* Callback khi bấm nút đóng cửa sổ app */
 static void close_btn_event_cb(lv_event_t *e)
 {
+    (void)e;
+    if (ui_touch_test_is_calibration_blocking()) return;
     close_current_app();
 }
 
 /* Callback mở app từ Desktop hoặc Dock */
 static void app_icon_event_cb(lv_event_t *e)
 {
+    if (ui_touch_test_is_calibration_blocking()) return;
     uintptr_t app_id = (uintptr_t)lv_event_get_user_data(e);
     switch (app_id)
     {
@@ -145,6 +152,9 @@ static void theme_color_event_cb(lv_event_t *e)
 /* Callback mở màn hình Color Test */
 static void color_test_btn_cb(lv_event_t *e)
 {
+    (void)e;
+    if (ui_touch_test_is_calibration_blocking()) return;
+    prepare_app_window("Display Diagnostic", APP_COLOR_TEST);
     ui_color_test_open(app_content_container);
 }
 
@@ -396,16 +406,21 @@ static void ensure_app_window(void)
     lv_obj_add_flag(app_window, LV_OBJ_FLAG_HIDDEN);
 }
 
-static void close_current_app(void)
+static void invalidate_active_app_widgets(void)
 {
-    if (app_window)
+    switch (active_app)
     {
-        lv_obj_add_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+        case APP_MAP: map_app_close(); break;
+        case APP_AUDIO: audio_app_close(); break;
+        case APP_WIFI: wifi_app_close(); break;
+        case APP_MUSIC: music_app_close(); break;
+        case APP_AI_VOICE: ai_voice_app_close(); break;
+        case APP_CAMERA: camera_app_close(); break;
+        case APP_TOUCH_TEST: ui_touch_test_close(); break;
+        case APP_COLOR_TEST: ui_color_test_close(); break;
+        default: break;
     }
-    if (desktop_view)
-    {
-        lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    }
+
     arc_cpu = nullptr;
     lbl_cpu_arc_val = nullptr;
     arc_ram = nullptr;
@@ -421,14 +436,26 @@ static void close_current_app(void)
     lbl_power_state = nullptr;
     lbl_compass_val = nullptr;
     lbl_pitch_val = nullptr;
+    active_app = APP_NONE;
+}
 
-    map_app_close();
-    audio_app_close();
-    wifi_app_close();
-    music_app_close();
-    ai_voice_app_close();
-    camera_app_close();
-    ui_touch_test_close();
+static void prepare_app_window(const char *title, AppID app_id)
+{
+    ensure_app_window();
+    invalidate_active_app_widgets();
+    lv_obj_clean(app_content_container);
+    lv_label_set_text(app_title_lbl, title);
+    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    active_app = app_id;
+}
+
+static void close_current_app(void)
+{
+    invalidate_active_app_widgets();
+    if (app_content_container) lv_obj_clean(app_content_container);
+    if (app_window) lv_obj_add_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    if (desktop_view) lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
 }
 
 /* =========================================================================
@@ -436,11 +463,7 @@ static void close_current_app(void)
  * ========================================================================= */
 static void open_system_monitor_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "System Monitor");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("System Monitor", APP_SYSTEM);
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 6, 0);
 
@@ -553,11 +576,7 @@ static void open_system_monitor_app(void)
  * ========================================================================= */
 static void open_settings_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Settings");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Settings", APP_SETTINGS);
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
@@ -702,11 +721,7 @@ static void open_settings_app(void)
  * ========================================================================= */
 static void open_power_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Power Manager");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Power Manager", APP_POWER);
     lv_obj_add_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
@@ -776,11 +791,7 @@ static void open_power_app(void)
  * ========================================================================= */
 static void open_tools_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Sensors & Diagnostics");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Sensors & Diagnostics", APP_TOOLS);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
     lv_obj_t *compass_card = lv_obj_create(app_content_container);
@@ -849,11 +860,7 @@ static void open_tools_app(void)
  * ========================================================================= */
 static void open_about_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "About Mini OS");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("About Mini OS", APP_ABOUT);
     lv_obj_set_style_pad_all(app_content_container, 8, 0);
 
     lv_obj_t *card = lv_obj_create(app_content_container);
@@ -894,11 +901,7 @@ static void open_about_app(void)
  * ========================================================================= */
 static void open_touch_test_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Touch Calibration");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Touch Calibration", APP_TOUCH_TEST);
     ui_touch_test_open(app_content_container);
 }
 
@@ -907,31 +910,19 @@ static void open_touch_test_app(void)
  * ========================================================================= */
 static void open_map_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Google Maps");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Google Maps", APP_MAP);
     map_app_open(app_content_container);
 }
 
 static void open_audio_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Audio & Voice Lab");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Audio & Voice Lab", APP_AUDIO);
     audio_app_open(app_content_container);
 }
 
 static void open_wifi_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "WiFi Settings");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("WiFi Settings", APP_WIFI);
     wifi_app_open(app_content_container);
 }
 
@@ -939,18 +930,14 @@ void ui_open_wifi_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        open_wifi_app();
+        if (!ui_touch_test_is_calibration_blocking()) open_wifi_app();
         lvgl_port_unlock();
     }
 }
 
 static void open_music_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "Music Player");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("Music Player", APP_MUSIC);
     music_app_open(app_content_container);
 }
 
@@ -958,18 +945,14 @@ void ui_open_music_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        open_music_app();
+        if (!ui_touch_test_is_calibration_blocking()) open_music_app();
         lvgl_port_unlock();
     }
 }
 
 static void open_ai_voice_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "XiaoZhi AI Voice");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("XiaoZhi AI Voice", APP_AI_VOICE);
     ai_voice_app_open(app_content_container);
 }
 
@@ -977,18 +960,14 @@ void ui_open_ai_voice_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        open_ai_voice_app();
+        if (!ui_touch_test_is_calibration_blocking()) open_ai_voice_app();
         lvgl_port_unlock();
     }
 }
 
 static void open_camera_app(void)
 {
-    ensure_app_window();
-    lv_label_set_text(app_title_lbl, "IP Camera");
-    lv_obj_clean(app_content_container);
-    lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
+    prepare_app_window("IP Camera", APP_CAMERA);
     camera_app_open(app_content_container);
 }
 
@@ -996,7 +975,7 @@ void ui_open_camera_app(void)
 {
     if (lvgl_port_lock(500))
     {
-        open_camera_app();
+        if (!ui_touch_test_is_calibration_blocking()) open_camera_app();
         lvgl_port_unlock();
     }
 }
@@ -1011,6 +990,10 @@ void ui_init(void)
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(COLOR_OS_BG), 0);
         create_status_bar();
         create_desktop();
+        if (ui_touch_test_should_auto_open())
+        {
+            open_touch_test_app();
+        }
         lvgl_port_unlock();
     }
 }

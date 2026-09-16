@@ -9,19 +9,25 @@
 
 static SemaphoreHandle_t spi_shared_mutex = nullptr;
 
-void spi_bus_guard_init(void)
+bool spi_bus_guard_init(void)
 {
     if (!spi_shared_mutex)
     {
         spi_shared_mutex = xSemaphoreCreateMutex();
     }
+    if (!spi_shared_mutex)
+    {
+        Serial.println("[SPI] ❌ Chế độ suy giảm: không tạo được mutex bus");
+        return false;
+    }
+    return true;
 }
 
 bool spi_bus_lock(uint32_t timeout_ms)
 {
     if (!spi_shared_mutex)
     {
-        spi_bus_guard_init();
+        if (!spi_bus_guard_init()) return false;
     }
 
     if (spi_shared_mutex && xSemaphoreTake(spi_shared_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)

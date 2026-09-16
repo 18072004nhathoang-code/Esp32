@@ -8,6 +8,7 @@
 #include "../display/lvgl_port.h"
 #include "../ui/ui_theme.h"
 #include <TJpg_Decoder.h>
+#include "../display/tjpg_guard.h"
 #include <esp_heap_caps.h>
 
 // Các widget giao diện
@@ -73,7 +74,7 @@ static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, 
 }
 
 /* Đọc thông số cấu hình từ giao diện UI và áp dụng vào Camera Service */
-static void apply_ui_configuration(bool start_after_config)
+static bool apply_ui_configuration(bool start_after_config)
 {
     NetworkCameraProfile prof;
     memset(&prof, 0, sizeof(prof));
@@ -112,19 +113,36 @@ static void apply_ui_configuration(bool start_after_config)
         }
     }
 
-    camera_service_configure_network(prof);
-    camera_service_save_network_profile();
+    if (!camera_service_configure_network(prof))
+    {
+        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "CONFIGURATION FAILED");
+        return false;
+    }
+    if (!camera_service_save_network_profile())
+    {
+        if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "NVS SAVE FAILED");
+        return false;
+    }
 
     if (start_after_config)
     {
-        camera_service_start();
+        if (!camera_service_start())
+        {
+            if (lbl_cam_status) lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
+            return false;
+        }
     }
+    return true;
 }
 
 // Bấm nút Refresh Snapshot
 static void btn_snap_cb(lv_event_t *e)
 {
-    camera_service_start();
+    (void)e;
+    if (!camera_service_start() && lbl_cam_status)
+    {
+        lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
+    }
 }
 
 // Bấm nút Mở / Đóng Cấu hình
@@ -146,11 +164,12 @@ static void btn_cfg_cb(lv_event_t *e)
 // Bấm nút Ngắt kết nối
 static void btn_disconnect_cb(lv_event_t *e)
 {
-    camera_service_stop();
+    bool stopped = camera_service_stop();
     if (lbl_cam_status)
     {
-        lv_label_set_text(lbl_cam_status, "Đã ngắt kết nối");
-        lv_obj_set_style_text_color(lbl_cam_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
+        lv_label_set_text(lbl_cam_status, stopped ? "Đã ngắt kết nối" : "STOP FAILED");
+        lv_obj_set_style_text_color(lbl_cam_status,
+                                    stopped ? lv_color_hex(COLOR_TEXT_MUTED) : lv_color_hex(COLOR_ACCENT_RED), 0);
     }
 }
 
@@ -158,8 +177,8 @@ static void btn_disconnect_cb(lv_event_t *e)
 static void btn_save_connect_cb(lv_event_t *e)
 {
     if (cam_keyboard) lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);
-    apply_ui_configuration(true);
-    if (cfg_modal)
+    bool applied = apply_ui_configuration(true);
+    if (applied && cfg_modal)
     {
         lv_obj_add_flag(cfg_modal, LV_OBJ_FLAG_HIDDEN);
     }
@@ -448,10 +467,6 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(cam_keyboard, kb_event_cb, LV_EVENT_ALL, nullptr);
     lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);
 
-    // Khởi tạo decoder TJpg
-    TJpgDec.setJpgScale(1);
-    TJpgDec.setCallback(camera_tjpg_output_cb);
-
     // Bắt đầu chạy service camera
     camera_service_start();
 }
@@ -470,6 +485,16 @@ void camera_app_close(void)
     btn_disconnect = nullptr;
     cfg_modal = nullptr;
     cam_keyboard = nullptr;
+    ta_name = nullptr;
+    ta_ip = nullptr;
+    ta_http_port = nullptr;
+    ta_rtsp_port = nullptr;
+    ta_onvif_port = nullptr;
+    ta_user = nullptr;
+    ta_pass = nullptr;
+    dd_vendor = nullptr;
+    dd_proto = nullptr;
+    btn_save_connect = nullptr;
 }
 
 /* Cập nhật định kỳ */
@@ -483,7 +508,6 @@ void camera_app_update(void)
     {
         if (frame->frame_id != last_rendered_frame_id)
         {
-            last_rendered_frame_id = frame->frame_id;
             uint32_t now = millis();
             frame_count++;
             if (now - last_fps_calc_time >= 1000)
@@ -497,39 +521,47 @@ void camera_app_update(void)
                                ? (now - frame->timestamp_ms) : (now - last_frame_time_ms);
             last_frame_time_ms = now;
 
-            // Đọc kích thước ảnh JPEG gốc và tính tỷ lệ thu nhỏ chuẩn
-            uint16_t orig_w = 0, orig_h = 0;
-            uint8_t scale = 1;
-            if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == 0 && orig_w > 0 && orig_h > 0)
-            {
-                scale = 1;
-                while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
-                {
-                    scale *= 2;
-                }
-
-                TJpgDec.setJpgScale(scale);
-                uint16_t scaled_w = orig_w / scale;
-                uint16_t scaled_h = orig_h / scale;
-                draw_offset_x = ((int16_t)canvas_w - (int16_t)scaled_w) / 2;
-                draw_offset_y = ((int16_t)canvas_h - (int16_t)scaled_h) / 2;
-            }
-            else
-            {
-                TJpgDec.setJpgScale(1);
-                draw_offset_x = 0;
-                draw_offset_y = 0;
-            }
-
             // Xóa nền đen để chống lem khi letterbox
             for (int i = 0; i < canvas_w * canvas_h; i++)
             {
                 cam_canvas_buf[i] = lv_color_hex(0x000000);
             }
 
-            // Giải mã JPEG an toàn vào Canvas
-            TJpgDec.drawJpg(0, 0, frame->buf, frame->len);
-            lv_obj_invalidate(cam_canvas);
+            // Toàn bộ cấu hình và giải mã TJpgDec dùng chung một mutex với Map.
+            uint16_t orig_w = 0, orig_h = 0;
+            uint8_t scale = 1;
+            bool decoded = false;
+            if (tjpg_guard_lock())
+            {
+                TJpgDec.setCallback(camera_tjpg_output_cb);
+                TJpgDec.setSwapBytes(false);
+                if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == 0 && orig_w > 0 && orig_h > 0)
+                {
+                    while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
+                    {
+                        scale *= 2;
+                    }
+
+                    TJpgDec.setJpgScale(scale);
+                    uint16_t scaled_w = orig_w / scale;
+                    uint16_t scaled_h = orig_h / scale;
+                    draw_offset_x = ((int16_t)canvas_w - (int16_t)scaled_w) / 2;
+                    draw_offset_y = ((int16_t)canvas_h - (int16_t)scaled_h) / 2;
+                }
+                else
+                {
+                    TJpgDec.setJpgScale(1);
+                    draw_offset_x = 0;
+                    draw_offset_y = 0;
+                }
+                decoded = (TJpgDec.drawJpg(0, 0, frame->buf, frame->len) == JDR_OK);
+                tjpg_guard_unlock();
+            }
+            if (decoded)
+            {
+                last_rendered_frame_id = frame->frame_id;
+                lv_obj_invalidate(cam_canvas);
+            }
 
             if (lbl_metrics)
             {

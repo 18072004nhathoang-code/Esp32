@@ -17,7 +17,7 @@ extern "C" {
 /**
  * @brief Khởi tạo Mutex bảo vệ bus SPI dùng chung
  */
-void spi_bus_guard_init(void);
+bool spi_bus_guard_init(void);
 
 /**
  * @brief Chiếm quyền sử dụng bus SPI (chờ DMA màn hình hoàn tất trước khi cấp quyền)

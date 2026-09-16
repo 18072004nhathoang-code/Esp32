@@ -27,6 +27,15 @@ void ui_touch_test_update(void);
  */
 void ui_touch_test_close(void);
 
+/** Force the existing calibration screen to start a new attempt. */
+void ui_touch_test_request_forced_calibration(void);
+
+/** True when startup should open calibration before any network UI. */
+bool ui_touch_test_should_auto_open(void);
+
+/** True while normal app navigation and touch delivery must stay locked. */
+bool ui_touch_test_is_calibration_blocking(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -131,6 +131,11 @@ bool audio_manager_pause_task_sync(uint32_t timeout_ms)
     {
         audio_task_ack_sem = xSemaphoreCreateBinary();
     }
+    if (audio_task_ack_sem == nullptr)
+    {
+        Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được semaphore đồng bộ");
+        return false;
+    }
     xSemaphoreTake(audio_task_ack_sem, 0); // Dọn sạch token cũ nếu còn
 
     audio_task_state = AUDIO_TASK_PAUSE_REQUESTED;
@@ -159,6 +164,11 @@ bool audio_request_ownership(AudioOwner requester)
     if (audio_owner_mutex == nullptr)
     {
         audio_owner_mutex = xSemaphoreCreateMutex();
+    }
+    if (audio_owner_mutex == nullptr)
+    {
+        Serial.println("[AUDIO] ❌ Không tạo được mutex quản lý quyền I2S");
+        return false;
     }
     if (xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(150)) != pdTRUE)
     {
@@ -239,8 +249,14 @@ void audio_release_ownership(AudioOwner requester)
                 // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
                 if (requester == AUDIO_OWNER_MUSIC)
                 {
-                    audio_install_duplex_driver();
-                    audio_manager_resume_task();
+                    if (audio_install_duplex_driver())
+                    {
+                        audio_manager_resume_task();
+                    }
+                    else
+                    {
+                        Serial.println("[AUDIO] ❌ Chế độ suy giảm: MUSIC đã nhả lease nhưng I2S duplex chưa khôi phục được");
+                    }
                 }
             }
         }
@@ -505,6 +521,21 @@ bool audio_manager_init(void)
     {
         audio_task_ack_sem = xSemaphoreCreateBinary();
     }
+    if (audio_task_ack_sem == nullptr)
+    {
+        Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được semaphore Audio Task");
+        audio_uninstall_duplex_driver();
+        return false;
+    }
+
+    if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
+    if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+    if (!audio_owner_mutex || !audio_i2s_tx_mutex)
+    {
+        Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được mutex audio");
+        audio_uninstall_duplex_driver();
+        return false;
+    }
 
     BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_background_task,
@@ -540,7 +571,7 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
     {
         audio_i2s_tx_mutex = xSemaphoreCreateMutex();
     }
-    if (xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(200)) != pdTRUE)
+    if (!audio_i2s_tx_mutex || xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(200)) != pdTRUE)
     {
         audio_release_ownership(AUDIO_OWNER_SYSTEM);
         return;

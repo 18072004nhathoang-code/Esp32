@@ -7,6 +7,7 @@
 #include "../os/wifi_manager.h"
 #include <HTTPClient.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <stdio.h>
@@ -22,6 +23,7 @@ NetworkCameraService g_network_camera;
 NetworkCameraService::NetworkCameraService()
     : _configured(false), _connected(false), _running(false),
       _runtime_state(CAM_STATE_NOT_CONFIGURED), _frame_sequence(0),
+      _transport_security(CAM_TRANSPORT_NONE),
       _config_mutex(nullptr), _worker_exit_sem(nullptr),
       _onvif_probed(false),
       _buf_front(nullptr), _buf_back(nullptr),
@@ -39,6 +41,34 @@ NetworkCameraService::NetworkCameraService()
     _onvif_stream_url[0] = '\0';
     _config_mutex = xSemaphoreCreateMutex();
     _worker_exit_sem = xSemaphoreCreateBinary();
+}
+
+bool NetworkCameraService::ensureSynchronizationPrimitives()
+{
+    if (!_config_mutex) _config_mutex = xSemaphoreCreateMutex();
+    if (!_worker_exit_sem) _worker_exit_sem = xSemaphoreCreateBinary();
+    if (!_frame_mutex) _frame_mutex = xSemaphoreCreateMutex();
+    if (!_config_mutex || !_worker_exit_sem || !_frame_mutex)
+    {
+        _runtime_state = CAM_STATE_ERROR;
+        Serial.println("[NET_CAM] ❌ Chế độ suy giảm: không tạo được mutex/semaphore");
+        return false;
+    }
+    return true;
+}
+
+void NetworkCameraService::setTransportSecurity(CameraTransportSecurity security)
+{
+    if (_transport_security == security) return;
+    _transport_security = security;
+    if (security == CAM_TRANSPORT_HTTP_PLAINTEXT)
+    {
+        Serial.println("[NET_CAM] ⚠️ CẢNH BÁO BẢO MẬT: HTTP plaintext; tài khoản và mật khẩu camera có thể bị nghe lén.");
+    }
+    else if (security == CAM_TRANSPORT_HTTPS_UNVERIFIED)
+    {
+        Serial.println("[NET_CAM] ⚠️ HTTPS đang mã hóa nhưng chứng chỉ camera chưa được xác thực; vẫn có rủi ro MITM.");
+    }
 }
 
 NetworkCameraService::~NetworkCameraService()
@@ -169,6 +199,7 @@ bool NetworkCameraService::parseJpegDimensions(const uint8_t *buf, size_t len, s
 
 bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
 {
+    if (!ensureSynchronizationPrimitives()) return false;
     // Dừng worker cũ và chờ xác nhận thoát hoàn toàn trước khi đổi cấu hình
     if (!stop(2000))
     {
@@ -176,10 +207,6 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
         return false;
     }
 
-    if (_config_mutex == nullptr)
-    {
-        _config_mutex = xSemaphoreCreateMutex();
-    }
     if (xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
         _profile = profile;
@@ -199,13 +226,8 @@ bool NetworkCameraService::configure(const NetworkCameraProfile &profile)
     // Bảo mật: Tuyệt đối không log username/password dạng plaintext ra Serial
     uint16_t h_port = _profile.http_port > 0 ? _profile.http_port : 80;
     uint16_t r_port = _profile.rtsp_port > 0 ? _profile.rtsp_port : 554;
-    Serial.printf("[NET_CAM] Cấu hình IP Camera: [%s] Hãng: %s IP: %s (HTTP:%u, RTSP:%u, ONVIF:%u) Ch:%u [Credentials Protected]\n",
+    Serial.printf("[NET_CAM] Cấu hình IP Camera: [%s] Hãng: %s IP: %s (HTTP:%u, RTSP:%u, ONVIF:%u) Ch:%u [Mật khẩu chỉ giữ trong RAM; ưu tiên HTTPS]\n",
                   _profile.name, getVendorName(_profile.vendor), _profile.ip, h_port, r_port, _profile.onvif_port, _profile.channel);
-
-    if (_frame_mutex == nullptr)
-    {
-        _frame_mutex = xSemaphoreCreateMutex();
-    }
 
     // Cập nhật trạng thái tính năng theo protocol được chọn
     switch (_profile.protocol)
@@ -236,29 +258,37 @@ CameraRuntimeState NetworkCameraService::getRuntimeState() const
     return _runtime_state;
 }
 
+CameraTransportSecurity NetworkCameraService::getTransportSecurity() const
+{
+    return _transport_security;
+}
+
 bool NetworkCameraService::saveProfileToNVS()
 {
     Preferences prefs;
     if (!prefs.begin("netcam", false)) return false;
 
     NetworkCameraProfile prof = getActiveProfile();
-    prefs.putString("name", prof.name);
-    prefs.putString("ip", prof.ip);
-    prefs.putUShort("http_port", prof.http_port);
-    prefs.putUShort("rtsp_port", prof.rtsp_port);
-    prefs.putUShort("onvif_port", prof.onvif_port);
-    prefs.putUChar("vendor", (uint8_t)prof.vendor);
-    prefs.putUChar("proto", (uint8_t)prof.protocol);
-    prefs.putUChar("ch", prof.channel);
-    prefs.putString("user", prof.username);
+    bool saved = true;
+    saved = (prefs.putString("name", prof.name) > 0) && saved;
+    saved = (prefs.putString("ip", prof.ip) > 0) && saved;
+    saved = (prefs.putUShort("http_port", prof.http_port) > 0) && saved;
+    saved = (prefs.putUShort("rtsp_port", prof.rtsp_port) > 0) && saved;
+    saved = (prefs.putUShort("onvif_port", prof.onvif_port) > 0) && saved;
+    saved = (prefs.putUChar("vendor", (uint8_t)prof.vendor) > 0) && saved;
+    saved = (prefs.putUChar("proto", (uint8_t)prof.protocol) > 0) && saved;
+    saved = (prefs.putUChar("ch", prof.channel) > 0) && saved;
+    saved = (prefs.putString("user", prof.username) > 0) && saved;
     // Lưu ý bảo mật: Mật khẩu không bao giờ được lưu plaintext vào Flash
     prefs.end();
-    Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS Flash (Credentials protected).");
-    return true;
+    if (saved) Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS (mật khẩu không được lưu).");
+    else Serial.println("[NET_CAM] ❌ Không thể lưu đầy đủ cấu hình Camera vào NVS.");
+    return saved;
 }
 
 bool NetworkCameraService::loadProfileFromNVS()
 {
+    if (!ensureSynchronizationPrimitives()) return false;
     Preferences prefs;
     if (!prefs.begin("netcam", true)) return false;
 
@@ -287,10 +317,6 @@ bool NetworkCameraService::loadProfileFromNVS()
 
     prefs.end();
 
-    if (_config_mutex == nullptr)
-    {
-        _config_mutex = xSemaphoreCreateMutex();
-    }
     if (xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
         _profile = prof;
@@ -450,6 +476,7 @@ void NetworkCameraService::workerTask()
 
 bool NetworkCameraService::start()
 {
+    if (!ensureSynchronizationPrimitives()) return false;
     NetworkCameraProfile request_profile = getActiveProfile();
     if (!_configured)
     {
@@ -474,6 +501,12 @@ bool NetworkCameraService::start()
         if (_worker_exit_sem == nullptr)
         {
             _worker_exit_sem = xSemaphoreCreateBinary();
+        }
+        if (!_worker_exit_sem)
+        {
+            _runtime_state = CAM_STATE_ERROR;
+            Serial.println("[NET_CAM] ❌ Chế độ suy giảm: không tạo được semaphore worker");
+            return false;
         }
         xSemaphoreTake(_worker_exit_sem, 0); // Xóa token cũ nếu có
 
@@ -683,6 +716,13 @@ void NetworkCameraService::buildSnapshotUrl(char *out_url, size_t max_len) const
 {
     if (!out_url || max_len == 0) return;
 
+    if (_profile.custom_url[0] != '\0')
+    {
+        strncpy(out_url, _profile.custom_url, max_len - 1);
+        out_url[max_len - 1] = '\0';
+        return;
+    }
+
     if (strlen(_onvif_snapshot_url) > 0)
     {
         strncpy(out_url, _onvif_snapshot_url, max_len - 1);
@@ -691,26 +731,27 @@ void NetworkCameraService::buildSnapshotUrl(char *out_url, size_t max_len) const
     }
 
     uint8_t ch = _profile.channel > 0 ? _profile.channel : 1;
-    uint16_t http_port = _profile.http_port > 0 ? _profile.http_port : 80;
+    uint16_t configured_port = _profile.http_port > 0 ? _profile.http_port : 80;
+    uint16_t https_port = configured_port == 80 ? 443 : configured_port;
 
     switch (_profile.vendor)
     {
         case CAM_VENDOR_HIKVISION:
-            snprintf(out_url, max_len, "http://%s:%u/ISAPI/Streaming/channels/%u01/picture",
-                     _profile.ip, http_port, ch);
+            snprintf(out_url, max_len, "https://%s:%u/ISAPI/Streaming/channels/%u01/picture",
+                     _profile.ip, https_port, ch);
             break;
 
         case CAM_VENDOR_KBVISION:
-            snprintf(out_url, max_len, "http://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
-                     _profile.ip, http_port, ch);
+            snprintf(out_url, max_len, "https://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
+                     _profile.ip, https_port, ch);
             break;
 
         case CAM_VENDOR_EZVIZ:
         case CAM_VENDOR_YOOSEE:
         case CAM_VENDOR_GENERIC_ONVIF:
         default:
-            snprintf(out_url, max_len, "http://%s:%u/onvif/snapshot",
-                     _profile.ip, http_port);
+            snprintf(out_url, max_len, "https://%s:%u/onvif/snapshot",
+                     _profile.ip, https_port);
             break;
     }
 }
@@ -720,15 +761,22 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
     if (!_configured || !wifi_manager_is_connected()) return false;
 
     const NetworkCameraProfile request_profile = getActiveProfile();
-    uint16_t onvif_port = request_profile.onvif_port > 0 ? request_profile.onvif_port : 80;
+    uint16_t configured_port = request_profile.onvif_port > 0 ? request_profile.onvif_port : 80;
+    uint16_t https_port = configured_port == 80 ? 443 : configured_port;
     char probe_url[128];
-    snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service", request_profile.ip, onvif_port);
+    snprintf(probe_url, sizeof(probe_url), "https://%s:%u/onvif/device_service", request_profile.ip, https_port);
 
     HTTPClient http;
-    WiFiClient client;
-    http.begin(client, probe_url);
+    WiFiClient plain_client;
+    WiFiClientSecure secure_client;
+    secure_client.setInsecure();
+    if (!http.begin(secure_client, probe_url)) return false;
     http.setTimeout(1500);
     http.addHeader("Content-Type", "application/soap+xml; charset=utf-8");
+    if (strlen(request_profile.username) > 0)
+    {
+        http.setAuthorization(request_profile.username, request_profile.password);
+    }
 
     const char *soap_req =
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
@@ -737,6 +785,27 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
         "</s:Envelope>";
 
     int httpCode = http.POST(soap_req);
+    if (httpCode <= 0)
+    {
+        http.end();
+        snprintf(probe_url, sizeof(probe_url), "http://%s:%u/onvif/device_service",
+                 request_profile.ip, configured_port);
+        setTransportSecurity(CAM_TRANSPORT_HTTP_PLAINTEXT);
+        if (http.begin(plain_client, probe_url))
+        {
+            http.setTimeout(1500);
+            http.addHeader("Content-Type", "application/soap+xml; charset=utf-8");
+            if (strlen(request_profile.username) > 0)
+            {
+                http.setAuthorization(request_profile.username, request_profile.password);
+            }
+            httpCode = http.POST(soap_req);
+        }
+    }
+    else
+    {
+        setTransportSecurity(CAM_TRANSPORT_HTTPS_UNVERIFIED);
+    }
     if (httpCode == 200)
     {
         _onvif_status = CAM_STATUS_PARTIAL_FALLBACK;
@@ -788,6 +857,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
     if (!_configured || !out_buf || current_cap == 0) return -1;
 
     char url[256];
+    char fallback_url[256] = {0};
     if (request_profile.custom_url[0] != '\0')
     {
         strncpy(url, request_profile.custom_url, sizeof(url) - 1);
@@ -796,35 +866,72 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
     else
     {
         uint8_t channel = request_profile.channel > 0 ? request_profile.channel : 1;
-        uint16_t port = request_profile.http_port > 0 ? request_profile.http_port : 80;
+        uint16_t configured_port = request_profile.http_port > 0 ? request_profile.http_port : 80;
+        uint16_t https_port = configured_port == 80 ? 443 : configured_port;
         switch (request_profile.vendor)
         {
             case CAM_VENDOR_HIKVISION:
-                snprintf(url, sizeof(url), "http://%s:%u/ISAPI/Streaming/channels/%u01/picture",
-                         request_profile.ip, port, channel);
+                snprintf(url, sizeof(url), "https://%s:%u/ISAPI/Streaming/channels/%u01/picture",
+                         request_profile.ip, https_port, channel);
+                snprintf(fallback_url, sizeof(fallback_url), "http://%s:%u/ISAPI/Streaming/channels/%u01/picture",
+                         request_profile.ip, configured_port, channel);
                 break;
             case CAM_VENDOR_KBVISION:
-                snprintf(url, sizeof(url), "http://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
-                         request_profile.ip, port, channel);
+                snprintf(url, sizeof(url), "https://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
+                         request_profile.ip, https_port, channel);
+                snprintf(fallback_url, sizeof(fallback_url), "http://%s:%u/cgi-bin/snapshot.cgi?channel=%u",
+                         request_profile.ip, configured_port, channel);
                 break;
             default:
-                snprintf(url, sizeof(url), "http://%s:%u/onvif/snapshot", request_profile.ip, port);
+                snprintf(url, sizeof(url), "https://%s:%u/onvif/snapshot", request_profile.ip, https_port);
+                snprintf(fallback_url, sizeof(fallback_url), "http://%s:%u/onvif/snapshot",
+                         request_profile.ip, configured_port);
                 break;
         }
     }
 
     HTTPClient http;
-    WiFiClient client;
-
+    WiFiClient plain_client;
+    WiFiClientSecure secure_client;
+    bool using_https = strncmp(url, "https://", 8) == 0;
+    bool using_http = strncmp(url, "http://", 7) == 0;
+    bool began = false;
+    if (using_https)
+    {
+        secure_client.setInsecure();
+        began = http.begin(secure_client, url);
+        setTransportSecurity(CAM_TRANSPORT_HTTPS_UNVERIFIED);
+    }
+    else if (using_http)
+    {
+        began = http.begin(plain_client, url);
+        setTransportSecurity(CAM_TRANSPORT_HTTP_PLAINTEXT);
+    }
+    if (!began)
+    {
+        Serial.println("[NET_CAM] ❌ Không thể khởi tạo HTTP client cho snapshot");
+        return -1;
+    }
+    const uint32_t request_timeout_ms = 1500;
+    http.setTimeout(request_timeout_ms);
     if (strlen(request_profile.username) > 0)
     {
         http.setAuthorization(request_profile.username, request_profile.password);
     }
-    http.begin(client, url);
-    const uint32_t request_timeout_ms = 1500;
-    http.setTimeout(request_timeout_ms);
 
     int httpCode = http.GET();
+    if (using_https && httpCode <= 0 && fallback_url[0] != '\0')
+    {
+        http.end();
+        setTransportSecurity(CAM_TRANSPORT_HTTP_PLAINTEXT);
+        if (!http.begin(plain_client, fallback_url)) return -1;
+        http.setTimeout(request_timeout_ms);
+        if (strlen(request_profile.username) > 0)
+        {
+            http.setAuthorization(request_profile.username, request_profile.password);
+        }
+        httpCode = http.GET();
+    }
     int bytesRead = -1;
 
     if (httpCode == HTTP_CODE_OK)

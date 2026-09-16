@@ -201,11 +201,11 @@ void map_app_render(void)
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
             }
         }
-        else if (st == TILE_ERROR)
+        else if (st == TILE_ERROR || st == TILE_DEGRADED)
         {
             if (hud_lbl_source)
             {
-                lv_label_set_text(hud_lbl_source, "[!] Lỗi nạp -> Vector");
+                lv_label_set_text(hud_lbl_source, st == TILE_DEGRADED ? "[!] Degraded -> Vector" : "[!] Lỗi nạp -> Vector");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
             }
             render_offline_vector_map();
@@ -242,8 +242,20 @@ void map_app_render(void)
     }
 }
 
-static void trigger_map_reload(void)
+static bool trigger_map_reload(void)
 {
+    if (!map_tile_downloader_request(cur_lat, cur_lon, cur_zoom, cur_maptype))
+    {
+        if (hud_lbl_source)
+        {
+            lv_label_set_text(hud_lbl_source, "[!] Queue unavailable");
+            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
+        }
+        render_offline_vector_map();
+        draw_map_overlays();
+        return false;
+    }
+
     if (hud_lbl_source)
     {
         // Kiểm tra nhanh trước trên thẻ nhớ SD để cập nhật nhãn tức thì
@@ -264,8 +276,8 @@ static void trigger_map_reload(void)
         }
     }
 
-    map_tile_downloader_request(cur_lat, cur_lon, cur_zoom, cur_maptype);
     map_app_render();
+    return true;
 }
 
 void map_app_zoom_in(void)
@@ -273,7 +285,7 @@ void map_app_zoom_in(void)
     if (cur_zoom < 20)
     {
         cur_zoom++;
-        trigger_map_reload();
+        if (!trigger_map_reload()) cur_zoom--;
     }
 }
 
@@ -282,7 +294,7 @@ void map_app_zoom_out(void)
     if (cur_zoom > 5)
     {
         cur_zoom--;
-        trigger_map_reload();
+        if (!trigger_map_reload()) cur_zoom++;
     }
 }
 
@@ -291,6 +303,8 @@ void map_app_pan_direction(uint8_t dir)
     // Bước dịch chuyển thích ứng theo mức Zoom
     double step = 0.006 / (1 << (cur_zoom > 12 ? (cur_zoom - 12) : 1));
 
+    double old_lat = cur_lat;
+    double old_lon = cur_lon;
     switch (dir)
     {
         case 1: cur_lat += step; break; // Lên (Bắc)
@@ -298,11 +312,18 @@ void map_app_pan_direction(uint8_t dir)
         case 3: cur_lon -= step; break; // Trái (Tây)
         case 4: cur_lon += step; break; // Phải (Đông)
     }
-    trigger_map_reload();
+    if (!trigger_map_reload())
+    {
+        cur_lat = old_lat;
+        cur_lon = old_lon;
+    }
 }
 
 void map_app_toggle_map_type(void)
 {
+    char old_type[sizeof(cur_maptype)];
+    strncpy(old_type, cur_maptype, sizeof(old_type));
+    old_type[sizeof(old_type) - 1] = '\0';
     if (strcmp(cur_maptype, "roadmap") == 0)
     {
         strcpy(cur_maptype, "satellite");
@@ -311,7 +332,7 @@ void map_app_toggle_map_type(void)
     {
         strcpy(cur_maptype, "roadmap");
     }
-    trigger_map_reload();
+    if (!trigger_map_reload()) strcpy(cur_maptype, old_type);
 }
 
 const char* map_app_get_current_type(void)
@@ -336,11 +357,21 @@ static void btn_toggle_type_cb(lv_event_t *e)
 
 static void btn_next_city_cb(lv_event_t *e)
 {
+    int old_idx = cur_preset_idx;
+    double old_lat = cur_lat;
+    double old_lon = cur_lon;
+    int old_zoom = cur_zoom;
     cur_preset_idx = (cur_preset_idx + 1) % PRESET_COUNT;
     cur_lat = PRESETS[cur_preset_idx].lat;
     cur_lon = PRESETS[cur_preset_idx].lon;
     cur_zoom = PRESETS[cur_preset_idx].zoom;
-    trigger_map_reload();
+    if (!trigger_map_reload())
+    {
+        cur_preset_idx = old_idx;
+        cur_lat = old_lat;
+        cur_lon = old_lon;
+        cur_zoom = old_zoom;
+    }
 }
 
 void map_app_open(lv_obj_t *parent)

@@ -295,6 +295,8 @@ void audio_app_open(lv_obj_t *parent)
 
 void audio_app_close(void)
 {
+    audio_stop_recording();
+    audio_stop_playback();
     is_app_active = false;
     main_container = nullptr;
     bar_vu_meter = nullptr;

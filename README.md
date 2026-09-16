@@ -148,7 +148,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
    #define GEMINI_API_KEY              "AIzaSy..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
-4. **Bảo mật mật khẩu Camera IP**: Firmware tuyệt đối không lưu plaintext password vào NVS Flash. Sau mỗi lần khởi động lại thiết bị (Reboot), nếu profile có username nhưng password rỗng, hệ thống sẽ đưa camera vào trạng thái `PASSWORD_REQUIRED` và không tự động gửi request lặp vô hạn. Người dùng cần nhập lại mật khẩu trên UI để kích hoạt kết nối. Thông tin xác thực và URL camera được che chắn tự động (`***:***`) khi ghi log Serial Monitor.
+4. **Bảo mật mật khẩu Camera IP**: Firmware tuyệt đối không lưu plaintext password vào NVS Flash. Sau mỗi lần khởi động lại thiết bị (Reboot), nếu profile có username nhưng password rỗng, hệ thống sẽ đưa camera vào trạng thái `PASSWORD_REQUIRED` và không tự động gửi request lặp vô hạn. Người dùng cần nhập lại mật khẩu trên UI để kích hoạt kết nối. Thông tin xác thực và URL camera được che chắn tự động (`***:***`) khi ghi log Serial Monitor. Kết nối snapshot ưu tiên HTTPS; HTTPS chưa xác thực chứng chỉ và mọi fallback HTTP plaintext đều hiển thị cảnh báo rõ trên Serial/UI, không được xem là kênh tin cậy.
 
 ---
 

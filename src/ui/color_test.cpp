@@ -8,16 +8,15 @@ struct ColorBarInfo { const char *name; uint32_t hex; uint32_t text; };
 static const ColorBarInfo bars[] = {
     {"RED", 0xFF0000, 0xFFFFFF}, {"GREEN", 0x00FF00, 0x000000},
     {"BLUE", 0x0000FF, 0xFFFFFF}, {"WHITE", 0xFFFFFF, 0x000000},
-    {"BLACK", 0x000000, 0xFFFFFF}, {"CYAN", 0x00FFFF, 0x000000},
-    {"MAGENTA", 0xFF00FF, 0xFFFFFF}, {"YELLOW", 0xFFFF00, 0x000000}
+    {"BLACK", 0x000000, 0xFFFFFF}, {"GRAY 33", 0x555555, 0xFFFFFF},
+    {"GRAY 66", 0xAAAAAA, 0x000000}, {"GRAY 50", 0x808080, 0xFFFFFF}
 };
 static lv_obj_t *state_label = nullptr;
 
 static void refresh_state(void)
 {
     DisplayDiagnosticState state = lvgl_port_get_display_diagnostic();
-    lv_label_set_text_fmt(state_label, "RGB565 swap %s | %s | invert %s",
-                          state.swap_bytes ? "ON" : "OFF",
+    lv_label_set_text_fmt(state_label, "RGB565 native | %s | invert %s",
                           state.bgr_order ? "BGR" : "RGB",
                           state.inverted ? "ON" : "OFF");
 }
@@ -26,8 +25,7 @@ static void toggle_cb(lv_event_t *event)
 {
     uintptr_t field = (uintptr_t)lv_event_get_user_data(event);
     DisplayDiagnosticState state = lvgl_port_get_display_diagnostic();
-    if (field == 0) state.swap_bytes = !state.swap_bytes;
-    else if (field == 1) state.bgr_order = !state.bgr_order;
+    if (field == 0) state.bgr_order = !state.bgr_order;
     else state.inverted = !state.inverted;
     lvgl_port_set_display_diagnostic(state);
     refresh_state();
@@ -98,10 +96,14 @@ void ui_color_test_open(lv_obj_t *parent)
     lv_obj_set_pos(state_label, 4, 191);
     refresh_state();
 
-    make_button(parent, "Swap", 4, toggle_cb, 0);
-    make_button(parent, "RGB", 63, toggle_cb, 1);
-    make_button(parent, "Invert", 122, toggle_cb, 2);
-    lv_obj_t *apply = make_button(parent, "Apply", 181, apply_cb, 0);
-    lv_obj_set_size(apply, 55, 34);
+    make_button(parent, "RGB/BGR", 20, toggle_cb, 0);
+    make_button(parent, "Invert", 92, toggle_cb, 1);
+    lv_obj_t *apply = make_button(parent, "Apply", 164, apply_cb, 0);
+    lv_obj_set_size(apply, 56, 34);
     lv_obj_set_style_bg_color(apply, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+}
+
+void ui_color_test_close(void)
+{
+    state_label = nullptr;
 }

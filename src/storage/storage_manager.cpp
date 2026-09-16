@@ -45,6 +45,11 @@ bool storage_init(void)
     {
         s_storage_mutex = xSemaphoreCreateMutex();
     }
+    if (!s_storage_mutex)
+    {
+        Serial.println("[STORAGE] ❌ Chế độ suy giảm: không tạo được mutex lưu trữ");
+        return false;
+    }
 
 #if (BOARD_SD_INTERFACE == SD_IF_SPI)
     // --- KHỞI TẠO CHẾ ĐỘ SPI (DIYMORE 3.5" / DÙNG CHUNG FSPI) ---

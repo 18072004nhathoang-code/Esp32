@@ -410,6 +410,7 @@ void music_app_open(lv_obj_t *parent)
 /* Đóng và giải phóng tài nguyên ứng dụng Music Player */
 void music_app_close(void)
 {
+    music_player_stop();
     if (vinyl_anim_running)
     {
         lv_anim_del(vinyl_disc, anim_vinyl_rotate_cb);
@@ -429,6 +430,7 @@ void music_app_close(void)
     lbl_play_icon = nullptr;
     slider_volume = nullptr;
     lbl_vol_val = nullptr;
+    is_user_dragging_slider = false;
 }
 
 /* Cập nhật định kỳ giao diện */

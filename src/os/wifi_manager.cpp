@@ -190,13 +190,19 @@ static void wifi_service_task(void *pvParameters)
     }
 }
 
-void wifi_manager_init(void)
+bool wifi_manager_init(void)
 {
     if (!wifi_mutex) wifi_mutex = xSemaphoreCreateMutex();
     if (!prefs_mutex) prefs_mutex = xSemaphoreCreateMutex();
+    if (!wifi_mutex || !prefs_mutex)
+    {
+        current_state = WIFI_STATE_FAILED;
+        log_e("WiFi degraded: không tạo được mutex");
+        return false;
+    }
 
     // Khởi tạo Task FreeRTOS ghim cố định trên Core 0
-    xTaskCreatePinnedToCore(
+    BaseType_t created = xTaskCreatePinnedToCore(
         wifi_service_task,
         "WiFi_Task",
         4 * 1024,
@@ -205,6 +211,14 @@ void wifi_manager_init(void)
         &wifi_task_handle,
         0 // Core 0
     );
+    if (created != pdPASS)
+    {
+        wifi_task_handle = nullptr;
+        current_state = WIFI_STATE_FAILED;
+        log_e("WiFi degraded: không tạo được service task");
+        return false;
+    }
+    return true;
 }
 
 void wifi_manager_scan_async(void)

@@ -15,6 +15,8 @@ static bool s_touch_detected = false;
 static bool s_codec_detected = false;
 static TouchCalibration s_calibration = {};
 static portMUX_TYPE s_touch_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_touch_ui_suppressed = false;
+static uint32_t s_touch_sample_sequence = 0;
 
 // Đăng ký thanh ghi FT6336G
 #define FT6336_REG_TD_STATUS    0x02
@@ -61,6 +63,11 @@ bool shared_i2c_init(void)
     if (s_i2c_mutex == nullptr)
     {
         s_i2c_mutex = xSemaphoreCreateMutex();
+    }
+    if (!s_i2c_mutex)
+    {
+        Serial.println("[I2C] ❌ Chế độ suy giảm: không tạo được mutex bus");
+        return false;
     }
 
     if (!shared_i2c_lock(200))
@@ -128,7 +135,7 @@ bool shared_i2c_lock(uint32_t timeout_ms)
     {
         s_i2c_mutex = xSemaphoreCreateMutex();
     }
-    return (xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
+    return s_i2c_mutex && (xSemaphoreTake(s_i2c_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
 }
 
 void shared_i2c_unlock(void)
@@ -241,16 +248,34 @@ static void mark_touch_released(void)
     portEXIT_CRITICAL(&s_touch_state_mux);
 }
 
-bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y, uint16_t *mapped_x, uint16_t *mapped_y)
+bool shared_i2c_touch_read_debug(uint16_t *raw_x, uint16_t *raw_y,
+                                 uint16_t *mapped_x, uint16_t *mapped_y,
+                                 uint32_t *sample_sequence)
 {
     portENTER_CRITICAL(&s_touch_state_mux);
     if (raw_x) *raw_x = s_last_raw_x;
     if (raw_y) *raw_y = s_last_raw_y;
     if (mapped_x) *mapped_x = s_last_mapped_x;
     if (mapped_y) *mapped_y = s_last_mapped_y;
+    if (sample_sequence) *sample_sequence = s_touch_sample_sequence;
     bool touched = s_is_touched;
     portEXIT_CRITICAL(&s_touch_state_mux);
     return touched;
+}
+
+void shared_i2c_touch_set_ui_suppressed(bool suppressed)
+{
+    portENTER_CRITICAL(&s_touch_state_mux);
+    s_touch_ui_suppressed = suppressed;
+    portEXIT_CRITICAL(&s_touch_state_mux);
+}
+
+bool shared_i2c_touch_is_ui_suppressed(void)
+{
+    portENTER_CRITICAL(&s_touch_state_mux);
+    bool suppressed = s_touch_ui_suppressed;
+    portEXIT_CRITICAL(&s_touch_state_mux);
+    return suppressed;
 }
 
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
@@ -292,7 +317,7 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
     shared_i2c_unlock();
 
     uint8_t touches = buf[0] & 0x0F;
-    if (touches == 0 || touches > 2)
+    if (touches != 1)
     {
         mark_touch_released();
         return false;
@@ -313,10 +338,14 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
 
     int32_t mapped_x = 0;
     int32_t mapped_y = 0;
-    if (calibration_metadata_matches(calibration))
+    float affine_x = 0.0f;
+    float affine_y = 0.0f;
+    if (shared_i2c_touch_map_raw(&calibration, raw_x, raw_y, &affine_x, &affine_y))
     {
-        mapped_x = (int32_t)lroundf(calibration.a * raw_x + calibration.b * raw_y + calibration.c);
-        mapped_y = (int32_t)lroundf(calibration.d * raw_x + calibration.e * raw_y + calibration.f);
+        // The affine transform already targets logical screen coordinates.
+        // Never rotate calibrated coordinates a second time.
+        mapped_x = (int32_t)lroundf(affine_x);
+        mapped_y = (int32_t)lroundf(affine_y);
     }
     else
     {
@@ -370,6 +399,7 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
     s_last_raw_y = raw_y;
     s_last_mapped_x = (uint16_t)mapped_x;
     s_last_mapped_y = (uint16_t)mapped_y;
+    ++s_touch_sample_sequence;
     s_is_touched = true;
     portEXIT_CRITICAL(&s_touch_state_mux);
 
@@ -401,10 +431,11 @@ static bool solve_3x3(float m[3][4], float out[3])
     return true;
 }
 
-bool shared_i2c_touch_calibrate(const TouchCalibrationPoint *points, size_t count,
-                                float *rms_error, float *max_error)
+bool shared_i2c_touch_solve(const TouchCalibrationPoint *points, size_t count,
+                            TouchCalibration *candidate,
+                            float *fit_rms_error, float *fit_max_error)
 {
-    if (!points || count < TOUCH_CALIBRATION_POINT_COUNT) return false;
+    if (!points || !candidate || count < TOUCH_CALIBRATION_POINT_COUNT) return false;
     float ata[3][3] = {};
     float atx[3] = {};
     float aty[3] = {};
@@ -438,8 +469,8 @@ bool shared_i2c_touch_calibrate(const TouchCalibrationPoint *points, size_t coun
         if (err > worst) worst = err;
     }
     float rms = sqrtf(sum_sq / count);
-    if (rms_error) *rms_error = rms;
-    if (max_error) *max_error = worst;
+    if (fit_rms_error) *fit_rms_error = rms;
+    if (fit_max_error) *fit_max_error = worst;
     if (rms > 8.0f || worst > 12.0f) return false;
 
     TouchCalibration result = {};
@@ -452,8 +483,37 @@ bool shared_i2c_touch_calibrate(const TouchCalibrationPoint *points, size_t coun
     result.panel_height = BOARD_LCD_PANEL_HEIGHT;
     result.a = cx[0]; result.b = cx[1]; result.c = cx[2];
     result.d = cy[0]; result.e = cy[1]; result.f = cy[2];
-    result.rms_error = rms;
-    result.max_error = worst;
+    result.rms_error = 0.0f;
+    result.max_error = 0.0f;
+
+    *candidate = result;
+    return true;
+}
+
+bool shared_i2c_touch_map_raw(const TouchCalibration *calibration,
+                              uint16_t raw_x, uint16_t raw_y,
+                              float *screen_x, float *screen_y)
+{
+    if (!calibration || !screen_x || !screen_y || !calibration_metadata_matches(*calibration)) return false;
+    *screen_x = calibration->a * raw_x + calibration->b * raw_y + calibration->c;
+    *screen_y = calibration->d * raw_x + calibration->e * raw_y + calibration->f;
+    return isfinite(*screen_x) && isfinite(*screen_y);
+}
+
+bool shared_i2c_touch_commit_calibration(const TouchCalibration *candidate,
+                                         float validation_rms_error,
+                                         float validation_max_error)
+{
+    if (!candidate || !calibration_metadata_matches(*candidate) ||
+        !isfinite(validation_rms_error) || !isfinite(validation_max_error) ||
+        validation_rms_error > 8.0f || validation_max_error > 12.0f)
+    {
+        return false;
+    }
+
+    TouchCalibration result = *candidate;
+    result.rms_error = validation_rms_error;
+    result.max_error = validation_max_error;
 
     Preferences prefs;
     bool persisted = false;

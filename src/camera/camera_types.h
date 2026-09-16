@@ -94,6 +94,14 @@ enum CameraRuntimeState
     CAM_STATE_STOPPED
 };
 
+enum CameraTransportSecurity
+{
+    CAM_TRANSPORT_NONE = 0,
+    CAM_TRANSPORT_HTTP_PLAINTEXT,
+    CAM_TRANSPORT_HTTPS_UNVERIFIED,
+    CAM_TRANSPORT_HTTPS_VERIFIED
+};
+
 inline const char* camera_runtime_state_to_string(CameraRuntimeState st)
 {
     switch (st)

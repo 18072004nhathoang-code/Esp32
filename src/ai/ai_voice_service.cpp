@@ -93,7 +93,13 @@ bool ai_voice_init(void)
 {
     Serial.println("[AI_VOICE] Đang khởi tạo AI Voice Assistant Service (Demo/Mock)...");
 
-    ai_mutex = xSemaphoreCreateMutex();
+    if (!ai_mutex) ai_mutex = xSemaphoreCreateMutex();
+    if (!ai_mutex)
+    {
+        current_state = AI_STATE_ERROR;
+        Serial.println("[AI_VOICE] ❌ Chế độ suy giảm: không tạo được mutex");
+        return false;
+    }
 
     // Thêm tin nhắn chào mừng mặc định ban đầu
     ai_voice_clear_history();

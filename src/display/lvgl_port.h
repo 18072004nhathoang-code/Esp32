@@ -71,7 +71,6 @@ const char* display_orientation_name(uint8_t rotation);
 
 typedef struct
 {
-    bool swap_bytes;
     bool bgr_order;
     bool inverted;
 } DisplayDiagnosticState;
@@ -79,3 +78,4 @@ typedef struct
 DisplayDiagnosticState lvgl_port_get_display_diagnostic(void);
 void lvgl_port_set_display_diagnostic(DisplayDiagnosticState state);
 bool lvgl_port_apply_display_diagnostic(void);
+const char* lvgl_port_get_color_config_source(void);

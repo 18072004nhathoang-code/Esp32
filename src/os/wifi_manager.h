@@ -38,7 +38,7 @@ struct WiFiNetworkInfo {
 /**
  * @brief Khởi tạo hệ thống WiFi, đọc thông tin mạng đã lưu trong NVS Flash
  */
-void wifi_manager_init(void);
+bool wifi_manager_init(void);
 
 /**
  * @brief Bắt đầu quét mạng WiFi xung quanh (bất đồng bộ)

@@ -164,7 +164,12 @@ const char* camera_service_get_status_text(void)
     switch (st)
     {
         case CAM_STATE_CONNECTING:        return "CONNECTING";
-        case CAM_STATE_CONNECTED:         return "CONNECTED";
+        case CAM_STATE_CONNECTED:
+            if (g_network_camera.getTransportSecurity() == CAM_TRANSPORT_HTTP_PLAINTEXT)
+                return "WARNING: HTTP PLAINTEXT";
+            if (g_network_camera.getTransportSecurity() == CAM_TRANSPORT_HTTPS_UNVERIFIED)
+                return "HTTPS: CERT UNVERIFIED";
+            return "CONNECTED";
         case CAM_STATE_PASSWORD_REQUIRED: return "PASSWORD_REQUIRED";
         case CAM_STATE_ERROR:             return "ERROR";
         case CAM_STATE_STOPPED:           return "STOPPED";

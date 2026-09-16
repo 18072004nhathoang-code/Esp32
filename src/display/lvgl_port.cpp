@@ -7,6 +7,7 @@
 #include "spi_bus_guard.h"
 #include "../os/power_manager.h"
 #include "../ui/fonts/ui_fonts.h"
+#include "../ui/ui_theme.h"
 #include "shared_i2c_bus.h"
 #include <esp_heap_caps.h>
 #include <Preferences.h>
@@ -30,8 +31,24 @@ static lv_indev_drv_t indev_drv;
 static TaskHandle_t lvgl_task_handle = nullptr;
 static uint8_t current_brightness = 85; // Mặc định 85%
 static DisplayDiagnosticState display_diagnostic = {
-    BOARD_LCD_SWAP_BYTES, BOARD_LCD_RGB_ORDER, BOARD_LCD_INVERT
+    BOARD_LCD_RGB_ORDER, BOARD_LCD_INVERT
 };
+static const char *display_color_config_source = "BOARD_PROFILE";
+
+static_assert(LV_COLOR_DEPTH == 16, "LVGL flush requires RGB565");
+static_assert(LV_COLOR_16_SWAP == 0, "LVGL RGB565 must use native byte order");
+static_assert(sizeof(lv_color_t) == sizeof(lgfx::rgb565_t), "LVGL/LovyanGFX RGB565 size mismatch");
+static_assert(alignof(lv_color_t) >= alignof(lgfx::rgb565_t), "LVGL/LovyanGFX RGB565 alignment mismatch");
+
+static uint16_t swap_red_blue_565(uint16_t pixel)
+{
+    return (uint16_t)((pixel & 0x07E0U) | ((pixel & 0x001FU) << 11) | ((pixel & 0xF800U) >> 11));
+}
+
+static bool software_red_blue_swap_required(void)
+{
+    return display_diagnostic.bgr_order != (BOARD_LCD_RGB_ORDER != 0);
+}
 
 /* Callback đẩy dữ liệu pixel từ LVGL sang màn hình bằng DMA qua LovyanGFX */
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
@@ -45,22 +62,24 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
         gfx.startWrite();
         gfx.setAddrWindow(area->x1, area->y1, w, h);
         uint32_t pixel_count = w * h;
-        if (display_diagnostic.bgr_order)
+        const bool swap_red_blue = software_red_blue_swap_required();
+        if (swap_red_blue)
         {
             for (uint32_t i = 0; i < pixel_count; ++i)
             {
                 uint16_t p = color_p[i].full;
-                color_p[i].full = (uint16_t)((p & 0x07E0U) | ((p & 0x001FU) << 11) | ((p & 0xF800U) >> 11));
+                color_p[i].full = swap_red_blue_565(p);
             }
         }
-        gfx.writePixelsDMA((uint16_t *)color_p, pixel_count, display_diagnostic.swap_bytes);
+        const lgfx::rgb565_t *pixels = reinterpret_cast<const lgfx::rgb565_t *>(color_p);
+        gfx.writePixelsDMA(pixels, pixel_count);
         gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi nhả SPI bus
-        if (display_diagnostic.bgr_order)
+        if (swap_red_blue)
         {
             for (uint32_t i = 0; i < pixel_count; ++i)
             {
                 uint16_t p = color_p[i].full;
-                color_p[i].full = (uint16_t)((p & 0x07E0U) | ((p & 0x001FU) << 11) | ((p & 0xF800U) >> 11));
+                color_p[i].full = swap_red_blue_565(p);
             }
         }
         gfx.endWrite();
@@ -85,6 +104,11 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 
     if (touched)
     {
+        if (shared_i2c_touch_is_ui_suppressed())
+        {
+            data->state = LV_INDEV_STATE_REL;
+            return;
+        }
         // 1. Nếu màn hình đang ở trạng thái mờ (Dimmed 20%) hoặc ngủ (Sleep 0%)
         if (power_manager_get_state() != POWER_STATE_ACTIVE)
         {
@@ -115,6 +139,70 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
         power_manager_clear_touch_suppression();
         data->state = LV_INDEV_STATE_REL;
     }
+}
+
+static uint32_t diagnostic_color(uint8_t red, uint8_t green, uint8_t blue)
+{
+    if (software_red_blue_swap_required())
+    {
+        uint8_t tmp = red;
+        red = blue;
+        blue = tmp;
+    }
+    return ((uint32_t)red << 16) | ((uint32_t)green << 8) | blue;
+}
+
+static void run_lovyangfx_color_test(void)
+{
+    static const uint8_t levels[] = {0, 51, 102, 153, 204, 255};
+    const int16_t band_h = gfx.height() / 4;
+    gfx.startWrite();
+    gfx.fillRect(0, 0, gfx.width() / 3, band_h, diagnostic_color(255, 0, 0));
+    gfx.fillRect(gfx.width() / 3, 0, gfx.width() / 3, band_h, diagnostic_color(0, 255, 0));
+    gfx.fillRect((gfx.width() / 3) * 2, 0, gfx.width() - (gfx.width() / 3) * 2, band_h,
+                 diagnostic_color(0, 0, 255));
+    gfx.fillRect(0, band_h, gfx.width() / 2, band_h, diagnostic_color(0, 0, 0));
+    gfx.fillRect(gfx.width() / 2, band_h, gfx.width() - gfx.width() / 2, band_h,
+                 diagnostic_color(255, 255, 255));
+    const int16_t gray_w = gfx.width() / (int16_t)(sizeof(levels) / sizeof(levels[0]));
+    for (size_t i = 0; i < sizeof(levels) / sizeof(levels[0]); ++i)
+    {
+        gfx.fillRect((int16_t)i * gray_w, band_h * 2,
+                     i + 1 == sizeof(levels) / sizeof(levels[0]) ? gfx.width() - (int16_t)i * gray_w : gray_w,
+                     gfx.height() - band_h * 2,
+                     diagnostic_color(levels[i], levels[i], levels[i]));
+    }
+    gfx.endWrite();
+    Serial.println("[DISPLAY_TEST] LovyanGFX direct: BLACK/WHITE RGB grayscale rendered");
+    delay(250);
+}
+
+static void run_lvgl_color_test(lv_disp_t *display)
+{
+    static const uint32_t colors[] = {
+        0xFF0000, 0x00FF00, 0x0000FF, 0x000000, 0xFFFFFF,
+        0x333333, 0x666666, 0x999999, 0xCCCCCC
+    };
+    lv_obj_t *screen = lv_obj_create(nullptr);
+    lv_obj_set_style_pad_all(screen, 0, 0);
+    lv_obj_set_style_border_width(screen, 0, 0);
+    const lv_coord_t cell_w = DISP_HOR_RES / 3;
+    const lv_coord_t cell_h = DISP_VER_RES / 3;
+    for (size_t i = 0; i < sizeof(colors) / sizeof(colors[0]); ++i)
+    {
+        lv_obj_t *cell = lv_obj_create(screen);
+        lv_obj_set_size(cell, i % 3 == 2 ? DISP_HOR_RES - cell_w * 2 : cell_w,
+                        i / 3 == 2 ? DISP_VER_RES - cell_h * 2 : cell_h);
+        lv_obj_set_pos(cell, (i % 3) * cell_w, (i / 3) * cell_h);
+        lv_obj_set_style_bg_color(cell, lv_color_hex(colors[i]), 0);
+        lv_obj_set_style_border_width(cell, 0, 0);
+        lv_obj_set_style_radius(cell, 0, 0);
+    }
+    lv_scr_load(screen);
+    lv_refr_now(display);
+    Serial.println("[DISPLAY_TEST] LVGL flush: BLACK/WHITE RGB grayscale rendered");
+    delay(250);
+    lv_obj_clean(screen);
 }
 
 /* FreeRTOS Task chuyên trách render LVGL trên Core 1 */
@@ -181,7 +269,11 @@ const char* display_orientation_name(uint8_t rotation)
 
 bool lvgl_port_init(void)
 {
-    spi_bus_guard_init();
+    if (!spi_bus_guard_init())
+    {
+        log_e("Không tạo được SPI bus guard!");
+        return false;
+    }
 
     log_i("Khởi tạo phần cứng LovyanGFX...");
     if (!gfx.init())
@@ -200,12 +292,17 @@ bool lvgl_port_init(void)
     Preferences display_prefs;
     if (display_prefs.begin("display_diag", true))
     {
-        display_diagnostic.swap_bytes = display_prefs.getBool("swap", BOARD_LCD_SWAP_BYTES);
-        display_diagnostic.bgr_order = display_prefs.getBool("bgr", BOARD_LCD_RGB_ORDER);
-        display_diagnostic.inverted = display_prefs.getBool("invert", BOARD_LCD_INVERT);
+        const bool has_bgr = display_prefs.isKey("bgr");
+        const bool has_invert = display_prefs.isKey("invert");
+        display_diagnostic.bgr_order = has_bgr ? display_prefs.getBool("bgr", BOARD_LCD_RGB_ORDER)
+                                               : BOARD_LCD_RGB_ORDER;
+        display_diagnostic.inverted = has_invert ? display_prefs.getBool("invert", BOARD_LCD_INVERT)
+                                                  : BOARD_LCD_INVERT;
+        if (has_bgr || has_invert) display_color_config_source = "NVS_BGR_INVERT";
         display_prefs.end();
     }
     gfx.invertDisplay(display_diagnostic.inverted);
+    run_lovyangfx_color_test();
     log_i("Display: %dx%d, Rotation: %d, Orientation: %s", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     Serial.printf("Display: %dx%d\nRotation: %d\nOrientation: %s\n", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     
@@ -267,6 +364,8 @@ bool lvgl_port_init(void)
                                                UI_FONT_BODY);
     lv_disp_set_theme(display, theme);
 
+    run_lvgl_color_test(display);
+
     // Cấu hình Touch Input Driver
     lv_indev_drv_init(&indev_drv);
     indev_drv.type = LV_INDEV_TYPE_POINTER;
@@ -325,9 +424,15 @@ bool lvgl_port_apply_display_diagnostic(void)
 {
     Preferences prefs;
     if (!prefs.begin("display_diag", false)) return false;
-    bool ok = prefs.putBool("swap", display_diagnostic.swap_bytes) == 1;
-    ok = (prefs.putBool("bgr", display_diagnostic.bgr_order) == 1) && ok;
+    prefs.remove("swap");
+    bool ok = prefs.putBool("bgr", display_diagnostic.bgr_order) == 1;
     ok = (prefs.putBool("invert", display_diagnostic.inverted) == 1) && ok;
     prefs.end();
+    if (ok) display_color_config_source = "NVS_BGR_INVERT";
     return ok;
+}
+
+const char* lvgl_port_get_color_config_source(void)
+{
+    return display_color_config_source;
 }
