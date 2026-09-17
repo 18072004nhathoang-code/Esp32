@@ -39,7 +39,10 @@ enum TileDownloadStatus {
     TILE_READY,
     TILE_ERROR,
     TILE_DEGRADED,
-    TILE_PROVIDER_NOT_CONFIGURED
+    TILE_PROVIDER_NOT_CONFIGURED,
+    TILE_CANCELED_STALE,
+    TILE_IMAGE_TOO_LARGE,
+    TILE_UNSUPPORTED_FORMAT
 };
 
 // Nguồn cung cấp ảnh bản đồ hiện tại
@@ -47,6 +50,15 @@ enum TileSource {
     TILE_SOURCE_NONE = 0,
     TILE_SOURCE_SD_CACHE,     // Đọc trực tiếp từ thẻ nhớ MicroSD FAT32 (Tức thì, không tốn quota)
     TILE_SOURCE_NETWORK       // Tải mới qua HTTPS (Google Static API hoặc OpenStreetMap)
+};
+
+struct MapTileMetadata
+{
+    uint32_t request_id;
+    double lat;
+    double lon;
+    int zoom;
+    char maptype[16];
 };
 
 /**
@@ -86,7 +98,9 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels);
  * @param out_source Con trỏ nhận nguồn ảnh (SD Cache hoặc Network)
  * @return true nếu có frame mới được tiêu thụ thành công
  */
-bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, TileSource *out_source = nullptr);
+bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels,
+                                       TileSource *out_source = nullptr,
+                                       MapTileMetadata *out_metadata = nullptr);
 
 /**
  * @brief Đánh dấu đã nạp xong ảnh vào màn hình

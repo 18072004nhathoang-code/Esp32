@@ -3,6 +3,8 @@
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 
 namespace
 {
@@ -26,11 +28,33 @@ struct __attribute__((packed)) SettingsRecord
 
 MiniOsSettings s_settings = {85, 0x00F2FE, 60, 120, true};
 SemaphoreHandle_t s_mutex = nullptr;
+QueueHandle_t s_command_queue = nullptr;
+TaskHandle_t s_worker_task = nullptr;
+uint32_t s_completion_revision = 0;
+bool s_last_commit_ok = true;
 char s_last_error[80] = "Not initialized";
+portMUX_TYPE s_error_mux = portMUX_INITIALIZER_UNLOCKED;
+
+enum SettingsCommandType : uint8_t
+{
+    SETTINGS_SET_BRIGHTNESS = 1,
+    SETTINGS_SET_ACCENT,
+    SETTINGS_SET_POWER_TIMEOUTS,
+    SETTINGS_SET_WIFI_RECONNECT
+};
+
+struct SettingsCommand
+{
+    SettingsCommandType type;
+    uint32_t value1;
+    uint32_t value2;
+};
 
 void set_error(const char *message)
 {
+    portENTER_CRITICAL(&s_error_mux);
     strlcpy(s_last_error, message ? message : "Unknown error", sizeof(s_last_error));
+    portEXIT_CRITICAL(&s_error_mux);
 }
 
 bool valid(const MiniOsSettings &value)
@@ -74,7 +98,7 @@ bool decode_record(const SettingsRecord &record, MiniOsSettings &value)
     return valid(value);
 }
 
-bool persist_locked(const MiniOsSettings &value)
+bool persist_value(const MiniOsSettings &value)
 {
     Preferences prefs;
     if (!prefs.begin(kNamespace, false))
@@ -90,7 +114,7 @@ bool persist_locked(const MiniOsSettings &value)
 }
 
 template <typename Mutator>
-bool update(Mutator mutator)
+bool update_sync(Mutator mutator)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(250)) != pdTRUE)
     {
@@ -98,18 +122,81 @@ bool update(Mutator mutator)
         return false;
     }
     MiniOsSettings candidate = s_settings;
-    mutator(candidate);
-    const bool ok = valid(candidate) && persist_locked(candidate);
-    if (ok) s_settings = candidate;
     xSemaphoreGive(s_mutex);
+    mutator(candidate);
+    if (!valid(candidate))
+    {
+        set_error("Invalid settings value");
+        return false;
+    }
+    const bool ok = persist_value(candidate);
+    if (ok && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        s_settings = candidate;
+        xSemaphoreGive(s_mutex);
+    }
     return ok;
+}
+
+void settings_worker(void *)
+{
+    SettingsCommand command = {};
+    for (;;)
+    {
+        if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) continue;
+        bool ok = false;
+        switch (command.type)
+        {
+            case SETTINGS_SET_BRIGHTNESS:
+                ok = update_sync([&command](MiniOsSettings &s) {
+                    s.brightness = static_cast<uint8_t>(command.value1);
+                });
+                break;
+            case SETTINGS_SET_ACCENT:
+                ok = update_sync([&command](MiniOsSettings &s) {
+                    s.accent_rgb = command.value1 & 0xFFFFFFU;
+                });
+                break;
+            case SETTINGS_SET_POWER_TIMEOUTS:
+                ok = update_sync([&command](MiniOsSettings &s) {
+                    s.dim_timeout_sec = command.value1;
+                    s.sleep_timeout_sec = command.value2;
+                });
+                break;
+            case SETTINGS_SET_WIFI_RECONNECT:
+                ok = update_sync([&command](MiniOsSettings &s) {
+                    s.wifi_auto_reconnect = command.value1 != 0;
+                });
+                break;
+            default:
+                set_error("Unknown settings command");
+                break;
+        }
+        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            s_last_commit_ok = ok;
+            ++s_completion_revision;
+            if (s_completion_revision == 0) ++s_completion_revision;
+            xSemaphoreGive(s_mutex);
+        }
+    }
+}
+
+bool enqueue_command(const SettingsCommand &command)
+{
+    if (s_worker_task && s_command_queue &&
+        xQueueSend(s_command_queue, &command, 0) == pdTRUE) return true;
+    set_error("Settings command queue full");
+    return false;
 }
 }
 
 bool settings_service_init(void)
 {
+    if (s_worker_task) return true;
     if (!s_mutex) s_mutex = xSemaphoreCreateMutex();
-    if (!s_mutex)
+    if (!s_command_queue) s_command_queue = xQueueCreate(8, sizeof(SettingsCommand));
+    if (!s_mutex || !s_command_queue)
     {
         set_error("Cannot create settings mutex");
         return false;
@@ -140,7 +227,14 @@ bool settings_service_init(void)
         needs_persist = true;
     }
     if (has_namespace) prefs.end();
-    if (needs_persist && !persist_locked(s_settings)) return false;
+    if (needs_persist && !persist_value(s_settings)) return false;
+    if (!s_worker_task && xTaskCreatePinnedToCore(settings_worker, "SettingsWorker", 4096,
+                                                  nullptr, 1, &s_worker_task, 0) != pdPASS)
+    {
+        s_worker_task = nullptr;
+        set_error("Cannot create settings worker");
+        return false;
+    }
     set_error("OK");
     return true;
 }
@@ -157,29 +251,51 @@ MiniOsSettings settings_service_get(void)
 bool settings_service_set_brightness(uint8_t value)
 {
     if (value < 10 || value > 100) return false;
-    return update([value](MiniOsSettings &s) { s.brightness = value; });
+    return enqueue_command({SETTINGS_SET_BRIGHTNESS, value, 0});
 }
 
 bool settings_service_set_accent(uint32_t rgb)
 {
-    return update([rgb](MiniOsSettings &s) { s.accent_rgb = rgb & 0xFFFFFFU; });
+    return enqueue_command({SETTINGS_SET_ACCENT, rgb & 0xFFFFFFU, 0});
 }
 
 bool settings_service_set_power_timeouts(uint32_t dim_sec, uint32_t sleep_sec)
 {
-    if (dim_sec < 10 || sleep_sec <= dim_sec) return false;
-    return update([dim_sec, sleep_sec](MiniOsSettings &s) {
-        s.dim_timeout_sec = dim_sec;
-        s.sleep_timeout_sec = sleep_sec;
-    });
+    if (dim_sec < 10 || dim_sec > 3600 || sleep_sec <= dim_sec || sleep_sec > 7200)
+        return false;
+    return enqueue_command({SETTINGS_SET_POWER_TIMEOUTS, dim_sec, sleep_sec});
 }
 
 bool settings_service_set_wifi_auto_reconnect(bool enabled)
 {
-    return update([enabled](MiniOsSettings &s) { s.wifi_auto_reconnect = enabled; });
+    return enqueue_command({SETTINGS_SET_WIFI_RECONNECT, enabled ? 1U : 0U, 0});
 }
 
 const char *settings_service_get_last_error(void)
 {
     return s_last_error;
+}
+
+void settings_service_copy_last_error(char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return;
+    portENTER_CRITICAL(&s_error_mux);
+    strlcpy(out, s_last_error, out_size);
+    portEXIT_CRITICAL(&s_error_mux);
+}
+
+uint32_t settings_service_get_completion_revision(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t revision = s_completion_revision;
+    xSemaphoreGive(s_mutex);
+    return revision;
+}
+
+bool settings_service_last_commit_ok(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool ok = s_last_commit_ok;
+    xSemaphoreGive(s_mutex);
+    return ok;
 }

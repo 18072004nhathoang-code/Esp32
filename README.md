@@ -1,5 +1,5 @@
 # ESP32-S3 ES3C28P Touch Display Mini OS Pro Max
-**Kiến trúc:** ES3C28P Hardware Profile • FreeRTOS Multi-tasking • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S 3.0.12 • SDMMC Storage • XiaoZhi AI Voice
+**Kiến trúc:** ES3C28P Hardware Profile • FreeRTOS Multi-tasking • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S commit-pinned • SDMMC Storage • XiaoZhi AI Voice
 
 [![Build Status](https://github.com/18072004nhathoang-code/Esp32/actions/workflows/build.yml/badge.svg)](https://github.com/18072004nhathoang-code/Esp32/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -95,7 +95,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | `lvgl/lvgl` | **8.3.11** | Nhân giao diện đồ họa chính |
 | `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V SPI và touch controller |
 | `madhephaestus/ESP32Encoder` | **0.11.7** | Đọc rotary encoder nếu có ngoại vi |
-| `ESP32-audioI2S` | **3.0.12** (Git commit `#3.0.12`) | Giải mã MP3 từ thẻ nhớ SD qua I2S |
+| `ESP32-audioI2S` | commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`** (manifest `2.0.0`, source header `3.0.12e`) | Giải mã MP3 từ thẻ nhớ SD qua I2S |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
 | `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
 
@@ -137,6 +137,8 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
 4. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
+5. **Giới hạn TLS của toolchain**: Platform Espressif32 6.8.1 dùng Arduino-ESP32 2.0.17 với `CONFIG_MBEDTLS_HAVE_TIME_DATE` tắt trong SDK prebuilt cho ESP32-S3. CA chain và hostname vẫn được kiểm tra, nhưng thời hạn not-before/not-after của chứng chỉ không được kiểm tra bởi build này. Firmware log rõ giới hạn khi boot và không gọi đây là full certificate validation. Bản production cần framework/SDK tự build có X.509 time validation và chỉ mở kết nối sau khi SNTP đã cung cấp thời gian hợp lệ.
+6. **Giới hạn bảo vệ secret trên thiết bị**: `.gitignore` chỉ ngăn commit file secret, không bảo vệ dữ liệu khỏi flash dump. Build PlatformIO thông thường không provision Secure Boot, Flash Encryption hoặc encrypted NVS. Xem `docs/PRODUCTION_SECURITY.md` trước khi phân phối thiết bị.
 
 ---
 
@@ -167,10 +169,12 @@ pio device monitor -b 115200
    - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, kiểm tra SOI/EOI và giới hạn 512KB, worker duy nhất sở hữu allocate/decode/swap/free ping-pong buffer với capacity front/back riêng, session ID loại frame/lệnh cũ và control mailbox retry tới ACK khi close/reopen hoặc queue thường đầy).
    - **ONVIF/MJPEG/RTSP**: không được bật trong UI vì firmware chưa có decoder/protocol hoàn chỉnh; chỉ Snapshot HTTP(S) được cho phép.
 8. **Settings & Power**: Độ sáng, accent, auto-reconnect và timeout dim/display-sleep được lưu NVS. Power đọc ADC pin nếu board khai báo, báo `Uncalibrated` khi hệ số chia áp chưa xác minh, vô hiệu hóa pin/sạc trên board không có driver, đồng thời cung cấp display sleep và restart thật.
-9. **Typography & Vietnamese Localization**: Hệ thống phông chữ UI tùy chỉnh kích thước 10, 12, 14, 16 được tạo từ công cụ `tools/generate_fonts.py` dựa trên font mã nguồn mở **Be Vietnam Pro SemiBold** (bản quyền theo giấy phép **SIL Open Font License 1.1**), hỗ trợ đầy đủ các dải Unicode tiếng Việt có dấu, ký tự số và biểu tượng hệ thống. Bố cục chữ trên màn hình hiển thị đậm nét, dễ đọc (`UI_FONT_SMALL` 12px, `UI_FONT_BODY` 14px, `UI_FONT_BUTTON` 14px, `UI_FONT_TITLE` 16px), không phụ thuộc font runtime ngoài.
+9. **Typography & Vietnamese Localization**: UI dùng **Be Vietnam Pro SemiBold** (SIL OFL 1.1) với body/button 14px, secondary 12px và title 16px; glyph hệ thống dùng `LV_SYMBOL_*` và fallback LVGL. Font 10px cũ không được dùng cho nội dung chính.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, theo đúng một contact ID tới lúc phát release, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. Với profile hiện tại, invert X/Y của sensor rồi rotation 2 triệt tiêu nhau nên mapping cuối là `screen_x=raw_x`, `screen_y=raw_y` trong miền 240x320. LVGL luôn nhận tọa độ toàn màn hình; Touch Diagnostic đổi screen→local theo origin của overlay nội dung, chạy thụ động 40Hz, không calibration/NVS và không chặn boot.
 
 Regression gồm behavioral test, native C++ contract test dùng chung header với firmware và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, start audio đồng thời/nhịp DMA, camera session + mailbox ACK, AI request cancel/stale response, giới hạn body và WAV lỗi/cắt.
+
+Thông tin attribution, phiên bản và nghĩa vụ phân phối dependency nằm trong `THIRD_PARTY_NOTICES.md`. Bản phân phối binary có ESP32-audioI2S GPL-3.0 phải đi kèm Corresponding Source và thông tin build của đúng commit đã dùng.
 
 
 ---
@@ -178,3 +182,4 @@ Regression gồm behavioral test, native C++ contract test dùng chung header v�
 ## ⚖️ 8. Giấy phép mã nguồn
 - Mã nguồn firmware được phát hành theo giấy phép **MIT License**.
 - Các phông chữ giao diện được phát hành theo giấy phép **SIL Open Font License 1.1**.
+- Dependency giữ giấy phép riêng; xem **THIRD_PARTY_NOTICES.md** và thư mục **LICENSES/**.

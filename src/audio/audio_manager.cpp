@@ -11,6 +11,7 @@
 #include <math.h>
 #include "../storage/storage_manager.h"
 #include "firmware_contracts.h"
+#include "service_state_logic.h"
 
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
@@ -49,10 +50,13 @@ static bool playback_starting = false;
 static uint32_t playback_start_token = 0;
 static uint32_t playback_next_token = 0;
 static uint32_t playback_sample_idx = 0;
+static uint32_t playback_owner_session = 0;
 static AudioRecordingLease playback_lease = {};
 static volatile AudioRecordingFileState recording_file_state = AUDIO_FILE_NONE;
 static TaskHandle_t recording_export_task_handle = nullptr;
 static constexpr const char *kRecordingPath = "/voice/last_recording.wav";
+static constexpr const char *kRecordingTempPath = "/voice/last_recording.wav.tmp";
+static constexpr const char *kRecordingBackupPath = "/voice/last_recording.wav.bak";
 
 // Đo lường Microphone thời gian thực
 static uint8_t current_mic_level = 0;     // 0 - 100%
@@ -63,9 +67,12 @@ static size_t waveform_head = 0;
 // FreeRTOS Task & Mutex
 static TaskHandle_t audio_task_handle = nullptr;
 static SemaphoreHandle_t audio_i2s_tx_mutex = nullptr; // Mutex độc quyền đường truyền TX i2s_write
+static SemaphoreHandle_t audio_codec_mutex = nullptr;
 // Protects recorder/playback state, the shared PSRAM buffer and waveform telemetry
 // across the audio worker (core 0) and LVGL/application tasks (core 1).
 static SemaphoreHandle_t audio_state_mutex = nullptr;
+// Serializes enqueue/notify ordering for transactional start/stop commands.
+static SemaphoreHandle_t audio_command_mutex = nullptr;
 
 // Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
@@ -74,6 +81,36 @@ static uint32_t audio_owner_session = 0;
 static uint32_t audio_next_session = 0;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
 static bool i2s_duplex_installed = false;
+static portMUX_TYPE audio_hw_mux = portMUX_INITIALIZER_UNLOCKED;
+
+enum AudioAsyncCommandType : uint8_t
+{
+    AUDIO_ASYNC_SOUND_EFFECT = 1,
+    AUDIO_ASYNC_START_RECORDING,
+    AUDIO_ASYNC_START_PLAYBACK,
+    AUDIO_ASYNC_SET_VOLUME
+};
+
+struct AudioAsyncCommand
+{
+    AudioAsyncCommandType type;
+    uint8_t value;
+    uint32_t generation;
+};
+
+static QueueHandle_t audio_command_queue = nullptr;
+static constexpr uint32_t AUDIO_EVENT_STOP_PLAYBACK = 1U << 0;
+static constexpr uint32_t AUDIO_EVENT_STOP_RECORDING = 1U << 1;
+static constexpr uint32_t AUDIO_EVENT_CANCEL_RECORDING = 1U << 2;
+static uint32_t recording_command_generation = 0;
+static uint32_t playback_command_generation = 0;
+
+static uint32_t next_command_generation(uint32_t &generation)
+{
+    ++generation;
+    if (generation == 0) ++generation;
+    return generation;
+}
 
 // Máy trạng thái đồng bộ hóa an toàn vòng đời Audio Task (Handshake/State Machine)
 enum AudioTaskState
@@ -90,6 +127,23 @@ static void put_le16(uint8_t *p, uint16_t value)
 {
     p[0] = value & 0xFF;
     p[1] = (value >> 8) & 0xFF;
+}
+
+static uint32_t get_le32(const uint8_t *p)
+{
+    return static_cast<uint32_t>(p[0]) |
+           (static_cast<uint32_t>(p[1]) << 8) |
+           (static_cast<uint32_t>(p[2]) << 16) |
+           (static_cast<uint32_t>(p[3]) << 24);
+}
+
+static void stop_playback_sync(void);
+static void play_sound_effect_sync(SoundEffect fx);
+
+static void set_pa_hardware_locked(bool enabled)
+{
+    pa_enabled = enabled;
+    digitalWrite(AUDIO_PA_PIN, enabled ? LOW : HIGH);
 }
 
 static void put_le32(uint8_t *p, uint32_t value)
@@ -169,17 +223,72 @@ static bool publish_recording_snapshot(size_t count)
     return fresh != nullptr;
 }
 
+static bool valid_recording_file_locked(fs::FS &fs, const char *path)
+{
+    File file = fs.open(path, FILE_READ);
+    if (!file || file.size() < 44)
+    {
+        if (file) file.close();
+        return false;
+    }
+    uint8_t header[44] = {};
+    const size_t read = file.read(header, sizeof(header));
+    const size_t total_size = file.size();
+    file.close();
+    if (read != sizeof(header) || memcmp(header, "RIFF", 4) != 0 ||
+        memcmp(header + 8, "WAVEfmt ", 8) != 0 || memcmp(header + 36, "data", 4) != 0)
+        return false;
+    const uint32_t data_size = get_le32(header + 40);
+    return get_le32(header + 4) == data_size + 36U &&
+           total_size == static_cast<size_t>(data_size) + sizeof(header);
+}
+
+static bool recover_recording_files_locked(fs::FS &fs)
+{
+    const bool final_valid = fs.exists(kRecordingPath) &&
+                             valid_recording_file_locked(fs, kRecordingPath);
+    if (final_valid)
+    {
+        if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+        if (fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
+        return true;
+    }
+
+    if (fs.exists(kRecordingPath)) fs.remove(kRecordingPath);
+    if (fs.exists(kRecordingBackupPath) &&
+        valid_recording_file_locked(fs, kRecordingBackupPath) &&
+        fs.rename(kRecordingBackupPath, kRecordingPath))
+    {
+        if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+        Serial.println("[AUDIO][WAV] Recovered last recording from .bak");
+        return true;
+    }
+    if (fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
+    if (fs.exists(kRecordingTempPath) &&
+        valid_recording_file_locked(fs, kRecordingTempPath) &&
+        fs.rename(kRecordingTempPath, kRecordingPath))
+    {
+        Serial.println("[AUDIO][WAV] Recovered completed recording from .tmp");
+        return true;
+    }
+    if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+    return false;
+}
+
 static void recording_export_task(void *arg)
 {
     AudioRecordingLease *lease = static_cast<AudioRecordingLease *>(arg);
     bool ok = false;
+    size_t total_written = 0;
+    const size_t expected_file_size = lease
+        ? 44U + lease->sample_count * sizeof(int16_t) : 0U;
     if (lease && lease->samples && lease->sample_count > 0 &&
         storage_is_available() && storage_lock(1000))
     {
         fs::FS &fs = storage_get_fs();
         bool directory_ready = fs.exists("/voice") || fs.mkdir("/voice");
-        bool old_file_removed = !fs.exists(kRecordingPath) || fs.remove(kRecordingPath);
-        File file = (directory_ready && old_file_removed) ? fs.open(kRecordingPath, FILE_WRITE) : File();
+        if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+        File file = directory_ready ? fs.open(kRecordingTempPath, FILE_WRITE) : File();
         if (file)
         {
             const uint32_t data_bytes = lease->sample_count * sizeof(int16_t);
@@ -191,18 +300,45 @@ static void recording_export_task(void *arg)
             put_le32(header + 28, AUDIO_SAMPLE_RATE * sizeof(int16_t));
             put_le16(header + 32, sizeof(int16_t)); put_le16(header + 34, 16);
             memcpy(header + 36, "data", 4); put_le32(header + 40, data_bytes);
-            ok = file.write(header, sizeof(header)) == sizeof(header);
+            const size_t header_written = file.write(header, sizeof(header));
+            total_written += header_written;
+            ok = header_written == sizeof(header);
             const uint8_t *raw = reinterpret_cast<const uint8_t *>(lease->samples);
             size_t remaining = data_bytes;
             while (ok && remaining > 0)
             {
                 size_t chunk = remaining > 4096 ? 4096 : remaining;
-                ok = file.write(raw, chunk) == chunk;
+                const size_t written = file.write(raw, chunk);
+                total_written += written;
+                ok = written == chunk;
                 raw += chunk;
                 remaining -= chunk;
                 vTaskDelay(1);
             }
+            file.flush();
             file.close();
+            ok = ok && valid_recording_file_locked(fs, kRecordingTempPath);
+        }
+
+        if (ok)
+        {
+            if (fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
+            const bool had_old = fs.exists(kRecordingPath);
+            const bool backup_ready = !had_old || fs.rename(kRecordingPath, kRecordingBackupPath);
+            ok = transactional_replace_can_commit(expected_file_size, total_written,
+                                                   true, backup_ready) &&
+                 fs.rename(kRecordingTempPath, kRecordingPath) &&
+                 valid_recording_file_locked(fs, kRecordingPath);
+            if (ok)
+            {
+                if (had_old && fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
+            }
+            else
+            {
+                if (fs.exists(kRecordingPath)) fs.remove(kRecordingPath);
+                if (had_old && fs.exists(kRecordingBackupPath))
+                    fs.rename(kRecordingBackupPath, kRecordingPath);
+            }
         }
         storage_unlock();
     }
@@ -211,8 +347,7 @@ static void recording_export_task(void *arg)
         audio_release_recording_lease(lease);
         delete lease;
     }
-    if (audio_state_mutex &&
-        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
     {
         recording_file_state = ok ? AUDIO_FILE_SAVED : AUDIO_FILE_ERROR;
         recording_export_task_handle = nullptr;
@@ -270,7 +405,7 @@ static void schedule_recording_export(void)
 /* Cấu hình và cài đặt Driver I2S Duplex (16kHz 16-bit Duplex) cho Microphone & Tone/Voice */
 bool audio_install_duplex_driver(void)
 {
-    if (i2s_duplex_installed) return true;
+    if (audio_is_driver_installed()) return true;
 
     i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
@@ -311,7 +446,9 @@ bool audio_install_duplex_driver(void)
         return false;
     }
 
+    portENTER_CRITICAL(&audio_hw_mux);
     i2s_duplex_installed = true;
+    portEXIT_CRITICAL(&audio_hw_mux);
     Serial.printf("[AUDIO][I2S] READY Fs=%u PCM16 stereo MCLK=%u BCLK=%d WS=%d DOUT=%d DIN=%d\n",
                   AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE * 256U, AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                   AUDIO_I2S_DOUT, AUDIO_I2S_DIN);
@@ -334,13 +471,15 @@ bool audio_drain_tx(uint32_t timeout_ms)
 
 void audio_uninstall_duplex_driver(void)
 {
-    if (!i2s_duplex_installed) return;
+    if (!audio_is_driver_installed()) return;
 
     i2s_zero_dma_buffer(I2S_NUM_0);
     esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
     if (err == ESP_OK)
     {
+        portENTER_CRITICAL(&audio_hw_mux);
         i2s_duplex_installed = false;
+        portEXIT_CRITICAL(&audio_hw_mux);
         Serial.println("[AUDIO] 🔌 Đã gỡ bỏ I2S Duplex Driver để nhường cổng I2S_NUM_0.");
     }
     else
@@ -351,7 +490,10 @@ void audio_uninstall_duplex_driver(void)
 
 bool audio_is_driver_installed(void)
 {
-    return i2s_duplex_installed;
+    portENTER_CRITICAL(&audio_hw_mux);
+    const bool installed = i2s_duplex_installed;
+    portEXIT_CRITICAL(&audio_hw_mux);
+    return installed;
 }
 
 bool audio_manager_pause_task_sync(uint32_t timeout_ms)
@@ -459,7 +601,7 @@ bool audio_request_ownership(AudioOwner requester)
 
     // 2. Đối với các requester khác (SYSTEM, RECORDER, AI_VOICE):
     // Đảm bảo I2S Duplex Driver của AudioManager đã sẵn sàng
-    if (!i2s_duplex_installed)
+    if (!audio_is_driver_installed())
     {
         if (!audio_install_duplex_driver())
         {
@@ -478,43 +620,95 @@ bool audio_request_ownership(AudioOwner requester)
     return true;
 }
 
-void audio_release_ownership(AudioOwner requester)
+static bool release_ownership(AudioOwner requester, uint32_t expected_session, bool require_session)
 {
-    if (audio_owner_mutex && xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(150)) == pdTRUE)
-    {
-        if (current_audio_owner == requester)
-        {
-            if (audio_owner_refcount > 1)
-            {
-                audio_owner_refcount--;
-                Serial.printf("[AUDIO][OWNER] release owner=%u session=%u ref=%u\n",
-                              requester, audio_owner_session, audio_owner_refcount);
-            }
-            else
-            {
-                audio_owner_refcount = 0;
-                current_audio_owner = AUDIO_OWNER_NONE;
-                audio_owner_session = 0;
-                Serial.printf("[AUDIO][OWNER] release owner=%u complete\n", requester);
+    if (!audio_owner_mutex || xSemaphoreTake(audio_owner_mutex, portMAX_DELAY) != pdTRUE)
+        return false;
 
-                // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
-                if (requester == AUDIO_OWNER_MUSIC)
+    bool released = false;
+    const bool owner_matches = current_audio_owner == requester;
+    const bool session_matches = audio_session_cleanup_current(
+        static_cast<uint8_t>(current_audio_owner), static_cast<uint8_t>(requester),
+        audio_owner_session, expected_session);
+    if (owner_matches && (!require_session || session_matches))
+    {
+        if (audio_owner_refcount > 1)
+        {
+            audio_owner_refcount--;
+            released = true;
+            Serial.printf("[AUDIO][OWNER] release owner=%u session=%u ref=%u\n",
+                          requester, audio_owner_session, audio_owner_refcount);
+        }
+        else
+        {
+            const uint32_t completed_session = audio_owner_session;
+            if (audio_codec_mutex && xSemaphoreTake(audio_codec_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                set_pa_hardware_locked(false);
+                xSemaphoreGive(audio_codec_mutex);
+            }
+
+            // Restore the duplex path before publishing OWNER_NONE so another
+            // caller cannot acquire a half-restored I2S/codec configuration.
+            if (requester == AUDIO_OWNER_MUSIC)
+            {
+                if (audio_install_duplex_driver())
                 {
-                    if (audio_install_duplex_driver())
-                    {
-                        if (!audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
-                            Serial.println("[AUDIO] ❌ I2S duplex restored but codec clock restore failed");
-                        audio_manager_resume_task();
-                    }
-                    else
-                    {
-                        Serial.println("[AUDIO] ❌ Chế độ suy giảm: MUSIC đã nhả lease nhưng I2S duplex chưa khôi phục được");
-                    }
+                    if (!audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
+                        Serial.println("[AUDIO] ❌ I2S duplex restored but codec clock restore failed");
+                    audio_manager_resume_task();
+                }
+                else
+                {
+                    Serial.println("[AUDIO] ❌ MUSIC released but duplex restore failed");
                 }
             }
+            audio_owner_refcount = 0;
+            current_audio_owner = AUDIO_OWNER_NONE;
+            audio_owner_session = 0;
+            released = true;
+            Serial.printf("[AUDIO][OWNER] release owner=%u session=%u complete\n",
+                          requester, completed_session);
         }
-        xSemaphoreGive(audio_owner_mutex);
     }
+    xSemaphoreGive(audio_owner_mutex);
+    return released;
+}
+
+void audio_release_ownership(AudioOwner requester)
+{
+    (void)release_ownership(requester, 0, false);
+}
+
+bool audio_release_ownership_session(AudioOwner requester, uint32_t session_id)
+{
+    return release_ownership(requester, session_id, true);
+}
+
+uint32_t audio_get_owner_session(AudioOwner requester)
+{
+    if (!audio_owner_mutex || xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return 0;
+    const uint32_t session = current_audio_owner == requester ? audio_owner_session : 0;
+    xSemaphoreGive(audio_owner_mutex);
+    return session;
+}
+
+bool audio_set_pa_for_session(AudioOwner requester, uint32_t session_id, bool enabled)
+{
+    if (!audio_owner_mutex || !audio_codec_mutex || session_id == 0 ||
+        xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    const bool current = current_audio_owner == requester && audio_owner_session == session_id;
+    bool applied = false;
+    if (current && xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        set_pa_hardware_locked(enabled && master_volume > 0 && !codec_muted);
+        applied = true;
+        xSemaphoreGive(audio_codec_mutex);
+    }
+    xSemaphoreGive(audio_owner_mutex);
+    return applied;
 }
 
 AudioOwner audio_get_current_owner(void)
@@ -660,39 +854,71 @@ static bool es8311_init_codec(void)
  * ========================================================================= */
 void audio_set_pa_enabled(bool enabled)
 {
-    pa_enabled = enabled;
-    // PA pin là Active LOW (Mức 0 = Mở loa, Mức 1 = Tắt loa)
-    digitalWrite(AUDIO_PA_PIN, enabled ? LOW : HIGH);
+    if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return;
+    set_pa_hardware_locked(enabled);
+    xSemaphoreGive(audio_codec_mutex);
 }
 
 bool audio_is_pa_enabled(void)
 {
-    return pa_enabled;
+    if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+    const bool enabled = pa_enabled;
+    xSemaphoreGive(audio_codec_mutex);
+    return enabled;
 }
 
 void audio_set_volume(uint8_t volume_percent)
 {
     if (volume_percent > 100) volume_percent = 100;
+    if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return;
     master_volume = volume_percent;
-    if (!codec_ready) return;
+    if (!codec_ready)
+    {
+        xSemaphoreGive(audio_codec_mutex);
+        return;
+    }
     const uint8_t reg_vol = es8311_volume_register(volume_percent);
     bool ok = es8311_write_checked(0x32, reg_vol);
     ok = es8311_set_muted(volume_percent == 0) && ok;
-    audio_set_pa_enabled(volume_percent > 0 && ok);
-    Serial.printf("[AUDIO][CODEC] volume=%u%% reg32=0x%02X PA=%s status=%s\n",
-                  volume_percent, reg_vol, pa_enabled ? "ON" : "OFF", ok ? "OK" : "ERROR");
+    if (volume_percent == 0 || !ok) set_pa_hardware_locked(false);
+    Serial.printf("[AUDIO][CODEC] volume=%u%% reg32=0x%02X mute=%s PA=%s status=%s\n",
+                  volume_percent, reg_vol, codec_muted ? "ON" : "OFF",
+                  pa_enabled ? "ON" : "OFF", ok ? "OK" : "ERROR");
+    xSemaphoreGive(audio_codec_mutex);
+}
+
+bool audio_set_volume_async(uint8_t volume_percent)
+{
+    if (!audio_command_queue) return false;
+    const AudioAsyncCommand cmd = {
+        AUDIO_ASYNC_SET_VOLUME,
+        static_cast<uint8_t>(volume_percent > 100 ? 100 : volume_percent),
+        0
+    };
+    return xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
 }
 
 uint8_t audio_get_volume(void)
 {
-    return master_volume;
+    if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return 0;
+    const uint8_t volume = master_volume;
+    xSemaphoreGive(audio_codec_mutex);
+    return volume;
 }
 
 bool audio_codec_configure_for_stream(uint32_t sample_rate, uint16_t mclk_multiple)
 {
-    return es8311_configure_clock(sample_rate, mclk_multiple) &&
-           es8311_write_checked(0x32, es8311_volume_register(master_volume)) &&
-           es8311_set_muted(master_volume == 0);
+    if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(200)) != pdTRUE)
+        return false;
+    const bool ok = es8311_configure_clock(sample_rate, mclk_multiple) &&
+                    es8311_write_checked(0x32, es8311_volume_register(master_volume)) &&
+                    es8311_set_muted(master_volume == 0);
+    xSemaphoreGive(audio_codec_mutex);
+    return ok;
 }
 
 static bool write_stereo_frames(const int16_t *frames, size_t frame_count, uint32_t timeout_ms)
@@ -742,9 +968,27 @@ static void audio_background_task(void *pvParameters)
 
     while (1)
     {
+        uint32_t control_events = 0;
+        if (xTaskNotifyWait(0, UINT32_MAX, &control_events, 0) == pdTRUE)
+        {
+            if (control_events & AUDIO_EVENT_CANCEL_RECORDING) audio_cancel_recording();
+            if (control_events & AUDIO_EVENT_STOP_RECORDING) audio_stop_recording();
+            if (control_events & AUDIO_EVENT_STOP_PLAYBACK) stop_playback_sync();
+        }
+
         // 0a. Máy trạng thái Handshake dừng/khôi phục Audio Task an toàn
         if (audio_task_state == AUDIO_TASK_PAUSE_REQUESTED)
         {
+            AudioAsyncCommand cancelled = {};
+            while (audio_command_queue &&
+                   xQueueReceive(audio_command_queue, &cancelled, 0) == pdTRUE)
+            {
+                if (cancelled.type == AUDIO_ASYNC_SET_VOLUME)
+                    audio_set_volume(cancelled.value);
+                else
+                    Serial.printf("[AUDIO] command %u cancelled while MUSIC takes I2S\n",
+                                  static_cast<unsigned>(cancelled.type));
+            }
             audio_task_state = AUDIO_TASK_PAUSED;
             if (audio_task_ack_sem)
             {
@@ -763,8 +1007,50 @@ static void audio_background_task(void *pvParameters)
             audio_task_state = AUDIO_TASK_ACTIVE;
         }
 
+        AudioAsyncCommand async_cmd;
+        while (audio_command_queue && xQueueReceive(audio_command_queue, &async_cmd, 0) == pdTRUE)
+        {
+            if (async_cmd.type == AUDIO_ASYNC_START_RECORDING)
+            {
+                if (audio_command_mutex &&
+                    xSemaphoreTake(audio_command_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    if (service_generation_current(async_cmd.generation,
+                                                   recording_command_generation, false))
+                        audio_start_recording(async_cmd.value);
+                    else
+                        Serial.println("[AUDIO] stale queued recording start discarded");
+                    xSemaphoreGive(audio_command_mutex);
+                }
+            }
+            else if (async_cmd.type == AUDIO_ASYNC_START_PLAYBACK)
+            {
+                if (audio_command_mutex &&
+                    xSemaphoreTake(audio_command_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    if (service_generation_current(async_cmd.generation,
+                                                   playback_command_generation, false))
+                        audio_start_playback();
+                    else
+                        Serial.println("[AUDIO] stale queued playback start discarded");
+                    xSemaphoreGive(audio_command_mutex);
+                }
+            }
+            else if (async_cmd.type == AUDIO_ASYNC_SOUND_EFFECT)
+                play_sound_effect_sync(static_cast<SoundEffect>(async_cmd.value));
+            else if (async_cmd.type == AUDIO_ASYNC_SET_VOLUME)
+            {
+                audio_set_volume(async_cmd.value);
+                if (async_cmd.value > 0 && audio_is_playing())
+                {
+                    const uint32_t session = audio_get_owner_session(AUDIO_OWNER_PLAYBACK);
+                    if (session) audio_set_pa_for_session(AUDIO_OWNER_PLAYBACK, session, true);
+                }
+            }
+        }
+
         // 0b. Nếu I2S đang được Music Player sử dụng hoặc driver chưa cài đặt, nhường bus hoàn toàn
-        if (current_audio_owner == AUDIO_OWNER_MUSIC || !i2s_duplex_installed)
+        if (audio_get_current_owner() == AUDIO_OWNER_MUSIC || !audio_is_driver_installed())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -847,6 +1133,7 @@ static void audio_background_task(void *pvParameters)
 
             // 2. Phát đúng số frame theo nhịp DMA vừa nhận, không sleep cố định.
             bool playback_complete = false;
+            uint32_t completed_session = 0;
             AudioRecordingLease completed_lease = {};
             if (audio_state_mutex &&
                 xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
@@ -872,6 +1159,8 @@ static void audio_background_task(void *pvParameters)
                         playback_sample_idx = 0;
                         completed_lease = playback_lease;
                         playback_lease = {};
+                        completed_session = playback_owner_session;
+                        playback_owner_session = 0;
                         playback_complete = true;
                     }
                 }
@@ -880,9 +1169,8 @@ static void audio_background_task(void *pvParameters)
             if (playback_complete)
             {
                 audio_drain_tx(300);
-                audio_set_pa_enabled(false);
                 audio_release_recording_lease(&completed_lease);
-                audio_release_ownership(AUDIO_OWNER_SYSTEM);
+                audio_release_ownership_session(AUDIO_OWNER_PLAYBACK, completed_session);
             }
 
             const size_t consumed_rx_bytes = stereo_frames * 2U * sizeof(int16_t);
@@ -905,6 +1193,20 @@ bool audio_manager_init(void)
     if (is_initialized) return true;
 
     Serial.println("\n[AUDIO] Khởi tạo hệ thống Âm thanh I2S Duplex (Mic & Speaker)...");
+
+    if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
+    if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+    if (audio_state_mutex == nullptr) audio_state_mutex = xSemaphoreCreateMutex();
+    if (audio_command_mutex == nullptr) audio_command_mutex = xSemaphoreCreateMutex();
+    if (audio_codec_mutex == nullptr) audio_codec_mutex = xSemaphoreCreateMutex();
+    if (audio_task_ack_sem == nullptr) audio_task_ack_sem = xSemaphoreCreateBinary();
+    if (audio_command_queue == nullptr) audio_command_queue = xQueueCreate(8, sizeof(AudioAsyncCommand));
+    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex || !audio_command_mutex ||
+        !audio_codec_mutex || !audio_task_ack_sem || !audio_command_queue)
+    {
+        Serial.println("[AUDIO] ❌ Degraded: cannot create mutex/semaphore/command queue");
+        return false;
+    }
 
     // 1. Cấu hình chân Power Amplifier (FM8002E / NS4168)
     pinMode(AUDIO_PA_PIN, OUTPUT);
@@ -943,28 +1245,7 @@ bool audio_manager_init(void)
         }
     }
 
-    // 5. Khởi tạo Semaphore Handshake & FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
-    if (audio_task_ack_sem == nullptr)
-    {
-        audio_task_ack_sem = xSemaphoreCreateBinary();
-    }
-    if (audio_task_ack_sem == nullptr)
-    {
-        Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được semaphore Audio Task");
-        audio_uninstall_duplex_driver();
-        return false;
-    }
-
-    if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
-    if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
-    if (audio_state_mutex == nullptr) audio_state_mutex = xSemaphoreCreateMutex();
-    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex)
-    {
-        Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được mutex audio");
-        audio_uninstall_duplex_driver();
-        return false;
-    }
-
+    // 5. Khởi tạo FreeRTOS Task chạy trên Core 0 (Priority 3: Audio Realtime)
     BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_background_task,
         "Audio_Task",
@@ -983,6 +1264,15 @@ bool audio_manager_init(void)
     }
 
     is_initialized = true;
+    if (storage_is_available() && storage_lock(1000))
+    {
+        fs::FS &fs = storage_get_fs();
+        if (fs.exists("/voice") || fs.mkdir("/voice"))
+        {
+            if (recover_recording_files_locked(fs)) recording_file_state = AUDIO_FILE_SAVED;
+        }
+        storage_unlock();
+    }
     Serial.println("[AUDIO] Hệ thống âm thanh đã sẵn sàng trên Core 0!");
     return true;
 }
@@ -990,10 +1280,21 @@ bool audio_manager_init(void)
 static void speaker_self_test_task(void *)
 {
     bool acquired = audio_request_ownership(AUDIO_OWNER_DIAGNOSTIC);
+    const uint32_t session = acquired ? audio_get_owner_session(AUDIO_OWNER_DIAGNOSTIC) : 0;
     if (acquired)
     {
-        audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
-        audio_set_pa_enabled(true);
+        const bool codec_ok = audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+        if (!codec_ok)
+        {
+            Serial.println("[AUDIO][SELFTEST] FAIL: codec setup/readback failed; no PCM sent");
+            if (session) audio_release_ownership_session(AUDIO_OWNER_DIAGNOSTIC, session);
+            else audio_release_ownership(AUDIO_OWNER_DIAGNOSTIC);
+            acquired = false;
+        }
+    }
+    if (acquired)
+    {
+        audio_set_pa_for_session(AUDIO_OWNER_DIAGNOSTIC, session, true);
         constexpr size_t kFrames = 128;
         constexpr size_t kTotalFrames = AUDIO_SAMPLE_RATE * 400U / 1000U;
         int16_t frames[kFrames * 2];
@@ -1019,13 +1320,20 @@ static void speaker_self_test_task(void *)
             if (!write_stereo_frames(frames, count, 250)) break;
             sent += count;
         }
-        audio_drain_tx(400);
-        audio_set_pa_enabled(false);
-        audio_release_ownership(AUDIO_OWNER_DIAGNOSTIC);
-        Serial.printf("[AUDIO][SELFTEST] speaker tone frames=%u/%u\n",
-                      static_cast<unsigned>(sent), static_cast<unsigned>(kTotalFrames));
+        const bool drained = audio_drain_tx(400);
+        const uint8_t volume = audio_get_volume();
+        const bool pa_during_test = audio_is_pa_enabled();
+        audio_release_ownership_session(AUDIO_OWNER_DIAGNOSTIC, session);
+        Serial.printf("[AUDIO][SELFTEST] digital path %s Fs=%u MCLK=%u BCLK=%d LRCK=%d "
+                      "requested_frames=%u written_frames=%u mute=%s volume=%u PA_during=%s PA_after=%s\n",
+                      (sent == kTotalFrames && drained) ? "PASS" : "FAIL",
+                      AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE * 256U, AUDIO_I2S_BCLK, AUDIO_I2S_WS,
+                      static_cast<unsigned>(kTotalFrames), static_cast<unsigned>(sent),
+                      volume == 0 ? "ON" : "OFF", volume,
+                      pa_during_test ? "ON" : "OFF",
+                      audio_is_pa_enabled() ? "ON" : "OFF");
     }
-    if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
     {
         speaker_self_test_running = false;
         speaker_self_test_task_handle = nullptr;
@@ -1071,7 +1379,14 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
     if (!is_initialized || freq_hz == 0 || duration_ms == 0) return;
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return;
-    audio_set_pa_enabled(master_volume > 0);
+    const uint32_t session = audio_get_owner_session(AUDIO_OWNER_SYSTEM);
+    if (session == 0 || !audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
+    {
+        if (session) audio_release_ownership_session(AUDIO_OWNER_SYSTEM, session);
+        else audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        return;
+    }
+    audio_set_pa_for_session(AUDIO_OWNER_SYSTEM, session, true);
 
     if (audio_i2s_tx_mutex == nullptr)
     {
@@ -1115,14 +1430,13 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
     }
 
     audio_drain_tx(300);
-    audio_set_pa_enabled(false);
-    audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    audio_release_ownership_session(AUDIO_OWNER_SYSTEM, session);
     Serial.printf("[AUDIO][TONE] freq=%u requested_frames=%u written_frames=%u\n",
                   freq_hz, static_cast<unsigned>(total_samples),
                   static_cast<unsigned>(samples_generated));
 }
 
-void audio_play_sound_effect(SoundEffect fx)
+static void play_sound_effect_sync(SoundEffect fx)
 {
     switch (fx)
     {
@@ -1153,6 +1467,17 @@ void audio_play_sound_effect(SoundEffect fx)
     }
 }
 
+bool audio_play_sound_effect(SoundEffect fx)
+{
+    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+        audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
+        fx < FX_CLICK || fx > FX_XIAOZHI_WAKE) return false;
+    const AudioAsyncCommand cmd = { AUDIO_ASYNC_SOUND_EFFECT, static_cast<uint8_t>(fx), 0 };
+    const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
+    if (!queued) Serial.println("[AUDIO] Sound-effect queue full");
+    return queued;
+}
+
 /* =========================================================================
  * BỘ GHI ÂM VÀ PHÁT LẠI (VOICE MEMO / PSRAM BUFFER)
  * ========================================================================= */
@@ -1181,7 +1506,7 @@ bool audio_start_recording(uint32_t max_duration_sec)
     recording_state = RECORD_STARTING;
     xSemaphoreGive(audio_state_mutex);
 
-    audio_stop_playback();
+    stop_playback_sync();
     if (!audio_request_ownership(AUDIO_OWNER_RECORDER))
     {
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
@@ -1221,6 +1546,25 @@ bool audio_start_recording(uint32_t max_duration_sec)
     return true;
 }
 
+bool audio_start_recording_async(uint32_t max_duration_sec)
+{
+    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+        audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
+        max_duration_sec == 0 || max_duration_sec > AUDIO_RECORD_MAX_SEC)
+        return false;
+    if (!audio_command_mutex ||
+        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const uint32_t previous = recording_command_generation;
+    const AudioAsyncCommand cmd = {
+        AUDIO_ASYNC_START_RECORDING, static_cast<uint8_t>(max_duration_sec),
+        next_command_generation(recording_command_generation)
+    };
+    const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
+    if (!queued) recording_command_generation = previous;
+    xSemaphoreGive(audio_command_mutex);
+    return queued;
+}
+
 void audio_stop_recording(void)
 {
     if (!audio_state_mutex ||
@@ -1243,6 +1587,30 @@ void audio_stop_recording(void)
         if (snapshot_ok) schedule_recording_export();
         audio_release_ownership(AUDIO_OWNER_RECORDER);
     }
+}
+
+bool audio_stop_recording_async(void)
+{
+    if (!audio_task_handle || !audio_command_mutex ||
+        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const uint32_t previous = recording_command_generation;
+    next_command_generation(recording_command_generation);
+    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_RECORDING, eSetBits) == pdPASS;
+    if (!queued) recording_command_generation = previous;
+    xSemaphoreGive(audio_command_mutex);
+    return queued;
+}
+
+bool audio_cancel_recording_async(void)
+{
+    if (!audio_task_handle || !audio_command_mutex ||
+        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const uint32_t previous = recording_command_generation;
+    next_command_generation(recording_command_generation);
+    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_CANCEL_RECORDING, eSetBits) == pdPASS;
+    if (!queued) recording_command_generation = previous;
+    xSemaphoreGive(audio_command_mutex);
+    return queued;
 }
 
 void audio_cancel_recording(void)
@@ -1305,7 +1673,7 @@ bool audio_start_playback(void)
         return false;
     }
 
-    if (!audio_request_ownership(AUDIO_OWNER_SYSTEM))
+    if (!audio_request_ownership(AUDIO_OWNER_PLAYBACK))
     {
         audio_release_recording_lease(&lease);
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
@@ -1323,22 +1691,33 @@ bool audio_start_playback(void)
             if (playback_start_token == reservation) playback_starting = false;
             xSemaphoreGive(audio_state_mutex);
         }
-        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        audio_release_ownership(AUDIO_OWNER_PLAYBACK);
         audio_release_recording_lease(&lease);
         return false;
     }
     if (!playback_starting || playback_start_token != reservation)
     {
         xSemaphoreGive(audio_state_mutex);
-        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        audio_release_ownership(AUDIO_OWNER_PLAYBACK);
         audio_release_recording_lease(&lease);
         return false;
     }
     playback_sample_idx = 0;
     playback_lease = lease;
+    playback_owner_session = audio_get_owner_session(AUDIO_OWNER_PLAYBACK);
+    if (playback_owner_session == 0 ||
+        !audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
+    {
+        playback_lease = {};
+        playback_starting = false;
+        xSemaphoreGive(audio_state_mutex);
+        audio_release_ownership(AUDIO_OWNER_PLAYBACK);
+        audio_release_recording_lease(&lease);
+        return false;
+    }
     playback_active = true;
     playback_starting = false;
-    audio_set_pa_enabled(master_volume > 0);
+    audio_set_pa_for_session(AUDIO_OWNER_PLAYBACK, playback_owner_session, true);
     const size_t sample_count = lease.sample_count;
     xSemaphoreGive(audio_state_mutex);
     Serial.printf("[AUDIO] Bắt đầu phát lại đoạn ghi âm (%u mẫu)...\n",
@@ -1346,25 +1725,54 @@ bool audio_start_playback(void)
     return true;
 }
 
-void audio_stop_playback(void)
+bool audio_start_playback_async(void)
 {
-    if (!audio_state_mutex ||
-        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+        audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
+        audio_get_recorded_sample_count() == 0) return false;
+    if (!audio_command_mutex ||
+        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const uint32_t previous = playback_command_generation;
+    const AudioAsyncCommand cmd = {
+        AUDIO_ASYNC_START_PLAYBACK, 0, next_command_generation(playback_command_generation)
+    };
+    const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
+    if (!queued) playback_command_generation = previous;
+    xSemaphoreGive(audio_command_mutex);
+    return queued;
+}
+
+static void stop_playback_sync(void)
+{
+    if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE) return;
     const bool was_playing = playback_active;
     playback_starting = false;
     ++playback_next_token;
     playback_active = false;
     playback_sample_idx = 0;
     AudioRecordingLease lease = playback_lease;
+    const uint32_t session = playback_owner_session;
     playback_lease = {};
+    playback_owner_session = 0;
     xSemaphoreGive(audio_state_mutex);
     audio_release_recording_lease(&lease);
     if (was_playing)
     {
         audio_drain_tx(250);
-        audio_set_pa_enabled(false);
-        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        audio_release_ownership_session(AUDIO_OWNER_PLAYBACK, session);
     }
+}
+
+bool audio_stop_playback(void)
+{
+    if (!audio_task_handle || !audio_command_mutex ||
+        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const uint32_t previous = playback_command_generation;
+    next_command_generation(playback_command_generation);
+    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_PLAYBACK, eSetBits) == pdPASS;
+    if (!queued) playback_command_generation = previous;
+    xSemaphoreGive(audio_command_mutex);
+    return queued;
 }
 
 bool audio_is_playing(void)
@@ -1404,6 +1812,15 @@ size_t audio_get_recorded_sample_count(void)
         ? 0 : current_recording->count;
     xSemaphoreGive(audio_state_mutex);
     return count;
+}
+
+uint32_t audio_get_recording_generation(void)
+{
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t generation = recording_generation;
+    xSemaphoreGive(audio_state_mutex);
+    return generation;
 }
 
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples)
@@ -1477,7 +1894,8 @@ const char *audio_get_recording_file_path(void)
 
 bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeout_ms)
 {
-    if (!samples || count == 0 || !i2s_duplex_installed || current_audio_owner == AUDIO_OWNER_NONE)
+    if (!samples || count == 0 || !audio_is_driver_installed() ||
+        audio_get_current_owner() == AUDIO_OWNER_NONE)
         return false;
 
     bool ok = true;
@@ -1489,9 +1907,8 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         if (chunk > 128) chunk = 128;
         for (size_t i = 0; i < chunk; ++i)
         {
-            int32_t scaled = ((int32_t)samples[offset + i] * master_volume) / 100;
-            stereo[i * 2] = (int16_t)scaled;
-            stereo[i * 2 + 1] = (int16_t)scaled;
+            stereo[i * 2] = samples[offset + i];
+            stereo[i * 2 + 1] = samples[offset + i];
         }
         if (!write_stereo_frames(stereo, chunk, timeout_ms))
         {

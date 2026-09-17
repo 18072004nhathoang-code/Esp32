@@ -57,6 +57,7 @@ enum AudioOwner
 {
     AUDIO_OWNER_NONE = 0,
     AUDIO_OWNER_SYSTEM,     // System tones, sound effects, audio lab
+    AUDIO_OWNER_PLAYBACK,   // Immutable voice-memo playback
     AUDIO_OWNER_RECORDER,   // Mic input, AI voice input
     AUDIO_OWNER_MUSIC,      // ESP32-audioI2S playback
     AUDIO_OWNER_AI_VOICE,   // AI voice speech synthesis playback
@@ -92,6 +93,15 @@ bool audio_request_ownership(AudioOwner requester);
  * @param requester Phân hệ giải phóng
  */
 void audio_release_ownership(AudioOwner requester);
+
+/** Return the current ownership generation for requester, or 0 when stale. */
+uint32_t audio_get_owner_session(AudioOwner requester);
+
+/** Release only when both owner and generation still match. */
+bool audio_release_ownership_session(AudioOwner requester, uint32_t session_id);
+
+/** Change PA only for the currently active owner generation. */
+bool audio_set_pa_for_session(AudioOwner requester, uint32_t session_id, bool enabled);
 
 /**
  * @brief Lấy chủ sở hữu phần cứng I2S hiện tại
@@ -146,6 +156,7 @@ bool audio_speaker_self_test_is_running(void);
  * @brief Điều chỉnh âm lượng phát ra loa (0 - 100%)
  */
 void audio_set_volume(uint8_t volume_percent);
+bool audio_set_volume_async(uint8_t volume_percent);
 uint8_t audio_get_volume(void);
 
 /**
@@ -162,14 +173,17 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms);
 /**
  * @brief Phát hiệu ứng âm thanh định sẵn
  */
-void audio_play_sound_effect(SoundEffect fx);
+bool audio_play_sound_effect(SoundEffect fx);
 
 /**
  * @brief Bắt đầu ghi âm trực tiếp từ Microphone vào bộ nhớ 8MB Octal PSRAM
  * @param max_duration_sec Thời gian ghi âm tối đa (mặc định 10 giây)
  */
 bool audio_start_recording(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
+bool audio_start_recording_async(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
 void audio_stop_recording(void);
+bool audio_stop_recording_async(void);
+bool audio_cancel_recording_async(void);
 /** Stop a recording and discard it without scheduling a WAV export. */
 void audio_cancel_recording(void);
 bool audio_is_recording(void);
@@ -178,7 +192,8 @@ bool audio_is_recording(void);
  * @brief Bắt đầu phát lại đoạn âm thanh vừa thu âm trong PSRAM ra loa
  */
 bool audio_start_playback(void);
-void audio_stop_playback(void);
+bool audio_start_playback_async(void);
+bool audio_stop_playback(void);
 bool audio_is_playing(void);
 
 /**
@@ -191,6 +206,7 @@ uint32_t audio_get_recorded_duration_ms(void);
  */
 uint32_t audio_get_playback_progress_ms(void);
 size_t audio_get_recorded_sample_count(void);
+uint32_t audio_get_recording_generation(void);
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples);
 bool audio_acquire_recording_lease(AudioRecordingLease *lease);
 size_t audio_copy_recording_lease(const AudioRecordingLease *lease, size_t offset,

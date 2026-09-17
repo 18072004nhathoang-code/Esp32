@@ -1,0 +1,53 @@
+#include "service_state_logic.h"
+
+#include <assert.h>
+
+int main()
+{
+    // WiFi Connect(generation 7) is invalidated by Forget(generation 8)
+    // immediately before the worker would call WiFi.begin().
+    assert(service_generation_current(7, 7, false));
+    assert(!service_generation_current(7, 8, false));
+    assert(!service_generation_current(7, 7, true));
+
+    // A stop invalidates a queued start, while a new start ordered after that
+    // stop remains current and may begin a fresh transaction.
+    assert(!service_generation_current(21, 22, false));
+    assert(service_generation_current(23, 23, false));
+
+    // The EOF callback only contributes one event. After worker cleanup marks
+    // the old track stopped, observing the same event cannot enqueue NEXT again.
+    assert(music_eof_next_index(true, 0, 2) == 1);
+    assert(music_eof_next_index(true, 1, 2) == 0);
+    assert(music_eof_next_index(false, 0, 2) == -1);
+
+    // Playback A cleanup must not change PA/ownership after Playback B owns a
+    // newer session.
+    assert(audio_session_cleanup_current(3, 3, 11, 11));
+    assert(!audio_session_cleanup_current(3, 3, 12, 11));
+    assert(!audio_session_cleanup_current(4, 3, 11, 11));
+
+    // Stop remains pending after five timeouts and is acknowledged only after
+    // the old backend actually exits. Start does not ACK on failure.
+    assert(camera_control_attempt(false, false, 5) == ServiceAttemptResult::WAIT_LATE_EXIT);
+    assert(camera_control_attempt(false, true, 5) == ServiceAttemptResult::APPLIED);
+    assert(camera_control_attempt(true, false, 5) == ServiceAttemptResult::REJECTED);
+    assert(camera_control_attempt(true, false, 2) == ServiceAttemptResult::RETRY);
+
+    // A cancelled/old AI worker can clear only its own active request; a new
+    // request remains active.
+    assert(ai_cleanup_must_clear(9, 9));
+    assert(!ai_cleanup_must_clear(8, 9));
+
+    // WAV/cache replacement requires an exact complete temporary file and a
+    // recoverable old-file backup. Partial writes preserve the old file.
+    assert(transactional_replace_can_commit(100, 100, true, true));
+    assert(!transactional_replace_can_commit(100, 99, true, true));
+    assert(!transactional_replace_can_commit(100, 100, false, true));
+    assert(!transactional_replace_can_commit(100, 100, true, false));
+
+    // Map A arriving after request B is stale for both publish and cache.
+    assert(!service_generation_current(41, 42, false));
+    assert(service_generation_current(42, 42, false));
+    return 0;
+}

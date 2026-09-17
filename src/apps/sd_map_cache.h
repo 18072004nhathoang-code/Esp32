@@ -63,6 +63,11 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
  */
 bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, const uint8_t *in_buf, size_t size);
 
+typedef bool (*SdMapCacheCommitGuard)(void *context);
+bool sd_map_cache_write_guarded(double lat, double lon, int zoom, const char *maptype,
+                                const uint8_t *in_buf, size_t size,
+                                SdMapCacheCommitGuard can_commit, void *context);
+
 /**
  * @brief Lấy dung lượng còn trống trên thẻ nhớ MicroSD (MB)
  */

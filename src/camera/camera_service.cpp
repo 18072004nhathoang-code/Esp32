@@ -84,6 +84,18 @@ uint32_t camera_service_get_session_id(void)
     return active_source == CAM_SOURCE_NETWORK_STREAM ? g_network_camera.getSessionId() : 0;
 }
 
+CameraFailureReason camera_service_get_failure_reason(void)
+{
+    return active_source == CAM_SOURCE_NETWORK_STREAM
+        ? g_network_camera.getFailureReason() : CAM_FAILURE_NONE;
+}
+
+CameraTransportSecurity camera_service_get_transport_security(void)
+{
+    return active_source == CAM_SOURCE_NETWORK_STREAM
+        ? g_network_camera.getTransportSecurity() : CAM_TRANSPORT_NONE;
+}
+
 bool camera_service_is_connected(void)
 {
     if (active_source == CAM_SOURCE_LOCAL_DVP)

@@ -35,10 +35,11 @@ static void volume_slider_cb(lv_event_t *e)
 {
     lv_obj_t *slider = lv_event_get_target(e);
     int val = lv_slider_get_value(slider);
-    audio_set_volume((uint8_t)val);
+    const bool queued = audio_set_volume_async((uint8_t)val);
     if (lbl_vol_val)
     {
-        lv_label_set_text_fmt(lbl_vol_val, LV_SYMBOL_VOLUME_MAX " Loa: %d%%", val);
+        if (queued) lv_label_set_text_fmt(lbl_vol_val, LV_SYMBOL_VOLUME_MAX " Loa: %d%%", val);
+        else lv_label_set_text(lbl_vol_val, "Audio queue busy");
     }
 }
 
@@ -52,19 +53,20 @@ static void record_btn_cb(lv_event_t *e)
 {
     if (audio_is_recording())
     {
-        audio_stop_recording();
+        const bool queued = audio_stop_recording_async();
         lv_label_set_text(lbl_record_btn, LV_SYMBOL_PLAY " Thu");
         lv_obj_set_style_bg_color(btn_record, lv_color_hex(COLOR_ACCENT_RED), 0);
         if (lbl_recorder_status)
         {
-            uint32_t dur = audio_get_recorded_duration_ms();
-            lv_label_set_text_fmt(lbl_recorder_status, "Đã thu %.1fs • đang lưu WAV...", (float)dur / 1000.0f);
-            lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+            lv_label_set_text(lbl_recorder_status,
+                queued ? "Đang chốt bản thu và lưu WAV..." : "Không thể gửi lệnh dừng thu");
+            lv_obj_set_style_text_color(lbl_recorder_status,
+                lv_color_hex(queued ? COLOR_ACCENT_AMBER : COLOR_ACCENT_RED), 0);
         }
     }
     else
     {
-        if (audio_start_recording(10))
+        if (audio_start_recording_async(10))
         {
             lv_label_set_text(lbl_record_btn, LV_SYMBOL_STOP " Dừng");
             lv_obj_set_style_bg_color(btn_record, lv_color_hex(0xE53E3E), 0);
@@ -94,13 +96,13 @@ static void play_btn_cb(lv_event_t *e)
         lv_obj_set_style_bg_color(btn_play, lv_color_hex(COLOR_ACCENT_GREEN), 0);
         if (lbl_recorder_status)
         {
-            lv_label_set_text(lbl_recorder_status, "⏹ Đã dừng phát lại");
+            lv_label_set_text(lbl_recorder_status, LV_SYMBOL_STOP " Đã dừng phát lại");
             lv_obj_set_style_text_color(lbl_recorder_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
         }
     }
     else
     {
-        if (audio_start_playback())
+        if (audio_start_playback_async())
         {
             lv_label_set_text(lbl_play_btn, LV_SYMBOL_STOP " Dừng");
             lv_obj_set_style_bg_color(btn_play, lv_color_hex(0x2B6CB0), 0);
@@ -295,7 +297,7 @@ void audio_app_open(lv_obj_t *parent)
 
 void audio_app_close(void)
 {
-    audio_stop_recording();
+    audio_stop_recording_async();
     audio_stop_playback();
     is_app_active = false;
     main_container = nullptr;

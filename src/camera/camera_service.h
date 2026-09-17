@@ -41,6 +41,8 @@ NetworkCameraProfile camera_service_get_network_profile(void);
  */
 CameraRuntimeState camera_service_get_runtime_state(void);
 uint32_t camera_service_get_session_id(void);
+CameraFailureReason camera_service_get_failure_reason(void);
+CameraTransportSecurity camera_service_get_transport_security(void);
 
 /**
  * @brief Kiểm tra camera đã kết nối và sẵn sàng truyền frame

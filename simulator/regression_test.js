@@ -222,6 +222,8 @@ const settingsService = source('src/os/settings_service.cpp');
 const wifiService = source('src/os/wifi_manager.cpp');
 const cameraUi = source('src/apps/camera_app.cpp');
 const audioService = source('src/audio/audio_manager.cpp');
+const settingsServiceImpl = source('src/os/settings_service.cpp');
+const platformio = source('platformio.ini');
 
 assert.match(aiService, /https:\/\//);
 assert.match(aiService, /Content-Type", "audio\/wav/);
@@ -257,5 +259,10 @@ assert.match(aiService, /kTtsBodyLimit/);
 assert.match(aiService, /deserializeJson/);
 assert.match(aiService, /serializeJson/);
 assert.doesNotMatch(aiService, /extract_json_string|json_object_envelope_valid|json_escape/);
+assert.match(platformio, /ESP32-audioI2S\.git#928c420d49fce2a09fa91f490b9fcabed6447c67/);
+assert.match(musicService, /xTaskNotify\(audio_task_handle, MUSIC_EVENT_EOF, eSetBits\)/);
+assert.doesNotMatch(musicService.match(/void audio_eof_mp3[\s\S]*$/)[0].split('}')[0], /music_player_next/);
+assert.match(settingsServiceImpl, /SettingsWorker/);
+assert.match(settingsServiceImpl, /xQueueSend\(s_command_queue/);
 
 console.log('Behavioral regression tests: PASS');

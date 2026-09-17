@@ -74,6 +74,8 @@ static lv_obj_t *lbl_pitch_val = nullptr;
 
 // Màu chủ đề Accent hiện tại (Mặc định: Cyan)
 static lv_color_t theme_accent = lv_color_hex(COLOR_ACCENT_CYAN);
+static uint32_t applied_settings_revision = 0;
+static bool applying_settings_runtime = false;
 
 enum AppID : uintptr_t {
     APP_NONE = 0,
@@ -147,50 +149,69 @@ static void app_icon_event_cb(lv_event_t *e)
 /* Callback thanh trượt độ sáng màn hình PWM */
 static void brightness_slider_event_cb(lv_event_t *e)
 {
+    if (applying_settings_runtime) return;
     lv_obj_t *slider = lv_event_get_target(e);
     int val = lv_slider_get_value(slider);
-    lvgl_port_set_brightness((uint8_t)val);
 
     if (lbl_brightness_val)
     {
         lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %d%%", val);
     }
-    if (lv_event_get_code(e) == LV_EVENT_RELEASED && lbl_settings_status)
+    if (lv_event_get_code(e) == LV_EVENT_RELEASED)
     {
-        bool ok = settings_service_set_brightness((uint8_t)val);
-        lv_label_set_text(lbl_settings_status, ok ? "Đã lưu NVS" : settings_service_get_last_error());
-        lv_obj_set_style_text_color(lbl_settings_status,
-            lv_color_hex(ok ? COLOR_ACCENT_GREEN : COLOR_ACCENT_RED), 0);
+        const bool queued = settings_service_set_brightness((uint8_t)val);
+        if (!queued)
+        {
+            const MiniOsSettings saved = settings_service_get();
+            lv_slider_set_value(slider, saved.brightness, LV_ANIM_OFF);
+            if (lbl_brightness_val)
+                lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", saved.brightness);
+        }
+        if (lbl_settings_status)
+        {
+            char error[80] = {};
+            settings_service_copy_last_error(error, sizeof(error));
+            lv_label_set_text(lbl_settings_status, queued ? "Đang lưu NVS..." : error);
+            lv_obj_set_style_text_color(lbl_settings_status,
+                lv_color_hex(queued ? COLOR_ACCENT_AMBER : COLOR_ACCENT_RED), 0);
+        }
     }
 }
 
 /* Callback chọn màu chủ đề */
 static void theme_color_event_cb(lv_event_t *e)
 {
+    if (applying_settings_runtime) return;
     uintptr_t color_val = (uintptr_t)lv_event_get_user_data(e);
-    theme_accent = lv_color_hex(color_val);
-    apply_accent_theme();
     bool ok = settings_service_set_accent((uint32_t)color_val);
     if (lbl_settings_status)
     {
-        lv_label_set_text(lbl_settings_status, ok ? "Đã lưu màu chủ đề" : settings_service_get_last_error());
+        char error[80] = {};
+        settings_service_copy_last_error(error, sizeof(error));
+        lv_label_set_text(lbl_settings_status, ok ? "Đang lưu màu chủ đề..." : error);
         lv_obj_set_style_text_color(lbl_settings_status,
-            lv_color_hex(ok ? COLOR_ACCENT_GREEN : COLOR_ACCENT_RED), 0);
+            lv_color_hex(ok ? COLOR_ACCENT_AMBER : COLOR_ACCENT_RED), 0);
     }
 }
 
 static void wifi_reconnect_event_cb(lv_event_t *e)
 {
+    if (applying_settings_runtime) return;
     if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
     bool enabled = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     if (settings_service_set_wifi_auto_reconnect(enabled))
     {
-        wifi_manager_set_auto_reconnect(enabled);
-        if (lbl_settings_status) lv_label_set_text(lbl_settings_status, "Đã lưu tự động kết nối WiFi");
+        if (lbl_settings_status)
+        {
+            lv_label_set_text(lbl_settings_status, "Đang lưu tự động kết nối WiFi...");
+            lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+        }
     }
     else if (lbl_settings_status)
     {
-        lv_label_set_text(lbl_settings_status, settings_service_get_last_error());
+        char error[80] = {};
+        settings_service_copy_last_error(error, sizeof(error));
+        lv_label_set_text(lbl_settings_status, error);
         lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_RED), 0);
     }
 }
@@ -202,12 +223,17 @@ static void power_timeout_cycle_cb(lv_event_t *e)
     uint32_t new_dim = 30, new_sleep = 60;
     if (dim <= 30) { new_dim = 60; new_sleep = 120; }
     else if (dim <= 60) { new_dim = 120; new_sleep = 300; }
-    power_manager_set_timeouts(new_dim, new_sleep);
     bool ok = settings_service_set_power_timeouts(new_dim, new_sleep);
+    if (!ok)
+    {
+        const MiniOsSettings saved = settings_service_get();
+        new_dim = saved.dim_timeout_sec;
+        new_sleep = saved.sleep_timeout_sec;
+    }
     if (lbl_power_timeouts)
     {
         lv_label_set_text_fmt(lbl_power_timeouts, "%s Mờ: %lus • Tắt LCD: %lus",
-                              ok ? "" : "Lỗi lưu •", (unsigned long)new_dim, (unsigned long)new_sleep);
+                              ok ? "Đang lưu •" : "Lỗi queue •", (unsigned long)new_dim, (unsigned long)new_sleep);
     }
 }
 
@@ -1140,6 +1166,7 @@ void ui_open_camera_app(void)
 void ui_init(void)
 {
     theme_accent = lv_color_hex(settings_service_get().accent_rgb);
+    applied_settings_revision = settings_service_get_completion_revision();
     if (lvgl_port_lock(1000))
     {
         lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(COLOR_OS_BG), 0);
@@ -1156,6 +1183,67 @@ void ui_init(void)
 void ui_update_periodic(const SystemStats &stats)
 {
     if (!lvgl_port_lock(200)) return;
+
+    const uint32_t settings_revision = settings_service_get_completion_revision();
+    if (settings_revision != applied_settings_revision)
+    {
+        const bool committed = settings_service_last_commit_ok();
+        if (committed)
+        {
+            const MiniOsSettings cfg = settings_service_get();
+            applying_settings_runtime = true;
+            theme_accent = lv_color_hex(cfg.accent_rgb);
+            apply_accent_theme();
+            power_manager_set_timeouts(cfg.dim_timeout_sec, cfg.sleep_timeout_sec);
+            power_manager_set_active_brightness(cfg.brightness);
+            wifi_manager_set_auto_reconnect(cfg.wifi_auto_reconnect);
+            if (slider_brightness) lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
+            if (lbl_brightness_val)
+                lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", cfg.brightness);
+            if (sw_wifi_reconnect)
+            {
+                if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+                else lv_obj_clear_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+            }
+            if (lbl_power_timeouts)
+                lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
+                    static_cast<unsigned long>(cfg.dim_timeout_sec),
+                    static_cast<unsigned long>(cfg.sleep_timeout_sec));
+            if (lbl_settings_status)
+            {
+                lv_label_set_text(lbl_settings_status, "Đã lưu và áp dụng NVS");
+                lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+            }
+            applying_settings_runtime = false;
+        }
+        else
+        {
+            const MiniOsSettings cfg = settings_service_get();
+            applying_settings_runtime = true;
+            if (slider_brightness) lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
+            if (lbl_brightness_val)
+                lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", cfg.brightness);
+            if (sw_wifi_reconnect)
+            {
+                if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+                else lv_obj_clear_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+            }
+            if (lbl_power_timeouts)
+                lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
+                    static_cast<unsigned long>(cfg.dim_timeout_sec),
+                    static_cast<unsigned long>(cfg.sleep_timeout_sec));
+            applying_settings_runtime = false;
+
+            char error[80] = {};
+            settings_service_copy_last_error(error, sizeof(error));
+            if (lbl_settings_status)
+            {
+                lv_label_set_text(lbl_settings_status, error);
+                lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_RED), 0);
+            }
+        }
+        applied_settings_revision = settings_revision;
+    }
 
     // 1. Cập nhật đồng hồ Status Bar
     if (lbl_clock)

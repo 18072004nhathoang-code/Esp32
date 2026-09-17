@@ -7,7 +7,7 @@
 #include "sd_map_cache.h"
 #include "../display/lvgl_port.h"
 #include "../storage/storage_manager.h"
-#include "firmware_contracts.h"
+#include "service_state_logic.h"
 
 static bool s_cache_ready = false;
 
@@ -19,6 +19,74 @@ static bool sd_acquire_bus(uint32_t timeout_ms = 1000)
 static void sd_release_bus(void)
 {
     storage_unlock();
+}
+
+static bool valid_cached_jpeg_locked(fs::FS &fs, const char *path)
+{
+    File file = fs.open(path, FILE_READ);
+    if (!file || file.size() < 4)
+    {
+        if (file) file.close();
+        return false;
+    }
+    uint8_t first[2] = {}, last[2] = {};
+    const bool ok = file.read(first, sizeof(first)) == sizeof(first) &&
+                    file.seek(file.size() - 2) &&
+                    file.read(last, sizeof(last)) == sizeof(last) &&
+                    first[0] == 0xFF && first[1] == 0xD8 &&
+                    last[0] == 0xFF && last[1] == 0xD9;
+    file.close();
+    return ok;
+}
+
+static String cache_entry_path(const char *name)
+{
+    if (!name || !*name) return String();
+    String path(name);
+    if (!path.startsWith("/")) path = String(SD_MAPS_DIR) + "/" + path;
+    return path;
+}
+
+static void recover_cache_suffix_locked(fs::FS &fs, const char *suffix)
+{
+    File dir = fs.open(SD_MAPS_DIR);
+    if (!dir || !dir.isDirectory())
+    {
+        if (dir) dir.close();
+        return;
+    }
+    File entry = dir.openNextFile();
+    while (entry)
+    {
+        String path = cache_entry_path(entry.name());
+        entry.close();
+        if (path.endsWith(suffix))
+        {
+            String final_path = path.substring(0, path.length() - strlen(suffix));
+            const bool final_valid = fs.exists(final_path.c_str()) &&
+                                     valid_cached_jpeg_locked(fs, final_path.c_str());
+            if (final_valid)
+            {
+                fs.remove(path.c_str());
+            }
+            else
+            {
+                if (fs.exists(final_path.c_str())) fs.remove(final_path.c_str());
+                if (valid_cached_jpeg_locked(fs, path.c_str()))
+                {
+                    if (fs.rename(path.c_str(), final_path.c_str()))
+                        Serial.printf("[SD_CACHE] Recovered %s from %s\n",
+                                      final_path.c_str(), suffix);
+                }
+                else
+                {
+                    fs.remove(path.c_str());
+                }
+            }
+        }
+        entry = dir.openNextFile();
+    }
+    dir.close();
 }
 
 bool sd_map_cache_init(void)
@@ -42,6 +110,13 @@ bool sd_map_cache_init(void)
     {
         Serial.printf("[SD_CACHE] Tạo thư mục lưu trữ bản đồ: %s\n", SD_MAPS_DIR);
         ready = storage_get_fs().mkdir(SD_MAPS_DIR);
+    }
+
+    if (ready)
+    {
+        fs::FS &fs = storage_get_fs();
+        recover_cache_suffix_locked(fs, ".bak");
+        recover_cache_suffix_locked(fs, ".tmp");
     }
 
     sd_release_bus();
@@ -122,7 +197,9 @@ int sd_map_cache_read(double lat, double lon, int zoom, const char *maptype, uin
     return (int)bytesRead;
 }
 
-bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, const uint8_t *in_buf, size_t size)
+bool sd_map_cache_write_guarded(double lat, double lon, int zoom, const char *maptype,
+                                const uint8_t *in_buf, size_t size,
+                                SdMapCacheCommitGuard can_commit, void *context)
 {
     if (!sd_map_cache_is_available() || !in_buf || size == 0) return false;
     if (!sd_acquire_bus(500)) return false;
@@ -153,17 +230,23 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
         File verify = fs.open(temp_path, FILE_READ);
         temp_valid = verify && verify.size() == size;
         if (verify) verify.close();
+        temp_valid = temp_valid && valid_cached_jpeg_locked(fs, temp_path);
     }
 
     bool committed = false;
-    if (temp_valid)
+    if (temp_valid && (!can_commit || can_commit(context)))
     {
         if (fs.exists(backup_path)) fs.remove(backup_path);
         const bool had_old = fs.exists(filepath);
         const bool backed_up = !had_old || fs.rename(filepath, backup_path);
-        if (cache_temp_can_replace(bytesWritten == size, temp_valid, backed_up))
+        if (transactional_replace_can_commit(size, bytesWritten, temp_valid, backed_up))
         {
-            committed = fs.rename(temp_path, filepath);
+            committed = (!can_commit || can_commit(context)) && fs.rename(temp_path, filepath);
+            if (committed && can_commit && !can_commit(context))
+            {
+                fs.remove(filepath);
+                committed = false;
+            }
             if (committed)
             {
                 if (had_old) fs.remove(backup_path);
@@ -183,6 +266,13 @@ bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype, c
         Serial.printf("[SD_CACHE] ⚠️ Ghi cache thất bại; giữ bản cũ: %u/%u bytes\n",
                       (unsigned)bytesWritten, (unsigned)size);
     return committed;
+}
+
+bool sd_map_cache_write(double lat, double lon, int zoom, const char *maptype,
+                        const uint8_t *in_buf, size_t size)
+{
+    return sd_map_cache_write_guarded(lat, lon, zoom, maptype, in_buf, size,
+                                      nullptr, nullptr);
 }
 
 uint64_t sd_map_cache_get_free_mb(void)

@@ -34,6 +34,11 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
+#if defined(CONFIG_MBEDTLS_HAVE_TIME_DATE) && CONFIG_MBEDTLS_HAVE_TIME_DATE
+    Serial.println("[SECURITY] TLS certificate chain/hostname/date validation: ENABLED");
+#else
+    Serial.println("[SECURITY] TLS certificate chain/hostname validation: ENABLED; certificate date validation: UNAVAILABLE in this framework build");
+#endif
     Serial.printf("[SELF_TEST] Firmware C++ contracts: %s\n",
                   firmware_regression_run() ? "PASS" : "FAIL");
 

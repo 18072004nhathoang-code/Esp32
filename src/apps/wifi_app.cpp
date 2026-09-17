@@ -224,9 +224,10 @@ static void forget_btn_event_cb(lv_event_t *e)
     const bool forgotten = wifi_manager_forget_network();
     if (lbl_status)
     {
-        lv_label_set_text(lbl_status, forgotten ? LV_SYMBOL_TRASH " Đã quên mạng khỏi hệ thống"
-                                                : LV_SYMBOL_CLOSE " Không thể xóa mạng khỏi NVS");
-        lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_RED), 0);
+        lv_label_set_text(lbl_status, forgotten ? LV_SYMBOL_REFRESH " Đang ngắt và xóa mạng..."
+                                                : LV_SYMBOL_CLOSE " Không thể gửi lệnh quên mạng");
+        lv_obj_set_style_text_color(lbl_status,
+            lv_color_hex(forgotten ? COLOR_ACCENT_AMBER : COLOR_ACCENT_RED), 0);
     }
     if (ta_password)
     {

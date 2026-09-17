@@ -10,6 +10,7 @@
 #include <TJpg_Decoder.h>
 #include "../display/tjpg_guard.h"
 #include "firmware_contracts.h"
+#include "service_state_logic.h"
 #include <esp_heap_caps.h>
 #include <stdlib.h>
 
@@ -78,6 +79,8 @@ static volatile uint32_t worker_received_revision = 0;
 static uint32_t worker_retry_revision = 0;
 static uint8_t worker_retry_count = 0;
 static uint32_t worker_retry_after_ms = 0;
+static volatile bool worker_control_error = false;
+static volatile bool worker_decode_error = false;
 static uint32_t service_session_id = 0;
 static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -297,15 +300,23 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         worker_retry_revision = control.revision;
         worker_retry_count = 0;
         worker_retry_after_ms = 0;
+        worker_control_error = false;
     }
-    if (worker_retry_count >= 5 || static_cast<int32_t>(millis() - worker_retry_after_ms) < 0)
+    if (static_cast<int32_t>(millis() - worker_retry_after_ms) < 0)
+        return preview_active;
+    // A failed start/configuration waits for a new revision after the bounded
+    // retries. A stop keeps polling at low rate so a late backend exit still
+    // owns and completes preview cleanup.
+    if (worker_retry_count >= 5 && control.run_service)
         return preview_active;
     if (!control.active)
     {
         if (!camera_service_stop(2000))
         {
-            ++worker_retry_count;
-            worker_retry_after_ms = millis() + 250U * worker_retry_count;
+            if (worker_retry_count < 5) ++worker_retry_count;
+            if (worker_retry_count >= 5) worker_control_error = true;
+            worker_retry_after_ms = millis() +
+                (worker_retry_count >= 5 ? 2000U : 250U * worker_retry_count);
             return preview_active;
         }
         if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
@@ -313,6 +324,7 @@ static bool worker_apply_control(const CameraWorkerControl &control)
             preview_active = false;
             free_worker_preview_buffers();
             preview_session_id = 0;
+            worker_decode_error = false;
             worker_session_id = control.session_id;
             worker_ack_revision = control.revision;
             xSemaphoreGive(preview_mutex);
@@ -326,8 +338,10 @@ static bool worker_apply_control(const CameraWorkerControl &control)
     {
         if (!camera_service_stop(2000))
         {
-            ++worker_retry_count;
-            worker_retry_after_ms = millis() + 250U * worker_retry_count;
+            if (worker_retry_count < 5) ++worker_retry_count;
+            if (worker_retry_count >= 5) worker_control_error = true;
+            worker_retry_after_ms = millis() +
+                (worker_retry_count >= 5 ? 2000U : 250U * worker_retry_count);
             return preview_active;
         }
         const size_t pixels = static_cast<size_t>(control.width) * control.height;
@@ -350,6 +364,7 @@ static bool worker_apply_control(const CameraWorkerControl &control)
                 memset(preview_front, 0, pixels * sizeof(uint16_t));
                 memset(preview_back, 0, pixels * sizeof(uint16_t));
                 preview_active = true;
+                worker_decode_error = false;
             }
             else
             {
@@ -362,7 +377,8 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         }
         if (!preview_active)
         {
-            ++worker_retry_count;
+            if (worker_retry_count < 5) ++worker_retry_count;
+            if (worker_retry_count >= 5) worker_control_error = true;
             worker_retry_after_ms = millis() + 250U * worker_retry_count;
             return false;
         }
@@ -386,16 +402,20 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         resulting_state == CAM_STATE_STARTING || resulting_state == CAM_STATE_RUNNING,
         resulting_state == CAM_STATE_STOPPED || resulting_state == CAM_STATE_NOT_CONFIGURED ||
             resulting_state == CAM_STATE_PASSWORD_REQUIRED);
-    if (!can_ack)
+    const ServiceAttemptResult attempt = camera_control_attempt(
+        control.run_service, can_ack, worker_retry_count);
+    if (attempt != ServiceAttemptResult::APPLIED)
     {
         const bool actionable = resulting_state == CAM_STATE_PASSWORD_REQUIRED ||
                                 resulting_state == CAM_STATE_NOT_CONFIGURED || resulting_state == CAM_STATE_ERROR;
         worker_retry_count = actionable ? 5 : static_cast<uint8_t>(worker_retry_count + 1);
+        if (worker_retry_count >= 5) worker_control_error = true;
         worker_retry_after_ms = millis() + 250U * worker_retry_count;
         return preview_active;
     }
     worker_ack_revision = control.revision;
     worker_retry_count = 0;
+    worker_control_error = false;
     return preview_active;
 }
 
@@ -466,8 +486,13 @@ static void decode_latest_frame(uint32_t session_id)
             preview_jpeg_bytes = frame->len;
             preview_source_w = orig_w;
             preview_source_h = orig_h;
+            worker_decode_error = false;
         }
         xSemaphoreGive(preview_mutex);
+    }
+    else if (!decoded)
+    {
+        worker_decode_error = true;
     }
     camera_service_return_frame(frame);
 }
@@ -770,7 +795,7 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_set_size(dd_security, SCREEN_WIDTH - 28, 30);
     lv_obj_set_pos(dd_security, 6, 396);
     lv_dropdown_set_options(dd_security,
-        "HTTPS verified (CA required)\nHTTPS insecure - WARNING\nHTTP plaintext - WARNING");
+        "HTTPS CA/host (date unchecked)\nHTTPS insecure - WARNING\nHTTP plaintext - WARNING");
     lv_dropdown_set_selected(dd_security, static_cast<uint16_t>(cur_prof.security_mode));
     lv_obj_set_style_bg_color(dd_security, lv_color_hex(0x151B27), 0);
     lv_obj_set_style_text_font(dd_security, UI_FONT_SMALL, 0);
@@ -908,12 +933,37 @@ void camera_app_update(void)
     {
         const CameraRuntimeState state = camera_service_get_runtime_state();
         const uint32_t age = latest_preview_timestamp == 0 ? UINT32_MAX : millis() - latest_preview_timestamp;
-        if (state == CAM_STATE_RUNNING && latest_preview_timestamp == 0)
-            lv_label_set_text(lbl_cam_status, "RUNNING • NO FRAME");
+        if (worker_control_error)
+            lv_label_set_text_fmt(lbl_cam_status, "CONTROL ERROR • received=%u applied=%u",
+                                  worker_received_revision, worker_ack_revision);
+        else if (state == CAM_STATE_STARTING)
+            lv_label_set_text(lbl_cam_status, "WORKER STARTING");
+        else if (state == CAM_STATE_STOPPING)
+            lv_label_set_text(lbl_cam_status, "WORKER STOPPING");
+        else if (state == CAM_STATE_PASSWORD_REQUIRED)
+            lv_label_set_text(lbl_cam_status, "PASSWORD REQUIRED");
+        else if (worker_decode_error || camera_service_get_failure_reason() == CAM_FAILURE_DECODE)
+            lv_label_set_text(lbl_cam_status, "DECODE ERROR");
+        else if (camera_service_get_failure_reason() == CAM_FAILURE_TLS)
+            lv_label_set_text(lbl_cam_status, "TLS ERROR");
+        else if (camera_service_get_failure_reason() == CAM_FAILURE_AUTH)
+            lv_label_set_text(lbl_cam_status, "PASSWORD REQUIRED");
+        else if (camera_service_get_snapshot_status() == CAM_STATUS_ERROR)
+            lv_label_set_text(lbl_cam_status, "FETCH ERROR");
+        else if (state == CAM_STATE_RUNNING && latest_preview_timestamp == 0)
+            lv_label_set_text(lbl_cam_status, "WORKER RUNNING • WAITING FRAME");
         else if (state == CAM_STATE_RUNNING && age > 5000)
             lv_label_set_text(lbl_cam_status, "FRAME STALE");
-        else if (state == CAM_STATE_RUNNING && camera_service_get_snapshot_status() == CAM_STATUS_ERROR)
-            lv_label_set_text(lbl_cam_status, "FETCH/DECODE ERROR");
+        else if (state == CAM_STATE_RUNNING && latest_preview_timestamp != 0)
+        {
+            const CameraTransportSecurity transport = camera_service_get_transport_security();
+            if (transport == CAM_TRANSPORT_HTTP_PLAINTEXT)
+                lv_label_set_text(lbl_cam_status, "FRAME READY • HTTP PLAINTEXT");
+            else if (transport == CAM_TRANSPORT_HTTPS_UNVERIFIED)
+                lv_label_set_text(lbl_cam_status, "FRAME READY • HTTPS UNVERIFIED");
+            else
+                lv_label_set_text(lbl_cam_status, "FRAME READY • TLS DATE UNCHECKED");
+        }
         else
             lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
     }

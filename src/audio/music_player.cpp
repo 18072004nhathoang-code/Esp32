@@ -10,6 +10,7 @@
 #include "../storage/storage_manager.h"
 #include <Audio.h>
 #include <FS.h>
+#include "service_state_logic.h"
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
@@ -37,7 +38,6 @@ enum MusicCmdType
     MUSIC_CMD_TOGGLE_PLAY,
     MUSIC_CMD_NEXT,
     MUSIC_CMD_PREV,
-    MUSIC_CMD_STOP,
     MUSIC_CMD_SEEK,
     MUSIC_CMD_SET_VOLUME
 };
@@ -52,12 +52,14 @@ struct MusicCommand
 
 static QueueHandle_t music_cmd_queue = nullptr;
 static bool music_owns_audio = false;
-static uint32_t music_session_id = 0;
+static uint32_t music_owner_session = 0;
 static uint32_t codec_sample_rate = 0;
+static constexpr uint32_t MUSIC_EVENT_EOF = 1U << 0;
+static constexpr uint32_t MUSIC_EVENT_STOP = 1U << 1;
 
 static bool enqueue_music_command(const MusicCommand &cmd)
 {
-    if (!music_cmd_queue || xQueueSend(music_cmd_queue, &cmd, pdMS_TO_TICKS(50)) != pdTRUE)
+    if (!music_cmd_queue || xQueueSend(music_cmd_queue, &cmd, 0) != pdTRUE)
     {
         Serial.println("[MUSIC_PLAYER] ❌ Hàng đợi lệnh không sẵn sàng hoặc đã đầy");
         return false;
@@ -69,6 +71,12 @@ static bool acquire_music_audio(void)
 {
     if (music_owns_audio) return true;
     if (!audio_request_ownership(AUDIO_OWNER_MUSIC)) return false;
+    music_owner_session = audio_get_owner_session(AUDIO_OWNER_MUSIC);
+    if (music_owner_session == 0)
+    {
+        audio_release_ownership(AUDIO_OWNER_MUSIC);
+        return false;
+    }
     music_owns_audio = true;
     return true;
 }
@@ -77,12 +85,16 @@ static void release_music_audio(void)
 {
     if (!music_owns_audio) return;
     music_owns_audio = false;
-    audio_release_ownership(AUDIO_OWNER_MUSIC);
+    const uint32_t session = music_owner_session;
+    music_owner_session = 0;
+    audio_release_ownership_session(AUDIO_OWNER_MUSIC, session);
 }
 
 /* Hàm hỗ trợ dừng và dọn dẹp Audio engine nội bộ trên Core 0 */
 static void internal_stop_audio_locked(void)
 {
+    if (music_owns_audio)
+        audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
     if (audio)
     {
         if (storage_lock(200))
@@ -94,13 +106,29 @@ static void internal_stop_audio_locked(void)
         delete audio;
         audio = nullptr;
     }
-    audio_set_pa_enabled(false);
     codec_sample_rate = 0;
-    ++music_session_id;
-    if (music_session_id == 0) ++music_session_id;
     player_state.is_playing = false;
     player_state.is_paused = false;
     player_state.current_time_sec = 0;
+}
+
+static void handle_eof_event(void)
+{
+    int next_idx = -1;
+    if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        next_idx = music_eof_next_index(player_state.is_playing,
+                                        player_state.current_track_idx, total_tracks_found);
+        if (next_idx >= 0)
+        {
+            internal_stop_audio_locked();
+        }
+        xSemaphoreGive(audio_mutex);
+    }
+    if (next_idx < 0) return;
+    release_music_audio();
+    if (!music_player_play_index(next_idx))
+        Serial.println("[MUSIC_AUDIO] EOF cleanup complete; next command enqueue failed");
 }
 
 /* FreeRTOS Task chạy riêng biệt trên CORE 0 giải mã MP3 liên tục */
@@ -176,7 +204,7 @@ static void music_audio_task(void *pvParameters)
                                         player_state.is_playing = true;
                                         player_state.is_paused = false;
                                         codec_sample_rate = 44100;
-                                        audio_set_pa_enabled(player_state.volume > 0);
+                                        audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                                         Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", cmd.filepath);
                                     }
                                     else
@@ -209,11 +237,12 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
-                        if (audio && player_state.is_playing && !player_state.is_paused)
+                            if (audio && player_state.is_playing && !player_state.is_paused)
                         {
                             if (audio->pauseResume())
                             {
                                 player_state.is_paused = true;
+                                audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
                                 Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng phát nhạc");
                             }
                         }
@@ -237,6 +266,7 @@ static void music_audio_task(void *pvParameters)
                                     player_state.is_paused = false;
                                     player_state.is_playing = true;
                                     resumed = true;
+                                    audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                                     Serial.println("[MUSIC_AUDIO] ▶ Đã tiếp tục phát nhạc");
                                 }
                             }
@@ -246,27 +276,6 @@ static void music_audio_task(void *pvParameters)
                         {
                             release_music_audio();
                         }
-                    }
-                }
-                break;
-
-                case MUSIC_CMD_STOP:
-                {
-                    bool stopped = false;
-                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
-                    {
-                        internal_stop_audio_locked();
-                        stopped = true;
-                        xSemaphoreGive(audio_mutex);
-                    }
-                    if (stopped)
-                    {
-                        release_music_audio();
-                        Serial.println("[MUSIC_AUDIO] ⏹ Đã dừng phát nhạc và khôi phục I2S duplex");
-                    }
-                    else
-                    {
-                        Serial.println("[MUSIC_AUDIO] ❌ Không thể dừng an toàn; giữ lease I2S để tránh xung đột driver");
                     }
                 }
                 break;
@@ -299,6 +308,8 @@ static void music_audio_task(void *pvParameters)
                     {
                         player_state.volume = (uint8_t)cmd.param;
                         audio_set_volume(player_state.volume);
+                        if (audio && player_state.is_playing && !player_state.is_paused)
+                            audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                         xSemaphoreGive(audio_mutex);
                     }
                 }
@@ -316,6 +327,7 @@ static void music_audio_task(void *pvParameters)
             {
                 if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
                 {
+                    bool release_after_loop = false;
                     if (audio != nullptr && player_state.is_playing && !player_state.is_paused)
                     {
                         // Khóa storage bảo vệ đọc SPI/SD trong suốt chu kỳ loop
@@ -335,16 +347,20 @@ static void music_audio_task(void *pvParameters)
                             {
                                 Serial.printf("[MUSIC_AUDIO] ❌ Codec clock rejected Fs=%u\n", decoded_rate);
                                 internal_stop_audio_locked();
+                                release_after_loop = true;
                             }
                         }
 
-                        uint32_t cur = audio->getAudioCurrentTime();
-                        uint32_t dur = audio->getAudioFileDuration();
-
-                        if (cur > 0) player_state.current_time_sec = cur;
-                        if (dur > 0) player_state.total_duration_sec = dur;
+                        if (audio)
+                        {
+                            uint32_t cur = audio->getAudioCurrentTime();
+                            uint32_t dur = audio->getAudioFileDuration();
+                            if (cur > 0) player_state.current_time_sec = cur;
+                            if (dur > 0) player_state.total_duration_sec = dur;
+                        }
                     }
                     xSemaphoreGive(audio_mutex);
+                    if (release_after_loop) release_music_audio();
                 }
 
                 // Nhường nhẹ CPU để không làm đói các task khác trên Core 0
@@ -359,6 +375,23 @@ static void music_audio_task(void *pvParameters)
         else
         {
             vTaskDelay(pdMS_TO_TICKS(15));
+        }
+
+        uint32_t events = 0;
+        if (xTaskNotifyWait(0, UINT32_MAX, &events, 0) == pdTRUE)
+        {
+            if (events & MUSIC_EVENT_STOP)
+            {
+                bool stopped = false;
+                if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    internal_stop_audio_locked();
+                    stopped = true;
+                    xSemaphoreGive(audio_mutex);
+                }
+                if (stopped) release_music_audio();
+            }
+            if (events & MUSIC_EVENT_EOF) handle_eof_event();
         }
     }
 }
@@ -385,7 +418,7 @@ bool music_player_init(void)
     }
 
     // PA remains disabled until a decoder has opened a real stream.
-    audio_set_pa_enabled(false);
+    // PA remains owned by AudioManager and is only enabled by an active session.
 
     // Quét thẻ nhớ MicroSD để tìm bài hát (có khóa SPI bus)
     music_player_scan_sd();
@@ -594,10 +627,8 @@ bool music_player_resume(void)
 
 bool music_player_stop(void)
 {
-    MusicCommand cmd;
-    memset(&cmd, 0, sizeof(cmd));
-    cmd.type = MUSIC_CMD_STOP;
-    if (!enqueue_music_command(cmd)) return false;
+    if (!audio_task_handle ||
+        xTaskNotify(audio_task_handle, MUSIC_EVENT_STOP, eSetBits) != pdPASS) return false;
     Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
     return true;
 }
@@ -684,6 +715,7 @@ void audio_id3data(const char *info)
 
 void audio_eof_mp3(const char *info)
 {
-    Serial.printf("[audio_eof] Bài hát kết thúc: %s -> Tự động chuyển bài kế tiếp\n", info);
-    music_player_next();
+    Serial.printf("[audio_eof] Bài hát kết thúc: %s; queue EOF event\n", info);
+    if (audio_task_handle)
+        xTaskNotify(audio_task_handle, MUSIC_EVENT_EOF, eSetBits);
 }

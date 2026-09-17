@@ -3,6 +3,7 @@
 #include "../audio/audio_manager.h"
 #include "../os/wifi_manager.h"
 #include "firmware_contracts.h"
+#include "service_state_logic.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
@@ -43,6 +44,10 @@ uint32_t s_pending_request_id = 0;
 uint32_t s_active_request_id = 0;
 uint32_t s_cancelled_through = 0;
 uint32_t s_completed_request_id = 0;
+uint32_t s_recording_base_generation = 0;
+uint32_t s_recording_deadline_ms = 0;
+bool s_waiting_record_start = false;
+bool s_waiting_record_commit = false;
 char s_last_error[128] = "AI endpoint is not configured";
 static constexpr size_t kJsonBodyLimit = 16U * 1024U;
 static constexpr size_t kTtsBodyLimit = 2U * 1024U * 1024U;
@@ -395,8 +400,10 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
         return false;
     }
 
+    const uint32_t audio_session = audio_get_owner_session(AUDIO_OWNER_AI_VOICE);
     bool ok = audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
-    audio_set_pa_enabled(ok && audio_get_volume() > 0);
+    ok = ok && audio_session != 0 &&
+         audio_set_pa_for_session(AUDIO_OWNER_AI_VOICE, audio_session, true);
     size_t offset = 0;
     while (ok && offset < wav.sample_count)
     {
@@ -407,8 +414,8 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
         offset += count;
     }
     if (ok) ok = audio_drain_tx(400);
-    audio_set_pa_enabled(false);
-    audio_release_ownership(AUDIO_OWNER_AI_VOICE);
+    if (audio_session) audio_release_ownership_session(AUDIO_OWNER_AI_VOICE, audio_session);
+    else audio_release_ownership(AUDIO_OWNER_AI_VOICE);
     return ok;
 }
 
@@ -417,8 +424,16 @@ void ai_task(void *)
     for (;;)
     {
         uint32_t request_id = 0;
+        bool wait_start = false;
+        bool wait_commit = false;
+        uint32_t base_generation = 0;
+        uint32_t recording_deadline = 0;
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
         {
+            wait_start = s_waiting_record_start;
+            wait_commit = s_waiting_record_commit;
+            base_generation = s_recording_base_generation;
+            recording_deadline = s_recording_deadline_ms;
             if (s_pending_request_id != 0)
             {
                 request_id = s_pending_request_id;
@@ -427,6 +442,44 @@ void ai_task(void *)
                 s_state = AI_STATE_PROCESSING;
             }
             xSemaphoreGive(s_mutex);
+        }
+        if (wait_start && (audio_is_recording() || deadline_expired(recording_deadline)))
+        {
+            const bool started = audio_is_recording();
+            if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                s_waiting_record_start = false;
+                if (!started && s_state == AI_STATE_LISTENING)
+                {
+                    s_recording_started = false;
+                    strlcpy(s_last_error, "Microphone/I2S start failed", sizeof(s_last_error));
+                    s_state = AI_STATE_ERROR;
+                }
+                xSemaphoreGive(s_mutex);
+            }
+        }
+        if (wait_commit)
+        {
+            const uint32_t generation = audio_get_recording_generation();
+            const bool committed = generation != base_generation;
+            if (committed || deadline_expired(recording_deadline))
+            {
+                if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    s_waiting_record_commit = false;
+                    if (committed && s_state == AI_STATE_PROCESSING &&
+                        !s_pending_request_id && !s_active_request_id)
+                    {
+                        s_pending_request_id = ++s_next_request_id;
+                    }
+                    else if (!committed && s_state == AI_STATE_PROCESSING)
+                    {
+                        strlcpy(s_last_error, "Recording finalize failed", sizeof(s_last_error));
+                        s_state = AI_STATE_ERROR;
+                    }
+                    xSemaphoreGive(s_mutex);
+                }
+            }
         }
         if (request_id != 0)
         {
@@ -448,9 +501,10 @@ void ai_task(void *)
                     !request_cancelled(request_id))
                     set_error("TTS HTTPS/WAV playback failed");
             }
-            if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+            if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
-                if (s_active_request_id == request_id) s_active_request_id = 0;
+                if (ai_cleanup_must_clear(request_id, s_active_request_id))
+                    s_active_request_id = 0;
                 s_completed_request_id = request_id;
                 if (s_state == AI_STATE_CANCELING || request_id <= s_cancelled_through)
                     s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
@@ -493,6 +547,7 @@ bool ai_voice_start_recording(void)
 {
     if (!ai_voice_is_available()) { set_error("AI Voice is not configured"); return false; }
     if (!wifi_manager_is_connected()) { set_error("WiFi is not connected"); return false; }
+    const uint32_t base_generation = audio_get_recording_generation();
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
     if (s_state != AI_STATE_IDLE || s_recording_started || s_pending_request_id || s_active_request_id)
     {
@@ -500,29 +555,23 @@ bool ai_voice_start_recording(void)
         return false;
     }
     s_recording_started = true;
+    s_recording_base_generation = base_generation;
+    s_recording_deadline_ms = millis() + 1000;
+    s_waiting_record_start = true;
+    s_waiting_record_commit = false;
     s_state = AI_STATE_LISTENING;
     xSemaphoreGive(s_mutex);
-    if (!audio_start_recording(AUDIO_RECORD_MAX_SEC))
+    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC))
     {
-        bool report_error = true;
-        if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
         {
-            report_error = s_state == AI_STATE_LISTENING;
             s_recording_started = false;
+            s_waiting_record_start = false;
+            strlcpy(s_last_error, "Audio command queue is busy", sizeof(s_last_error));
+            s_state = AI_STATE_ERROR;
             xSemaphoreGive(s_mutex);
         }
-        if (report_error) set_error("Microphone/I2S is busy");
         return false;
-    }
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        const bool still_listening = s_recording_started && s_state == AI_STATE_LISTENING;
-        xSemaphoreGive(s_mutex);
-        if (!still_listening)
-        {
-            audio_cancel_recording();
-            return false;
-        }
     }
     return true;
 }
@@ -536,29 +585,22 @@ bool ai_voice_stop_and_process(void)
         return false;
     }
     s_recording_started = false;
+    s_waiting_record_start = false;
+    s_waiting_record_commit = true;
+    s_recording_deadline_ms = millis() + 2000;
     s_state = AI_STATE_PROCESSING;
     xSemaphoreGive(s_mutex);
-    audio_stop_recording();
-    if (audio_get_recorded_sample_count() == 0)
+    if (!audio_stop_recording_async())
     {
-        bool still_processing = false;
-        if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
         {
-            still_processing = s_state == AI_STATE_PROCESSING;
+            s_waiting_record_commit = false;
+            strlcpy(s_last_error, "Audio command queue is busy", sizeof(s_last_error));
+            s_state = AI_STATE_ERROR;
             xSemaphoreGive(s_mutex);
         }
-        if (still_processing) set_error("No audio was recorded");
         return false;
     }
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    if (s_state != AI_STATE_PROCESSING || s_pending_request_id || s_active_request_id)
-    {
-        xSemaphoreGive(s_mutex);
-        return false;
-    }
-    const uint32_t request_id = ++s_next_request_id;
-    s_pending_request_id = request_id;
-    xSemaphoreGive(s_mutex);
     return true;
 }
 
@@ -567,6 +609,8 @@ void ai_voice_cancel(void)
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     const bool cancel_recording = s_recording_started;
     s_recording_started = false;
+    s_waiting_record_start = false;
+    s_waiting_record_commit = false;
     s_state = AI_STATE_CANCELING;
     if (s_pending_request_id)
     {
@@ -577,8 +621,9 @@ void ai_voice_cancel(void)
     if (s_active_request_id > s_cancelled_through) s_cancelled_through = s_active_request_id;
     const bool worker_active = s_active_request_id != 0;
     xSemaphoreGive(s_mutex);
-    if (cancel_recording) audio_cancel_recording();
-    if (!worker_active && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    if (cancel_recording && !audio_cancel_recording_async())
+        Serial.println("[AI] Unable to enqueue recording cancel");
+    if (!worker_active && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
         xSemaphoreGive(s_mutex);
@@ -663,7 +708,8 @@ bool ai_voice_play_tts(const char *text)
     bool cancelled = false;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
-        if (s_active_request_id == request_id) s_active_request_id = 0;
+        if (ai_cleanup_must_clear(request_id, s_active_request_id))
+            s_active_request_id = 0;
         s_completed_request_id = request_id;
         cancelled = request_id <= s_cancelled_through;
         if (cancelled) s_state = AI_STATE_IDLE;

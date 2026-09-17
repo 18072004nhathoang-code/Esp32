@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "firmware_contracts.h"
+#include "service_state_logic.h"
 
 // Root CA certificates (Google Trust Services GTS Root R1, ISRG Root X1, GlobalSign R3)
 static const char MAPS_TRUSTED_ROOT_CA_PEM[] PROGMEM =
@@ -109,6 +110,7 @@ static const char MAPS_TRUSTED_ROOT_CA_PEM[] PROGMEM =
 // Cấu trúc yêu cầu tải ảnh bản đồ an toàn đa luồng
 struct MapTileRequest
 {
+    uint32_t request_id;
     double lat;
     double lon;
     int zoom;
@@ -125,8 +127,61 @@ static SemaphoreHandle_t tile_swap_mutex = nullptr;
 static volatile TileDownloadStatus current_status = TILE_IDLE;
 static volatile TileSource current_source = TILE_SOURCE_NONE;
 static volatile bool has_new_tile = false;
+static uint32_t latest_request_id = 0;
+static MapTileMetadata published_metadata = {};
 static TaskHandle_t download_task_handle = nullptr;
 static QueueHandle_t map_request_queue = nullptr;
+
+static void set_status(TileDownloadStatus status, uint32_t request_id = 0)
+{
+    if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (request_id == 0 || request_id == latest_request_id) current_status = status;
+        xSemaphoreGive(tile_swap_mutex);
+    }
+    else
+    {
+        current_status = status;
+    }
+}
+
+static bool request_is_current(uint32_t request_id)
+{
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    const bool current = service_generation_current(request_id, latest_request_id, false);
+    xSemaphoreGive(tile_swap_mutex);
+    return current;
+}
+
+static bool cache_request_is_current(void *context)
+{
+    return context && request_is_current(*static_cast<const uint32_t *>(context));
+}
+
+static bool publish_current_tile(const MapTileRequest &req, TileSource source)
+{
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    if (!service_generation_current(req.request_id, latest_request_id, false))
+    {
+        xSemaphoreGive(tile_swap_mutex);
+        return false;
+    }
+    lv_color_t *tmp = tile_buf_front;
+    tile_buf_front = tile_buf_back;
+    tile_buf_back = tmp;
+    current_source = source;
+    published_metadata.request_id = req.request_id;
+    published_metadata.lat = req.lat;
+    published_metadata.lon = req.lon;
+    published_metadata.zoom = req.zoom;
+    strlcpy(published_metadata.maptype, req.maptype, sizeof(published_metadata.maptype));
+    has_new_tile = true;
+    current_status = TILE_READY;
+    xSemaphoreGive(tile_swap_mutex);
+    return true;
+}
 
 class BoundedBufferStream final : public Stream
 {
@@ -158,9 +213,16 @@ private:
     bool _overflow = false;
 };
 
-static bool valid_map_jpeg(const uint8_t *data, size_t size)
+enum MapJpegValidation : uint8_t
 {
-    if (!complete_jpeg_signature(data, size)) return false;
+    MAP_JPEG_INVALID = 0,
+    MAP_JPEG_WRONG_DIMENSIONS,
+    MAP_JPEG_VALID
+};
+
+static MapJpegValidation validate_map_jpeg(const uint8_t *data, size_t size)
+{
+    if (!complete_jpeg_signature(data, size)) return MAP_JPEG_INVALID;
     uint16_t width = 0, height = 0;
     JRESULT result = JDR_INTR;
     if (tjpg_guard_lock())
@@ -168,7 +230,10 @@ static bool valid_map_jpeg(const uint8_t *data, size_t size)
         result = TJpgDec.getJpgSize(&width, &height, data, size);
         tjpg_guard_unlock();
     }
-    return result == JDR_OK && width == MAP_TILE_WIDTH && height == MAP_TILE_HEIGHT;
+    if (result != JDR_OK) return MAP_JPEG_INVALID;
+    if (width != MAP_TILE_WIDTH || height != MAP_TILE_HEIGHT)
+        return MAP_JPEG_WRONG_DIMENSIONS;
+    return MAP_JPEG_VALID;
 }
 
 /* Callback của thư viện TJpgDec: Nhận khối điểm ảnh MCU (RGB565) và ghi vào tile_buf_back */
@@ -201,7 +266,11 @@ static void map_download_task(void *pvParameters)
         // Chờ nhận yêu cầu từ hàng đợi (chống race condition khi người dùng pan/zoom liên tục)
         if (map_request_queue && xQueueReceive(map_request_queue, &req, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            current_status = TILE_DOWNLOADING;
+            if (!request_is_current(req.request_id))
+            {
+                continue;
+            }
+            set_status(TILE_DOWNLOADING, req.request_id);
 
             double target_lat = req.lat;
             double target_lon = req.lon;
@@ -217,8 +286,14 @@ static void map_download_task(void *pvParameters)
             {
                 Serial.println("[MAP_TASK] 🎯 Đang nạp ảnh trực tiếp từ thẻ MicroSD...");
                 int bytes_read = sd_map_cache_read(target_lat, target_lon, target_zoom, target_type, jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
-                if (bytes_read > 200 && valid_map_jpeg(jpeg_raw_buffer, bytes_read))
+                const MapJpegValidation cache_validation = bytes_read > 200
+                    ? validate_map_jpeg(jpeg_raw_buffer, bytes_read) : MAP_JPEG_INVALID;
+                if (cache_validation == MAP_JPEG_VALID)
                 {
+                    if (!request_is_current(req.request_id))
+                    {
+                        continue;
+                    }
                     JRESULT res = JDR_INTR;
                     if (tjpg_guard_lock())
                     {
@@ -230,30 +305,23 @@ static void map_download_task(void *pvParameters)
                     }
                     if (res == JDR_OK)
                     {
-                        bool published = false;
-                        if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-                        {
-                            lv_color_t *tmp = tile_buf_front;
-                            tile_buf_front = tile_buf_back;
-                            tile_buf_back = tmp;
-                            current_source = TILE_SOURCE_SD_CACHE;
-                            has_new_tile = true;
-                            current_status = TILE_READY;
-                            published = true;
-                            xSemaphoreGive(tile_swap_mutex);
-                        }
+                        const bool published = publish_current_tile(req, TILE_SOURCE_SD_CACHE);
                         if (published)
                         {
                             Serial.println("[MAP_TASK] ✔ Nạp ảnh từ thẻ SD & giải mã thành công!");
                             vTaskDelay(pdMS_TO_TICKS(50));
                             continue;
                         }
-                        current_status = TILE_DEGRADED;
+                        set_status(TILE_DEGRADED, req.request_id);
                     }
                     else
                     {
                         Serial.printf("[MAP_TASK] ⚠️ Lỗi giải mã ảnh từ thẻ SD: %d\n", res);
                     }
+                }
+                else if (cache_validation == MAP_JPEG_WRONG_DIMENSIONS)
+                {
+                    set_status(TILE_UNSUPPORTED_FORMAT, req.request_id);
                 }
             }
 
@@ -263,7 +331,7 @@ static void map_download_task(void *pvParameters)
             if (!wifi_manager_is_connected())
             {
                 Serial.println("[MAP_TASK] ⚠️ Không có kết nối WiFi để tải bản đồ!");
-                current_status = TILE_ERROR;
+                set_status(TILE_ERROR, req.request_id);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
@@ -271,7 +339,7 @@ static void map_download_task(void *pvParameters)
             if (!map_tile_downloader_supports_satellite())
             {
                 Serial.println("[MAP_TASK] PROVIDER_NOT_CONFIGURED: GOOGLE_MAPS_STATIC_API_KEY trống");
-                current_status = TILE_PROVIDER_NOT_CONFIGURED;
+                set_status(TILE_PROVIDER_NOT_CONFIGURED, req.request_id);
                 continue;
             }
 
@@ -293,6 +361,8 @@ static void map_download_task(void *pvParameters)
 
             if (http.begin(client, url_buf))
             {
+                const char *header_keys[] = { "Content-Type" };
+                http.collectHeaders(header_keys, 1);
                 int httpCode = http.GET();
                 Serial.printf("[MAP_TASK] Mã phản hồi HTTP: %d\n", httpCode);
 
@@ -302,8 +372,15 @@ static void map_download_task(void *pvParameters)
                     const String content_type = http.header("Content-Type");
                     int bytes_read = -1;
 
-                    if (jpeg_raw_buffer != nullptr && total_len <= JPEG_MAX_RAW_SIZE &&
-                        (content_type.length() == 0 || content_type.startsWith("image/jpeg")))
+                    if (total_len > JPEG_MAX_RAW_SIZE)
+                    {
+                        set_status(TILE_IMAGE_TOO_LARGE, req.request_id);
+                    }
+                    else if (!content_type.startsWith("image/jpeg"))
+                    {
+                        set_status(TILE_UNSUPPORTED_FORMAT, req.request_id);
+                    }
+                    else if (jpeg_raw_buffer != nullptr)
                     {
                         BoundedBufferStream sink(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
                         const int received = http.writeToStream(&sink); // HTTPClient dechunks first.
@@ -311,8 +388,11 @@ static void map_download_task(void *pvParameters)
                             static_cast<size_t>(received) == sink.size() &&
                             (total_len < 0 || received == total_len);
                         if (complete) bytes_read = received;
+                        else if (sink.overflowed()) set_status(TILE_IMAGE_TOO_LARGE, req.request_id);
 
-                        if (bytes_read > 200 && valid_map_jpeg(jpeg_raw_buffer, bytes_read))
+                        const MapJpegValidation validation = bytes_read > 200
+                            ? validate_map_jpeg(jpeg_raw_buffer, bytes_read) : MAP_JPEG_INVALID;
+                        if (validation == MAP_JPEG_VALID && request_is_current(req.request_id))
                         {
                             Serial.printf("[MAP_TASK] Đã tải về: %d bytes. Bắt đầu giải mã TJpgDec...\n", bytes_read);
 
@@ -327,21 +407,10 @@ static void map_download_task(void *pvParameters)
                             }
                             if (res == JDR_OK)
                             {
-                                bool published = false;
-                                if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-                                {
-                                    lv_color_t *tmp = tile_buf_front;
-                                    tile_buf_front = tile_buf_back;
-                                    tile_buf_back = tmp;
-                                    current_source = TILE_SOURCE_NETWORK;
-                                    has_new_tile = true;
-                                    current_status = TILE_READY;
-                                    published = true;
-                                    xSemaphoreGive(tile_swap_mutex);
-                                }
+                                const bool published = publish_current_tile(req, TILE_SOURCE_NETWORK);
                                 if (!published)
                                 {
-                                    current_status = TILE_DEGRADED;
+                                    set_status(TILE_DEGRADED, req.request_id);
                                     Serial.println("[MAP_TASK] ❌ Không thể công bố frame bản đồ");
                                     http.end();
                                     continue;
@@ -351,34 +420,48 @@ static void map_download_task(void *pvParameters)
                                 // =========================================================================
                                 // BƯỚC 3: TỰ ĐỘNG GHI BẢN SAO JPEG VÀO THẺ NHỚ MICROSD (CACHE WRITE)
                                 // =========================================================================
-                                if (sd_map_cache_is_available())
+                                if (request_is_current(req.request_id) && sd_map_cache_is_available())
                                 {
-                                    sd_map_cache_write(target_lat, target_lon, target_zoom, target_type, jpeg_raw_buffer, bytes_read);
+                                    sd_map_cache_write_guarded(target_lat, target_lon, target_zoom,
+                                        target_type, jpeg_raw_buffer, bytes_read,
+                                        cache_request_is_current, &req.request_id);
                                 }
                             }
                             else
                             {
                                 Serial.printf("[MAP_TASK] ❌ Lỗi giải mã JPEG mạng: %d\n", res);
-                                current_status = TILE_ERROR;
+                                set_status(TILE_ERROR, req.request_id);
                             }
+                        }
+                        else if (validation == MAP_JPEG_WRONG_DIMENSIONS)
+                        {
+                            set_status(TILE_UNSUPPORTED_FORMAT, req.request_id);
+                        }
+                        else if (!request_is_current(req.request_id))
+                        {
+                            // Latest request owns the public status; stale work is only discarded.
                         }
                         else
                         {
                             Serial.printf("[MAP_TASK] ❌ JPEG invalid/truncated/oversize: got=%d len=%d type=%s\n",
                                           bytes_read, total_len, content_type.c_str());
-                            current_status = TILE_ERROR;
+                            if (!sink.overflowed()) set_status(TILE_ERROR, req.request_id);
                         }
+                    }
+                    else
+                    {
+                        set_status(TILE_DEGRADED, req.request_id);
                     }
                 }
                 else
                 {
-                    current_status = TILE_ERROR;
+                    set_status(TILE_ERROR, req.request_id);
                 }
                 http.end();
             }
             else
             {
-                current_status = TILE_ERROR;
+                set_status(TILE_ERROR, req.request_id);
             }
         }
 
@@ -473,10 +556,17 @@ bool map_tile_downloader_request(double lat, double lon, int zoom, const char *m
     if (lat < -85.0 || lat > 85.0 || lon < -180.0 || lon > 180.0 || zoom < 5 || zoom > 20 ||
         (strcmp(requested_type, "roadmap") != 0 && strcmp(requested_type, "satellite") != 0))
     {
-        current_status = TILE_ERROR;
+        set_status(TILE_ERROR);
         return false;
     }
     MapTileRequest req;
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    ++latest_request_id;
+    if (latest_request_id == 0) ++latest_request_id;
+    req.request_id = latest_request_id;
+    current_status = TILE_DOWNLOADING;
+    xSemaphoreGive(tile_swap_mutex);
     req.lat = lat;
     req.lon = lon;
     req.zoom = zoom;
@@ -487,14 +577,18 @@ bool map_tile_downloader_request(double lat, double lon, int zoom, const char *m
     {
         return true;
     }
-    current_status = TILE_DEGRADED;
+    set_status(TILE_DEGRADED);
     Serial.println("[MAP_TASK] ❌ Không thể đưa yêu cầu bản đồ vào queue");
     return false;
 }
 
 bool map_tile_downloader_has_new_data(void)
 {
-    return has_new_tile;
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+    const bool value = has_new_tile;
+    xSemaphoreGive(tile_swap_mutex);
+    return value;
 }
 
 const lv_color_t* map_tile_downloader_get_buffer(void)
@@ -520,7 +614,8 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels)
     return false;
 }
 
-bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, TileSource *out_source)
+bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels,
+                                       TileSource *out_source, MapTileMetadata *out_metadata)
 {
     if (!dest || !tile_buf_front) return false;
     size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
@@ -538,6 +633,7 @@ bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, Ti
             {
                 *out_source = current_source;
             }
+            if (out_metadata) *out_metadata = published_metadata;
             has_new_tile = false;
             xSemaphoreGive(tile_swap_mutex);
             return true;
@@ -549,17 +645,29 @@ bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels, Ti
 
 void map_tile_downloader_clear_new_data(void)
 {
-    has_new_tile = false;
+    if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
+    {
+        has_new_tile = false;
+        xSemaphoreGive(tile_swap_mutex);
+    }
 }
 
 TileDownloadStatus map_tile_downloader_get_status(void)
 {
-    return current_status;
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return TILE_DEGRADED;
+    const TileDownloadStatus status = current_status;
+    xSemaphoreGive(tile_swap_mutex);
+    return status;
 }
 
 TileSource map_tile_downloader_get_source(void)
 {
-    return current_source;
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return TILE_SOURCE_NONE;
+    const TileSource source = current_source;
+    xSemaphoreGive(tile_swap_mutex);
+    return source;
 }
 
 bool map_tile_downloader_supports_satellite(void)

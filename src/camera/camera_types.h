@@ -110,6 +110,15 @@ enum CameraTransportSecurity
     CAM_TRANSPORT_HTTPS_VERIFIED
 };
 
+enum CameraFailureReason
+{
+    CAM_FAILURE_NONE = 0,
+    CAM_FAILURE_FETCH,
+    CAM_FAILURE_DECODE,
+    CAM_FAILURE_TLS,
+    CAM_FAILURE_AUTH
+};
+
 inline const char* camera_runtime_state_to_string(CameraRuntimeState st)
 {
     switch (st)

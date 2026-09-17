@@ -12,6 +12,7 @@
 #include "../ui/ui_theme.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
+#include <math.h>
 
 // Danh sách các địa điểm cài đặt sẵn
 static const MapPresetLocation PRESETS[] = {
@@ -31,6 +32,8 @@ static int cur_zoom = MAP_DEFAULT_ZOOM;
 static size_t cur_preset_idx = 0;
 static char cur_maptype[16] = "roadmap"; // "roadmap" hoặc "satellite"
 static bool auto_fetch_enabled = true;
+static bool has_published_metadata = false;
+static MapTileMetadata displayed_tile = {};
 
 // Đối tượng giao diện LVGL
 static lv_obj_t *app_container = nullptr;
@@ -43,6 +46,18 @@ static lv_obj_t *hud_lbl_source = nullptr;
 static lv_obj_t *hud_type_btn = nullptr;
 static lv_obj_t *hud_lbl_type = nullptr;
 static lv_obj_t *hud_coord_lbl = nullptr;
+
+static const char *displayed_location_name(void)
+{
+    if (!has_published_metadata) return PRESETS[cur_preset_idx].name;
+    for (size_t i = 0; i < PRESET_COUNT; ++i)
+    {
+        if (fabs(displayed_tile.lat - PRESETS[i].lat) < 0.00001 &&
+            fabs(displayed_tile.lon - PRESETS[i].lon) < 0.00001)
+            return PRESETS[i].name;
+    }
+    return "Vị trí bản đồ";
+}
 
 /* Hàm hỗ trợ vẽ đường thẳng trên lv_canvas */
 static void draw_canvas_line(lv_obj_t *canvas, lv_point_t p1, lv_point_t p2, lv_color_t color, lv_coord_t width)
@@ -114,8 +129,12 @@ void map_app_render(void)
 {
     // Tiêu thụ nguyên tử frame mới từ Front Buffer dưới Mutex
     TileSource src = TILE_SOURCE_NONE;
-    if (canvas_buffer && map_tile_downloader_consume_front(canvas_buffer, MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT, &src))
+    MapTileMetadata metadata = {};
+    if (canvas_buffer && map_tile_downloader_consume_front(
+            canvas_buffer, MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT, &src, &metadata))
     {
+        displayed_tile = metadata;
+        has_published_metadata = true;
         if (hud_lbl_source)
         {
             if (src == TILE_SOURCE_SD_CACHE)
@@ -143,12 +162,17 @@ void map_app_render(void)
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
             }
         }
-        else if (st == TILE_ERROR || st == TILE_DEGRADED || st == TILE_PROVIDER_NOT_CONFIGURED)
+        else if (st == TILE_ERROR || st == TILE_DEGRADED || st == TILE_PROVIDER_NOT_CONFIGURED ||
+                 st == TILE_IMAGE_TOO_LARGE || st == TILE_UNSUPPORTED_FORMAT)
         {
             if (hud_lbl_source)
             {
                 if (st == TILE_PROVIDER_NOT_CONFIGURED)
                     lv_label_set_text(hud_lbl_source, "Thiếu Google Maps API key");
+                else if (st == TILE_IMAGE_TOO_LARGE)
+                    lv_label_set_text(hud_lbl_source, "Tile vượt giới hạn tải");
+                else if (st == TILE_UNSUPPORTED_FORMAT)
+                    lv_label_set_text(hud_lbl_source, "Tile sai định dạng/kích thước");
                 else
                     lv_label_set_text(hud_lbl_source,
                         st == TILE_DEGRADED ? "[Offline] Không có tile cache" : "[!] Không tải được tile");
@@ -161,15 +185,19 @@ void map_app_render(void)
     // Cập nhật nhãn thành phố & Zoom
     if (hud_lbl_city)
     {
-        lv_label_set_text_fmt(hud_lbl_city, "%s • Z%d", PRESETS[cur_preset_idx].name, cur_zoom);
+        lv_label_set_text_fmt(hud_lbl_city, "%s • Z%d", displayed_location_name(),
+                              has_published_metadata ? displayed_tile.zoom : cur_zoom);
     }
     if (hud_coord_lbl)
     {
-        lv_label_set_text_fmt(hud_coord_lbl, "%.4f, %.4f", cur_lat, cur_lon);
+        lv_label_set_text_fmt(hud_coord_lbl, "%.4f, %.4f",
+                              has_published_metadata ? displayed_tile.lat : cur_lat,
+                              has_published_metadata ? displayed_tile.lon : cur_lon);
     }
     if (hud_lbl_type)
     {
-        if (strcmp(cur_maptype, "satellite") == 0)
+        const char *shown_type = has_published_metadata ? displayed_tile.maptype : cur_maptype;
+        if (strcmp(shown_type, "satellite") == 0)
         {
             lv_label_set_text(hud_lbl_type, "Vệ Tinh");
             lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00F2FE), 0);

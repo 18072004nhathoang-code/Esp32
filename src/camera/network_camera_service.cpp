@@ -90,9 +90,10 @@ bool url_has_scheme(const char *url, const char *scheme)
 
 NetworkCameraService::NetworkCameraService()
     : _configured(false), _connected(false), _running(false),
-      _runtime_state(CAM_STATE_NOT_CONFIGURED), _frame_sequence(0), _session_id(0),
-      _worker_session_id(0),
+      _runtime_state(CAM_STATE_NOT_CONFIGURED),
       _transport_security(CAM_TRANSPORT_NONE),
+      _failure_reason(CAM_FAILURE_NONE),
+      _frame_sequence(0), _session_id(0), _worker_session_id(0),
       _config_mutex(nullptr), _worker_exit_sem(nullptr),
       _onvif_probed(false),
       _buf_front(nullptr), _buf_back(nullptr),
@@ -346,6 +347,11 @@ CameraTransportSecurity NetworkCameraService::getTransportSecurity() const
     return security;
 }
 
+CameraFailureReason NetworkCameraService::getFailureReason() const
+{
+    return _failure_reason;
+}
+
 uint32_t NetworkCameraService::getSessionId() const
 {
     if (!_config_mutex || xSemaphoreTake(_config_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
@@ -520,7 +526,11 @@ void NetworkCameraService::workerTask()
                     // Trích xuất kích thước thực tế từ JPEG Header (SOF marker)
                     size_t real_w = 0, real_h = 0;
                     bool has_dim = parseJpegDimensions(_buf_back, (size_t)bytes, real_w, real_h);
-                    if (!has_dim) bytes = -1;
+                    if (!has_dim)
+                    {
+                        _failure_reason = CAM_FAILURE_DECODE;
+                        bytes = -1;
+                    }
 
                     // Hoán đổi atomic back buffer sang front buffer kèm dung lượng thật
                     if (bytes > 0 && worker_session == _worker_session_id && _frame_mutex &&
@@ -547,6 +557,7 @@ void NetworkCameraService::workerTask()
                                 xSemaphoreGive(_config_mutex);
                             }
                             _snapshot_status = CAM_STATUS_READY;
+                            _failure_reason = CAM_FAILURE_NONE;
                         }
                         xSemaphoreGive(_frame_mutex);
                     }
@@ -1038,6 +1049,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
         (request_profile.security_mode == CAM_SECURITY_HTTP_PLAINTEXT && !using_http) ||
         (request_profile.security_mode != CAM_SECURITY_HTTP_PLAINTEXT && !using_https))
     {
+        _failure_reason = CAM_FAILURE_FETCH;
         Serial.println("[NET_CAM] URL scheme rejected by selected security mode");
         return -1;
     }
@@ -1052,6 +1064,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
         {
             if (CAMERA_TLS_CA_CERT[0] == '\0')
             {
+                _failure_reason = CAM_FAILURE_TLS;
                 Serial.println("[NET_CAM] Verified TLS requires CAMERA_TLS_CA_CERT");
                 return -1;
             }
@@ -1072,6 +1085,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
     }
     if (!began)
     {
+        _failure_reason = using_https ? CAM_FAILURE_TLS : CAM_FAILURE_FETCH;
         Serial.println("[NET_CAM] ❌ Không thể khởi tạo HTTP client cho snapshot");
         return -1;
     }
@@ -1090,6 +1104,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
         int expected_len = http.getSize();
         if (expected_len > (int)NET_CAM_MAX_SAFETY_LIMIT)
         {
+            _failure_reason = CAM_FAILURE_FETCH;
             Serial.printf("[NET_CAM] ❌ Content-Length quá lớn (%d > 512KB limit) -> Hủy an toàn!\n", expected_len);
             http.end();
             return -1;
@@ -1107,14 +1122,24 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
                 out_buf[total - 2] == 0xFF && out_buf[total - 1] == 0xD9)
             {
                 bytesRead = (int)total;
+                _failure_reason = CAM_FAILURE_NONE;
             }
             else
             {
+                _failure_reason = CAM_FAILURE_DECODE;
                 Serial.printf("[NET_CAM] Snapshot rejected: incomplete/invalid JPEG (%u bytes)\n",
                               (unsigned int)total);
                 bytesRead = -1;
             }
         }
+    }
+    else if (httpCode == HTTP_CODE_UNAUTHORIZED || httpCode == HTTP_CODE_FORBIDDEN)
+    {
+        _failure_reason = CAM_FAILURE_AUTH;
+    }
+    else
+    {
+        _failure_reason = (httpCode < 0 && using_https) ? CAM_FAILURE_TLS : CAM_FAILURE_FETCH;
     }
     http.end();
     return bytesRead;
