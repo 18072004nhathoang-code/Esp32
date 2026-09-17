@@ -96,6 +96,11 @@
 
 #define LV_USE_MEM_MONITOR 0
 
+/* The UI uses LVGL's formatted-label API for live temperature, audio level,
+ * map coordinates and camera FPS.  Keep float argument consumption enabled;
+ * disabling it makes a following %s consume the pending double as a pointer. */
+#define LV_SPRINTF_USE_FLOAT 1
+
 /* Logging */
 #define LV_USE_LOG 1
 #if LV_USE_LOG

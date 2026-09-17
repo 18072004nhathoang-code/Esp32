@@ -58,6 +58,8 @@ jobs:
           /tmp/native_contract_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/service_logic_test.cpp src/core/service_state_logic.cpp -o /tmp/service_logic_test
           /tmp/service_logic_test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/fault_injection_test.cpp src/core/service_state_logic.cpp -o /tmp/fault_injection_test
+          /tmp/fault_injection_test
 
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p

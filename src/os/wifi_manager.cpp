@@ -39,6 +39,13 @@ struct WiFiCommand
     char pass[65];
 };
 
+static bool pending_disconnect_control = false;
+static bool pending_forget_control = false;
+static WiFiCommand pending_disconnect_command = {};
+static WiFiCommand pending_forget_command = {};
+static WiFiControlStatus control_status = WIFI_CONTROL_NONE;
+static uint32_t control_ack_generation = 0;
+
 // Bộ nhớ đệm kết quả quét mạng
 static std::vector<WiFiNetworkInfo> scan_results;
 static bool scan_in_progress = false;
@@ -195,6 +202,47 @@ static void wifi_service_task(void *pvParameters)
 
     while (1)
     {
+        // Control mailbox is independent of the ordinary queue. Accepted
+        // Disconnect/Forget operations therefore survive a saturated scan/
+        // connect queue and are applied by the sole radio/NVS owner.
+        WiFiCommand control = {};
+        bool have_control = false;
+        lock_wifi();
+        if (pending_forget_control)
+        {
+            control = pending_forget_command;
+            pending_forget_control = false;
+            have_control = true;
+        }
+        else if (pending_disconnect_control)
+        {
+            control = pending_disconnect_command;
+            pending_disconnect_control = false;
+            have_control = true;
+        }
+        unlock_wifi();
+        if (have_control)
+        {
+            const bool disconnect_called = WiFi.disconnect();
+            const bool radio_ok = disconnect_called || WiFi.status() != WL_CONNECTED;
+            const bool cleared = control.type != WIFI_CMD_FORGET || clear_credentials_direct();
+            lock_wifi();
+            control_ack_generation = control.generation;
+            control_status = (radio_ok && cleared) ? WIFI_CONTROL_APPLIED : WIFI_CONTROL_FAILED;
+            if (control.generation == request_generation)
+            {
+                current_state = (radio_ok && cleared) ? WIFI_STATE_DISCONNECTED : WIFI_STATE_FAILED;
+                active_connect_generation = 0;
+                clear_connected_cache_locked();
+                if (!radio_ok) set_error_locked("WiFi radio disconnect failed");
+                else if (!cleared) set_error_locked("Cannot clear WiFi credentials");
+            }
+            unlock_wifi();
+            log_i("WiFi %s generation=%u %s",
+                  control.type == WIFI_CMD_FORGET ? "forget" : "disconnect",
+                  control.generation, (radio_ok && cleared) ? "APPLIED" : "FAILED");
+        }
+
         WiFiCommand command = {};
         while (wifi_command_queue && xQueueReceive(wifi_command_queue, &command, 0) == pdTRUE)
         {
@@ -236,28 +284,6 @@ static void wifi_service_task(void *pvParameters)
                 log_i("Bắt đầu kết nối WiFi generation=%u SSID=%s",
                       command.generation, command.ssid);
                 WiFi.begin(command.ssid, command.pass);
-            }
-            else if (command.type == WIFI_CMD_DISCONNECT || command.type == WIFI_CMD_FORGET)
-            {
-                lock_wifi();
-                const bool current = command.generation == request_generation;
-                unlock_wifi();
-                if (!current) continue;
-                WiFi.disconnect();
-                const bool cleared = command.type != WIFI_CMD_FORGET || clear_credentials_direct();
-                lock_wifi();
-                if (command.generation == request_generation)
-                {
-                    current_state = cleared ? WIFI_STATE_DISCONNECTED : WIFI_STATE_FAILED;
-                    active_connect_generation = 0;
-                    clear_connected_cache_locked();
-                    if (!cleared) set_error_locked("Cannot clear WiFi credentials");
-                }
-                unlock_wifi();
-                if (command.type == WIFI_CMD_FORGET)
-                    log_i("WiFi forget command applied");
-                else
-                    log_i("WiFi disconnect command applied");
             }
             else if (command.type == WIFI_CMD_SCAN)
             {
@@ -561,6 +587,9 @@ bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
     lock_wifi();
     const uint32_t generation = next_generation_locked();
     cmd.generation = generation;
+    save_to_nvs = wifi_connect_may_save(save_to_nvs, pending_forget_control,
+                                        current_state == WIFI_STATE_FORGETTING);
+    cmd.save_to_nvs = save_to_nvs;
     manual_disconnect = false;
     reconnect_backoff_ms = 2000;
     strncpy(target_ssid, ssid, sizeof(target_ssid) - 1);
@@ -607,14 +636,11 @@ void wifi_manager_disconnect(void)
     target_ssid[0] = '\0';
     target_pass[0] = '\0';
     current_state = WIFI_STATE_DISCONNECTING;
+    pending_disconnect_command = cmd;
+    pending_disconnect_control = true;
+    control_status = WIFI_CONTROL_REQUESTED;
     unlock_wifi();
-    if (!enqueue_wifi_command(cmd))
-    {
-        lock_wifi();
-        current_state = WIFI_STATE_FAILED;
-        set_error_locked("WiFi disconnect queue full");
-        unlock_wifi();
-    }
+    if (wifi_task_handle) xTaskNotifyGive(wifi_task_handle);
 }
 
 WiFiState wifi_manager_get_state(void)
@@ -710,7 +736,7 @@ bool wifi_manager_clear_credentials(void)
 
 bool wifi_manager_forget_network(void)
 {
-    if (!wifi_command_queue) return false;
+    if (!wifi_task_handle || !wifi_mutex) return false;
     WiFiCommand cmd = {};
     cmd.type = WIFI_CMD_FORGET;
     lock_wifi();
@@ -722,13 +748,23 @@ bool wifi_manager_forget_network(void)
     target_ssid[0] = '\0';
     target_pass[0] = '\0';
     current_state = WIFI_STATE_FORGETTING;
+    pending_forget_command = cmd;
+    pending_forget_control = true;
+    // Forget dominates an older Disconnect; both require the same radio stop,
+    // and only Forget additionally commits credential deletion.
+    pending_disconnect_control = false;
+    control_status = WIFI_CONTROL_REQUESTED;
     unlock_wifi();
-    if (enqueue_wifi_command(cmd)) return true;
+    xTaskNotifyGive(wifi_task_handle);
+    return true;
+}
+
+WiFiControlStatus wifi_manager_get_control_status(void)
+{
     lock_wifi();
-    current_state = WIFI_STATE_FAILED;
-    set_error_locked("WiFi forget queue full");
+    const WiFiControlStatus status = control_status;
     unlock_wifi();
-    return false;
+    return status;
 }
 
 void wifi_manager_set_auto_reconnect(bool enable)

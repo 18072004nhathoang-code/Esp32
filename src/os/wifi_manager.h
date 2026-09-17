@@ -30,6 +30,13 @@ enum WiFiState {
     WIFI_STATE_FAILED
 };
 
+enum WiFiControlStatus {
+    WIFI_CONTROL_NONE = 0,
+    WIFI_CONTROL_REQUESTED,
+    WIFI_CONTROL_APPLIED,
+    WIFI_CONTROL_FAILED
+};
+
 struct WiFiNetworkInfo {
     char ssid[33];
     int32_t rssi;
@@ -123,6 +130,7 @@ bool wifi_manager_clear_credentials(void);
  * @brief Quên mạng hiện tại (Xóa NVS, xóa mục tiêu kết nối và chặn tự động reconnect)
  */
 bool wifi_manager_forget_network(void);
+WiFiControlStatus wifi_manager_get_control_status(void);
 
 /**
  * @brief Bật hoặc tắt tính năng tự động kết nối lại khi mất sóng

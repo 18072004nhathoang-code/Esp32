@@ -7,10 +7,7 @@
 
 #include "map_app.h"
 #include "map_tile_downloader.h"
-#include "sd_map_cache.h"
-#include "../os/wifi_manager.h"
 #include "../ui/ui_theme.h"
-#include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <math.h>
 
@@ -217,16 +214,6 @@ void map_app_render(void)
 
 static bool trigger_map_reload(void)
 {
-    if (!map_tile_downloader_supports_satellite() &&
-        !(sd_map_cache_is_available() && sd_map_cache_exists(cur_lat, cur_lon, cur_zoom, cur_maptype)))
-    {
-        if (hud_lbl_source)
-        {
-            lv_label_set_text(hud_lbl_source, "Map mạng cần Google API key");
-            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
-        }
-        return false;
-    }
     if (!map_tile_downloader_request(cur_lat, cur_lon, cur_zoom, cur_maptype))
     {
         if (hud_lbl_source)
@@ -240,23 +227,8 @@ static bool trigger_map_reload(void)
 
     if (hud_lbl_source)
     {
-        // Kiểm tra nhanh trước trên thẻ nhớ SD để cập nhật nhãn tức thì
-        if (sd_map_cache_is_available() && sd_map_cache_exists(cur_lat, cur_lon, cur_zoom, cur_maptype))
-        {
-            lv_label_set_text(hud_lbl_source, LV_SYMBOL_SD_CARD " Đang đọc thẻ SD...");
-            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
-        }
-        else if (wifi_manager_is_connected())
-        {
-            lv_label_set_text_fmt(hud_lbl_source, LV_SYMBOL_WIFI " Đang tải %s...",
-                                  map_tile_downloader_get_network_provider());
-            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
-        }
-        else
-        {
-            lv_label_set_text(hud_lbl_source, "[Offline] Chưa có cache");
-            lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xA0AEC0), 0);
-        }
+        lv_label_set_text(hud_lbl_source, LV_SYMBOL_REFRESH " Đang tìm cache / mạng...");
+        lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
     }
 
     map_app_render();

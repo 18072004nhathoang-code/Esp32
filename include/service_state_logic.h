@@ -25,3 +25,14 @@ bool settings_revision_needs_reconcile(uint32_t completed_revision,
                                        uint32_t applied_revision);
 bool transactional_replace_can_commit(size_t expected_bytes, size_t written_bytes,
                                       bool temp_valid, bool backup_ready);
+bool audio_control_applies_to_generation(uint32_t active_generation,
+                                         uint32_t cancel_through_generation);
+bool audio_pause_ack_is_current(uint32_t worker_request_id, uint32_t current_request_id,
+                                bool pause_still_requested);
+bool transactional_remove_new_final(bool new_file_installed, bool commit_verified);
+bool transactional_keep_recovery_file(bool file_valid, bool rename_succeeded);
+bool wifi_connect_may_save(bool save_requested, bool forget_pending, bool forgetting);
+bool camera_config_transaction_complete(bool configure_ok, bool save_ok,
+                                        bool run_service, bool start_ok);
+bool audio_music_handoff_can_grant(bool pause_acked, bool uninstall_ok);
+bool audio_duplex_restore_ready(bool driver_installed, bool codec_configured);

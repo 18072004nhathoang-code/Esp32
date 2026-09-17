@@ -117,7 +117,7 @@ bool audio_install_duplex_driver(void);
 /**
  * @brief Gỡ bỏ Driver I2S Duplex để nhường cổng I2S_NUM_0 hoàn toàn cho ESP32-audioI2S
  */
-void audio_uninstall_duplex_driver(void);
+bool audio_uninstall_duplex_driver(void);
 
 /**
  * @brief Kiểm tra xem I2S Duplex driver của AudioManager có đang được cài đặt không
@@ -180,10 +180,14 @@ bool audio_play_sound_effect(SoundEffect fx);
  * @param max_duration_sec Thời gian ghi âm tối đa (mặc định 10 giây)
  */
 bool audio_start_recording(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
-bool audio_start_recording_async(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
+bool audio_start_recording_async(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC,
+                                 uint32_t *request_id = nullptr);
 void audio_stop_recording(void);
-bool audio_stop_recording_async(void);
-bool audio_cancel_recording_async(void);
+bool audio_stop_recording_async(uint32_t *request_id = nullptr);
+bool audio_cancel_recording_async(uint32_t *request_id = nullptr);
+/** Wait for the exact start/stop/cancel request to be applied by Audio_Task. */
+bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
+                                      bool *operation_ok = nullptr);
 /** Stop a recording and discard it without scheduling a WAV export. */
 void audio_cancel_recording(void);
 bool audio_is_recording(void);
@@ -192,8 +196,8 @@ bool audio_is_recording(void);
  * @brief Bắt đầu phát lại đoạn âm thanh vừa thu âm trong PSRAM ra loa
  */
 bool audio_start_playback(void);
-bool audio_start_playback_async(void);
-bool audio_stop_playback(void);
+bool audio_start_playback_async(uint32_t *request_id = nullptr);
+bool audio_stop_playback(uint32_t *request_id = nullptr);
 bool audio_is_playing(void);
 
 /**

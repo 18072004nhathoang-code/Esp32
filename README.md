@@ -111,9 +111,9 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | :--- | :--- | :--- | :--- |
 | **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng qua `lvgl_port_lock()`. |
 | **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, đồng bộ `audio_mutex` và `storage_lock` theo thứ tự cố định. |
-| **Audio_Task (AudioManager)** | **Core 0** | **3** | Đọc DMA theo số stereo frame thực nhận, ghi bù partial I2S không lặp frame, snapshot bản thu bất biến có lease và mutex trạng thái STARTING/ACTIVE. |
-| **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và auto-reconnect, lưu NVS ngoài vùng lock_wifi chống deadlock. |
-| **Map_Worker** | **Core 0** | **2** | Tải tile HTTP/HTTPS qua FreeRTOS Queue, giải mã JPEG ping-pong buffer vào PSRAM, TLS Root CA bundle. |
+| **Audio_Task (AudioManager)** | **Core 0** | **3** | Đọc DMA theo số stereo frame thực nhận, ghi bù partial I2S không lặp frame, lệnh start/stop/cancel theo generation + ACK, snapshot bản thu bất biến và commit WAV `.tmp`/`.bak` có recovery. |
+| **WiFi_Manager** | **Core 0** | **2** | Một worker sở hữu radio/NVS; Disconnect/Forget dùng control mailbox độc lập queue thường, có REQUESTED/APPLIED/FAILED và chặn save cũ khôi phục credential đã quên. |
+| **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
 | **AI_Voice_Task** | **Core 0** | **2** | Request ID riêng, trạng thái CANCELING/ACK, upload lease WAV bất biến, dechunk bằng HTTPClient và giới hạn JSON 16KB/TTS 2MB trước khi parse/phát. |
 
@@ -172,7 +172,7 @@ pio device monitor -b 115200
 9. **Typography & Vietnamese Localization**: UI dùng **Be Vietnam Pro SemiBold** (SIL OFL 1.1) với body/button 14px, secondary 12px và title 16px; glyph hệ thống dùng `LV_SYMBOL_*` và fallback LVGL. Font 10px cũ không được dùng cho nội dung chính.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, theo đúng một contact ID tới lúc phát release, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. Với profile hiện tại, invert X/Y của sensor rồi rotation 2 triệt tiêu nhau nên mapping cuối là `screen_x=raw_x`, `screen_y=raw_y` trong miền 240x320. LVGL luôn nhận tọa độ toàn màn hình; Touch Diagnostic đổi screen→local theo origin của overlay nội dung, chạy thụ động 40Hz, không calibration/NVS và không chặn boot.
 
-Regression gồm behavioral test, native C++ contract test dùng chung header với firmware và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, start audio đồng thời/nhịp DMA, camera session + mailbox ACK, AI request cancel/stale response, giới hạn body và WAV lỗi/cắt.
+Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, audio Cancel A→Start B, pause timeout/ACK muộn, lỗi uninstall/restore I2S, WAV/cache partial-write/rename/restore, WiFi Forget barrier, Camera Dừng→Lưu & Kết nối, AI request cancel/stale response, giới hạn body và WAV lỗi/cắt.
 
 Thông tin attribution, phiên bản và nghĩa vụ phân phối dependency nằm trong `THIRD_PARTY_NOTICES.md`. Bản phân phối binary có ESP32-audioI2S GPL-3.0 phải đi kèm Corresponding Source và thông tin build của đúng commit đã dùng.
 

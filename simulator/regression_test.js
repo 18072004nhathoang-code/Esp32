@@ -225,6 +225,7 @@ const audioService = source('src/audio/audio_manager.cpp');
 const settingsServiceImpl = source('src/os/settings_service.cpp');
 const platformio = source('platformio.ini');
 const lvglPort = source('src/display/lvgl_port.cpp');
+const lvConfig = source('include/lv_conf.h');
 
 assert.match(aiService, /https:\/\//);
 assert.match(aiService, /Content-Type", "audio\/wav/);
@@ -253,6 +254,8 @@ assert.match(audioService, /xSemaphoreTake\(audio_state_mutex/);
 assert.doesNotMatch(audioService, /static SemaphoreHandle_t audio_mutex/);
 assert.match(audioService, /static uint8_t audio_dma_bytes/);
 assert.match(audioService, /"Audio_Task",\s*8 \* 1024/);
+assert.match(audioService, /AudioControlMailbox/);
+assert.doesNotMatch(audioService, /AUDIO_EVENT_CANCEL_RECORDING|AUDIO_EVENT_STOP_RECORDING/);
 assert.match(aiService, /audio_cancel_recording/);
 assert.match(aiService, /size_t readBytes\(char \*buffer/);
 assert.match(aiService, /AI_STATE_CANCELING/);
@@ -268,5 +271,12 @@ assert.doesNotMatch(musicService.match(/void audio_eof_mp3[\s\S]*$/)[0].split('}
 assert.match(settingsServiceImpl, /SettingsWorker/);
 assert.match(settingsServiceImpl, /xQueueSend\(s_command_queue/);
 assert.doesNotMatch(lvglPort, /run_lovyangfx_color_test|run_lvgl_color_test|\[DISPLAY_TEST\]|RGB565 TEST \/ ABC 123/);
+assert.match(lvConfig, /#define LV_SPRINTF_USE_FLOAT 1/);
+const mapReloadStart = mapUi.indexOf('static bool trigger_map_reload(void)');
+const mapReloadEnd = mapUi.indexOf('void map_app_zoom_in(void)', mapReloadStart);
+assert.ok(mapReloadStart >= 0 && mapReloadEnd > mapReloadStart, 'trigger_map_reload implementation missing');
+assert.doesNotMatch(mapUi.slice(mapReloadStart, mapReloadEnd), /sd_map_cache_|storage_|\.exists\(/);
+assert.match(wifiService, /pending_forget_control/);
+assert.match(cameraUi, /camera_config_transaction_complete/);
 
 console.log('Behavioral regression tests: PASS');

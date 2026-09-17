@@ -57,5 +57,33 @@ int main()
     // Map A arriving after request B is stale for both publish and cache.
     assert(!service_generation_current(41, 42, false));
     assert(service_generation_current(42, 42, false));
+
+    // Cancel A applies to A but cannot cancel the newer Start B.
+    assert(audio_control_applies_to_generation(10, 10));
+    assert(audio_control_applies_to_generation(10, 11));
+    assert(!audio_control_applies_to_generation(12, 11));
+
+    // A timed-out pause revokes its request; a late ACK is rejected.
+    assert(audio_pause_ack_is_current(7, 7, true));
+    assert(!audio_pause_ack_is_current(7, 8, true));
+    assert(!audio_pause_ack_is_current(7, 7, false));
+
+    // Fault-injected rename/verify failures never delete an untouched final,
+    // and retain valid backup/temp files whose restore rename failed.
+    assert(!transactional_remove_new_final(false, false));
+    assert(transactional_remove_new_final(true, false));
+    assert(!transactional_remove_new_final(true, true));
+    assert(transactional_keep_recovery_file(true, false));
+    assert(!transactional_keep_recovery_file(false, false));
+
+    // Queue saturation cannot turn an accepted Forget into a credential save.
+    assert(wifi_connect_may_save(true, false, false));
+    assert(!wifi_connect_may_save(true, true, false));
+    assert(!wifi_connect_may_save(true, false, true));
+
+    // Dừng -> Lưu & Kết nối is complete only after configure, save and start.
+    assert(camera_config_transaction_complete(true, true, true, true));
+    assert(!camera_config_transaction_complete(true, true, true, false));
+    assert(camera_config_transaction_complete(true, true, false, false));
     return 0;
 }

@@ -78,6 +78,7 @@ static volatile uint32_t audio_owner_refcount = 0;
 static uint32_t audio_owner_session = 0;
 static uint32_t audio_next_session = 0;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
+static AudioOwner audio_owner_transition = AUDIO_OWNER_NONE;
 static bool i2s_duplex_installed = false;
 static portMUX_TYPE audio_hw_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -97,12 +98,37 @@ struct AudioAsyncCommand
 };
 
 static QueueHandle_t audio_command_queue = nullptr;
-static constexpr uint32_t AUDIO_EVENT_STOP_PLAYBACK = 1U << 0;
-static constexpr uint32_t AUDIO_EVENT_STOP_RECORDING = 1U << 1;
-static constexpr uint32_t AUDIO_EVENT_CANCEL_RECORDING = 1U << 2;
 static uint32_t recording_command_generation = 0;
 static uint32_t playback_command_generation = 0;
 static portMUX_TYPE audio_command_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t active_recording_command_generation = 0;
+static uint32_t active_playback_command_generation = 0;
+struct AudioCommandAck
+{
+    uint32_t generation;
+    bool ok;
+};
+static AudioCommandAck recording_acks[8] = {};
+
+enum RecordingControlType : uint8_t
+{
+    RECORD_CONTROL_NONE = 0,
+    RECORD_CONTROL_STOP,
+    RECORD_CONTROL_CANCEL
+};
+
+struct AudioControlMailbox
+{
+    bool recording_pending;
+    RecordingControlType recording_type;
+    uint32_t recording_cancel_through;
+    uint32_t recording_request_ids[8];
+    uint8_t recording_request_count;
+    bool playback_stop_pending;
+    uint32_t playback_cancel_through;
+    uint32_t playback_request_id;
+};
+static AudioControlMailbox audio_control_mailbox = {};
 
 // The audio worker calls codec/I2C and tone code deeply. Keep DMA scratch out
 // of its task stack so startup chimes cannot exhaust the FreeRTOS stack.
@@ -130,6 +156,68 @@ static bool command_generation_current(uint32_t expected, uint32_t &generation)
     return current;
 }
 
+static void acknowledge_recording_command(uint32_t generation, bool ok)
+{
+    if (generation == 0) return;
+    portENTER_CRITICAL(&audio_command_mux);
+    AudioCommandAck &slot = recording_acks[generation %
+                                            (sizeof(recording_acks) / sizeof(recording_acks[0]))];
+    slot.ok = ok;
+    slot.generation = generation;
+    portEXIT_CRITICAL(&audio_command_mux);
+}
+
+static bool post_recording_control(RecordingControlType type, uint32_t request_id,
+                                   uint32_t cancel_through)
+{
+    bool accepted = false;
+    portENTER_CRITICAL(&audio_command_mux);
+    if (audio_control_mailbox.recording_request_count <
+        sizeof(audio_control_mailbox.recording_request_ids) /
+            sizeof(audio_control_mailbox.recording_request_ids[0]))
+    {
+        audio_control_mailbox.recording_request_ids[
+            audio_control_mailbox.recording_request_count++] = request_id;
+        // CANCEL dominates STOP for the same or older recording generations.
+        if (!audio_control_mailbox.recording_pending ||
+            cancel_through >= audio_control_mailbox.recording_cancel_through)
+        {
+            const RecordingControlType effective =
+                audio_control_mailbox.recording_pending &&
+                audio_control_mailbox.recording_type == RECORD_CONTROL_CANCEL
+                    ? RECORD_CONTROL_CANCEL : type;
+            audio_control_mailbox.recording_pending = true;
+            audio_control_mailbox.recording_type = effective;
+            audio_control_mailbox.recording_cancel_through = cancel_through;
+        }
+        accepted = true;
+    }
+    portEXIT_CRITICAL(&audio_command_mux);
+    if (accepted && audio_task_handle) xTaskNotifyGive(audio_task_handle);
+    return accepted;
+}
+
+static void post_playback_stop(uint32_t request_id, uint32_t cancel_through)
+{
+    portENTER_CRITICAL(&audio_command_mux);
+    audio_control_mailbox.playback_stop_pending = true;
+    audio_control_mailbox.playback_cancel_through = cancel_through;
+    audio_control_mailbox.playback_request_id = request_id;
+    portEXIT_CRITICAL(&audio_command_mux);
+    if (audio_task_handle) xTaskNotifyGive(audio_task_handle);
+}
+
+static AudioControlMailbox take_audio_controls()
+{
+    portENTER_CRITICAL(&audio_command_mux);
+    const AudioControlMailbox pending = audio_control_mailbox;
+    audio_control_mailbox.recording_pending = false;
+    audio_control_mailbox.recording_request_count = 0;
+    audio_control_mailbox.playback_stop_pending = false;
+    portEXIT_CRITICAL(&audio_command_mux);
+    return pending;
+}
+
 static void rollback_command_generation(uint32_t &generation, uint32_t issued, uint32_t previous)
 {
     portENTER_CRITICAL(&audio_command_mux);
@@ -147,6 +235,9 @@ enum AudioTaskState
 };
 static volatile AudioTaskState audio_task_state = AUDIO_TASK_ACTIVE;
 static SemaphoreHandle_t audio_task_ack_sem = nullptr;
+static portMUX_TYPE audio_task_state_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t audio_pause_request_id = 0;
+static uint32_t audio_pause_ack_id = 0;
 
 static void put_le16(uint8_t *p, uint16_t value)
 {
@@ -162,7 +253,15 @@ static uint32_t get_le32(const uint8_t *p)
            (static_cast<uint32_t>(p[3]) << 24);
 }
 
+static uint16_t get_le16(const uint8_t *p)
+{
+    return static_cast<uint16_t>(p[0]) |
+           static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8);
+}
+
 static void stop_playback_sync(void);
+static bool stop_recording_for_generation(uint32_t cancel_through, bool discard);
+static bool stop_playback_for_generation(uint32_t cancel_through);
 static void play_sound_effect_sync(SoundEffect fx);
 static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expected_generation);
 static bool start_playback_transaction(uint32_t expected_generation);
@@ -222,6 +321,7 @@ static bool publish_recording_snapshot(size_t count)
         if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
         {
             recording_state = RECORD_IDLE;
+            active_recording_command_generation = 0;
             recording_file_state = AUDIO_FILE_ERROR;
             xSemaphoreGive(audio_state_mutex);
         }
@@ -244,6 +344,7 @@ static bool publish_recording_snapshot(size_t count)
     current_recording = fresh;
     if (fresh) fresh->generation = ++recording_generation;
     recording_state = RECORD_IDLE;
+    active_recording_command_generation = 0;
     recording_file_state = AUDIO_FILE_NONE;
     xSemaphoreGive(audio_state_mutex);
     free_snapshot(discard);
@@ -266,7 +367,12 @@ static bool valid_recording_file_locked(fs::FS &fs, const char *path)
         memcmp(header + 8, "WAVEfmt ", 8) != 0 || memcmp(header + 36, "data", 4) != 0)
         return false;
     const uint32_t data_size = get_le32(header + 40);
-    return get_le32(header + 4) == data_size + 36U &&
+    return get_le32(header + 4) == data_size + 36U && get_le32(header + 16) == 16U &&
+           get_le16(header + 20) == 1U && get_le16(header + 22) == 1U &&
+           get_le32(header + 24) == AUDIO_SAMPLE_RATE &&
+           get_le32(header + 28) == AUDIO_SAMPLE_RATE * sizeof(int16_t) &&
+           get_le16(header + 32) == sizeof(int16_t) && get_le16(header + 34) == 16U &&
+           (data_size % sizeof(int16_t)) == 0U &&
            total_size == static_cast<size_t>(data_size) + sizeof(header);
 }
 
@@ -281,24 +387,34 @@ static bool recover_recording_files_locked(fs::FS &fs)
         return true;
     }
 
-    if (fs.exists(kRecordingPath)) fs.remove(kRecordingPath);
-    if (fs.exists(kRecordingBackupPath) &&
-        valid_recording_file_locked(fs, kRecordingBackupPath) &&
-        fs.rename(kRecordingBackupPath, kRecordingPath))
+    if (fs.exists(kRecordingPath) && !fs.remove(kRecordingPath)) return false;
+    const bool backup_exists = fs.exists(kRecordingBackupPath);
+    const bool backup_valid = backup_exists &&
+                              valid_recording_file_locked(fs, kRecordingBackupPath);
+    const bool backup_restored = backup_valid &&
+                                 fs.rename(kRecordingBackupPath, kRecordingPath);
+    if (backup_restored)
     {
         if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
         Serial.println("[AUDIO][WAV] Recovered last recording from .bak");
         return true;
     }
-    if (fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
-    if (fs.exists(kRecordingTempPath) &&
-        valid_recording_file_locked(fs, kRecordingTempPath) &&
-        fs.rename(kRecordingTempPath, kRecordingPath))
+    // A valid backup that could not be renamed is the last known-good file.
+    // Preserve it (and any valid temp) so a later boot can retry recovery.
+    if (transactional_keep_recovery_file(backup_valid, backup_restored)) return false;
+    if (backup_exists) fs.remove(kRecordingBackupPath);
+
+    const bool temp_exists = fs.exists(kRecordingTempPath);
+    const bool temp_valid = temp_exists && valid_recording_file_locked(fs, kRecordingTempPath);
+    const bool temp_restored = temp_valid && fs.rename(kRecordingTempPath, kRecordingPath);
+    if (temp_restored)
     {
         Serial.println("[AUDIO][WAV] Recovered completed recording from .tmp");
         return true;
     }
-    if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+    if (temp_exists && !temp_valid) fs.remove(kRecordingTempPath);
+    if (transactional_keep_recovery_file(temp_valid, temp_restored))
+        Serial.println("[AUDIO][WAV] Valid .tmp retained for recovery retry");
     return false;
 }
 
@@ -307,6 +423,9 @@ static void recording_export_task(void *arg)
     AudioRecordingLease *lease = static_cast<AudioRecordingLease *>(arg);
     bool ok = false;
     size_t total_written = 0;
+    bool backup_created = false;
+    bool new_file_installed = false;
+    bool commit_verified = false;
     const size_t expected_file_size = lease
         ? 44U + lease->sample_count * sizeof(int16_t) : 0U;
     if (lease && lease->samples && lease->sample_count > 0 &&
@@ -314,7 +433,21 @@ static void recording_export_task(void *arg)
     {
         fs::FS &fs = storage_get_fs();
         bool directory_ready = fs.exists("/voice") || fs.mkdir("/voice");
-        if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+        if (directory_ready)
+        {
+            (void)recover_recording_files_locked(fs);
+            const bool final_valid = fs.exists(kRecordingPath) &&
+                                     valid_recording_file_locked(fs, kRecordingPath);
+            const bool unresolved_backup = fs.exists(kRecordingBackupPath) &&
+                valid_recording_file_locked(fs, kRecordingBackupPath);
+            const bool unresolved_temp = fs.exists(kRecordingTempPath) &&
+                valid_recording_file_locked(fs, kRecordingTempPath);
+            // Do not overwrite a recoverable artifact after its restore rename
+            // failed. A later mount/boot gets another recovery attempt.
+            if (!final_valid && (unresolved_backup || unresolved_temp))
+                directory_ready = false;
+        }
+        if (directory_ready && fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
         File file = directory_ready ? fs.open(kRecordingTempPath, FILE_WRITE) : File();
         if (file)
         {
@@ -349,22 +482,38 @@ static void recording_export_task(void *arg)
 
         if (ok)
         {
-            if (fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
             const bool had_old = fs.exists(kRecordingPath);
-            const bool backup_ready = !had_old || fs.rename(kRecordingPath, kRecordingBackupPath);
-            ok = transactional_replace_can_commit(expected_file_size, total_written,
-                                                   true, backup_ready) &&
-                 fs.rename(kRecordingTempPath, kRecordingPath) &&
-                 valid_recording_file_locked(fs, kRecordingPath);
-            if (ok)
+            // A valid final is authoritative, so only then may a stale backup
+            // be removed before creating this transaction's own backup.
+            if (had_old && fs.exists(kRecordingBackupPath) &&
+                valid_recording_file_locked(fs, kRecordingPath))
+                fs.remove(kRecordingBackupPath);
+
+            const bool backup_ready = !had_old ||
+                (backup_created = fs.rename(kRecordingPath, kRecordingBackupPath));
+            if (transactional_replace_can_commit(expected_file_size, total_written,
+                                                  true, backup_ready))
             {
-                if (had_old && fs.exists(kRecordingBackupPath)) fs.remove(kRecordingBackupPath);
+                new_file_installed = fs.rename(kRecordingTempPath, kRecordingPath);
+                commit_verified = new_file_installed &&
+                                  valid_recording_file_locked(fs, kRecordingPath);
             }
-            else
+            ok = commit_verified;
+            if (commit_verified)
             {
-                if (fs.exists(kRecordingPath)) fs.remove(kRecordingPath);
-                if (had_old && fs.exists(kRecordingBackupPath))
-                    fs.rename(kRecordingBackupPath, kRecordingPath);
+                if (backup_created && fs.exists(kRecordingBackupPath))
+                    fs.remove(kRecordingBackupPath);
+            }
+            else if (backup_created)
+            {
+                // Never remove an untouched old final after backup rename
+                // failed.  Remove final only when this transaction installed it.
+                if (transactional_remove_new_final(new_file_installed, commit_verified) &&
+                    fs.exists(kRecordingPath))
+                    fs.remove(kRecordingPath);
+                // On restore failure keep .bak for the next recovery attempt.
+                if (!fs.exists(kRecordingPath) && fs.exists(kRecordingBackupPath))
+                    (void)fs.rename(kRecordingBackupPath, kRecordingPath);
             }
         }
         storage_unlock();
@@ -496,9 +645,9 @@ bool audio_drain_tx(uint32_t timeout_ms)
     return true;
 }
 
-void audio_uninstall_duplex_driver(void)
+bool audio_uninstall_duplex_driver(void)
 {
-    if (!audio_is_driver_installed()) return;
+    if (!audio_is_driver_installed()) return true;
 
     i2s_zero_dma_buffer(I2S_NUM_0);
     esp_err_t err = i2s_driver_uninstall(I2S_NUM_0);
@@ -508,10 +657,12 @@ void audio_uninstall_duplex_driver(void)
         i2s_duplex_installed = false;
         portEXIT_CRITICAL(&audio_hw_mux);
         Serial.println("[AUDIO] 🔌 Đã gỡ bỏ I2S Duplex Driver để nhường cổng I2S_NUM_0.");
+        return true;
     }
     else
     {
         Serial.printf("[AUDIO] Cảnh báo khi gỡ I2S Driver: 0x%X\n", err);
+        return false;
     }
 }
 
@@ -526,7 +677,6 @@ bool audio_is_driver_installed(void)
 bool audio_manager_pause_task_sync(uint32_t timeout_ms)
 {
     if (audio_task_handle == nullptr) return true;
-    if (audio_task_state == AUDIO_TASK_PAUSED) return true;
 
     if (audio_task_ack_sem == nullptr)
     {
@@ -538,26 +688,56 @@ bool audio_manager_pause_task_sync(uint32_t timeout_ms)
         return false;
     }
     xSemaphoreTake(audio_task_ack_sem, 0); // Dọn sạch token cũ nếu còn
-
+    portENTER_CRITICAL(&audio_task_state_mux);
+    if (audio_task_state == AUDIO_TASK_PAUSED)
+    {
+        portEXIT_CRITICAL(&audio_task_state_mux);
+        return true;
+    }
+    ++audio_pause_request_id;
+    if (audio_pause_request_id == 0) ++audio_pause_request_id;
+    const uint32_t request_id = audio_pause_request_id;
     audio_task_state = AUDIO_TASK_PAUSE_REQUESTED;
+    portEXIT_CRITICAL(&audio_task_state_mux);
+    xTaskNotifyGive(audio_task_handle);
 
     // Đợi Audio Task gửi ACK xác nhận đã ra khỏi mọi hàm I2S DMA
     if (xSemaphoreTake(audio_task_ack_sem, pdMS_TO_TICKS(timeout_ms)) == pdTRUE)
     {
-        Serial.println("[AUDIO] 🛑 Audio Task đã dừng an toàn và gửi ACK.");
-        return true;
+        portENTER_CRITICAL(&audio_task_state_mux);
+        const bool current_ack = audio_task_state == AUDIO_TASK_PAUSED &&
+                                 audio_pause_ack_id == request_id;
+        portEXIT_CRITICAL(&audio_task_state_mux);
+        if (current_ack)
+        {
+            Serial.println("[AUDIO] 🛑 Audio Task đã dừng an toàn và gửi ACK.");
+            return true;
+        }
     }
     Serial.println("[AUDIO] ⚠️ Timeout chờ ACK dừng Audio Task!");
-    return (audio_task_state == AUDIO_TASK_PAUSED);
+    // Revoke this request. A late worker ACK must not strand Audio_Task paused.
+    portENTER_CRITICAL(&audio_task_state_mux);
+    if (audio_pause_request_id == request_id &&
+        (audio_task_state == AUDIO_TASK_PAUSE_REQUESTED ||
+         audio_task_state == AUDIO_TASK_PAUSED))
+        audio_task_state = AUDIO_TASK_RESUME_REQUESTED;
+    portEXIT_CRITICAL(&audio_task_state_mux);
+    xTaskNotifyGive(audio_task_handle);
+    return false;
 }
 
 void audio_manager_resume_task(void)
 {
-    if (audio_task_state == AUDIO_TASK_PAUSED || audio_task_state == AUDIO_TASK_PAUSE_REQUESTED)
+    portENTER_CRITICAL(&audio_task_state_mux);
+    const bool resume = audio_task_state == AUDIO_TASK_PAUSED ||
+                        audio_task_state == AUDIO_TASK_PAUSE_REQUESTED;
+    if (resume)
     {
         audio_task_state = AUDIO_TASK_RESUME_REQUESTED;
-        Serial.println("[AUDIO] ▶ Đã gửi yêu cầu khôi phục hoạt động cho Audio Task.");
     }
+    portEXIT_CRITICAL(&audio_task_state_mux);
+    if (resume && audio_task_handle) xTaskNotifyGive(audio_task_handle);
+    if (resume) Serial.println("[AUDIO] ▶ Đã gửi yêu cầu khôi phục hoạt động cho Audio Task.");
 }
 
 bool audio_request_ownership(AudioOwner requester)
@@ -578,6 +758,11 @@ bool audio_request_ownership(AudioOwner requester)
 
     // Re-entrant owner requests are real leases and must be balanced. Call-site
     // guards prevent Play/Resume from acquiring twice for one logical session.
+    if (audio_owner_transition != AUDIO_OWNER_NONE)
+    {
+        xSemaphoreGive(audio_owner_mutex);
+        return false;
+    }
     if (current_audio_owner == requester)
     {
         ++audio_owner_refcount;
@@ -598,29 +783,63 @@ bool audio_request_ownership(AudioOwner requester)
     // 1. Phân hệ MUSIC (ESP32-audioI2S) yêu cầu độc quyền I2S_NUM_0
     if (requester == AUDIO_OWNER_MUSIC)
     {
-        // Tạm dừng phát âm thanh hệ thống (nếu có)
-        if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-        {
-            playback_active = false;
-            playback_starting = false;
-            xSemaphoreGive(audio_state_mutex);
-        }
+        // Reserve the transition, but never hold the owner mutex while waiting
+        // for an ACK from Audio_Task (the worker also queries ownership).
+        audio_owner_transition = AUDIO_OWNER_MUSIC;
+        xSemaphoreGive(audio_owner_mutex);
 
-        // BƯỚC BẮT BUỘC: Đồng bộ dừng hoàn toàn Audio Task và chờ ACK trước khi gỡ driver
-        if (!audio_manager_pause_task_sync(300))
+        const bool pause_acked = audio_manager_pause_task_sync(300);
+        if (!pause_acked)
         {
             Serial.println("[AUDIO] ❌ Lỗi: Không thể pause Audio Task kịp thời để nhường I2S cho MUSIC!");
-            xSemaphoreGive(audio_owner_mutex);
+            if (xSemaphoreTake(audio_owner_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (audio_owner_transition == AUDIO_OWNER_MUSIC)
+                    audio_owner_transition = AUDIO_OWNER_NONE;
+                xSemaphoreGive(audio_owner_mutex);
+            }
             return false;
         }
 
-        // Gỡ bỏ I2S driver của AudioManager khi chắc chắn không còn tác vụ nào gọi i2s_read/i2s_write
-        audio_uninstall_duplex_driver();
+        const bool uninstall_ok = audio_uninstall_duplex_driver();
+        if (!audio_music_handoff_can_grant(pause_acked, uninstall_ok))
+        {
+            audio_manager_resume_task();
+            if (xSemaphoreTake(audio_owner_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (audio_owner_transition == AUDIO_OWNER_MUSIC)
+                    audio_owner_transition = AUDIO_OWNER_NONE;
+                xSemaphoreGive(audio_owner_mutex);
+            }
+            return false;
+        }
 
+        if (xSemaphoreTake(audio_owner_mutex, portMAX_DELAY) != pdTRUE)
+        {
+            const bool driver_ok = audio_install_duplex_driver();
+            const bool codec_ok = driver_ok &&
+                audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+            if (audio_duplex_restore_ready(driver_ok, codec_ok)) audio_manager_resume_task();
+            else Serial.println("[AUDIO] ❌ MUSIC handoff rollback could not restore duplex/codec");
+            return false;
+        }
+        if (audio_owner_transition != AUDIO_OWNER_MUSIC ||
+            current_audio_owner != AUDIO_OWNER_NONE)
+        {
+            audio_owner_transition = AUDIO_OWNER_NONE;
+            xSemaphoreGive(audio_owner_mutex);
+            const bool driver_ok = audio_install_duplex_driver();
+            const bool codec_ok = driver_ok &&
+                audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+            if (audio_duplex_restore_ready(driver_ok, codec_ok)) audio_manager_resume_task();
+            else Serial.println("[AUDIO] ❌ MUSIC handoff rollback could not restore duplex/codec");
+            return false;
+        }
         current_audio_owner = AUDIO_OWNER_MUSIC;
         audio_owner_refcount = 1;
         audio_owner_session = ++audio_next_session;
         if (audio_owner_session == 0) audio_owner_session = ++audio_next_session;
+        audio_owner_transition = AUDIO_OWNER_NONE;
         Serial.printf("[AUDIO][OWNER] acquire MUSIC session=%u ref=1\n", audio_owner_session);
         xSemaphoreGive(audio_owner_mutex);
         return true;
@@ -677,18 +896,31 @@ static bool release_ownership(AudioOwner requester, uint32_t expected_session, b
 
             // Restore the duplex path before publishing OWNER_NONE so another
             // caller cannot acquire a half-restored I2S/codec configuration.
+            bool restore_ok = true;
             if (requester == AUDIO_OWNER_MUSIC)
             {
-                if (audio_install_duplex_driver())
+                const bool driver_ok = audio_install_duplex_driver();
+                bool codec_ok = false;
+                if (driver_ok)
                 {
-                    if (!audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
+                    codec_ok = audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+                    if (!codec_ok)
                         Serial.println("[AUDIO] ❌ I2S duplex restored but codec clock restore failed");
-                    audio_manager_resume_task();
                 }
                 else
                 {
                     Serial.println("[AUDIO] ❌ MUSIC released but duplex restore failed");
                 }
+                restore_ok = audio_duplex_restore_ready(driver_ok, codec_ok);
+                if (restore_ok) audio_manager_resume_task();
+            }
+            if (!restore_ok)
+            {
+                // Keep MUSIC ownership published as an error/retry state. A
+                // later release attempt retries restore instead of reporting
+                // OWNER_NONE while duplex is unavailable.
+                xSemaphoreGive(audio_owner_mutex);
+                return false;
             }
             audio_owner_refcount = 0;
             current_audio_owner = AUDIO_OWNER_NONE;
@@ -989,19 +1221,38 @@ static void audio_background_task(void *pvParameters)
 {
     size_t rx_carry_bytes = 0;
     size_t bytes_read = 0;
+    uint32_t last_stack_report_ms = 0;
 
     while (1)
     {
-        uint32_t control_events = 0;
-        if (xTaskNotifyWait(0, UINT32_MAX, &control_events, 0) == pdTRUE)
+        const uint32_t now_ms = millis();
+        if (now_ms - last_stack_report_ms >= 30000U)
         {
-            if (control_events & AUDIO_EVENT_CANCEL_RECORDING) audio_cancel_recording();
-            if (control_events & AUDIO_EVENT_STOP_RECORDING) audio_stop_recording();
-            if (control_events & AUDIO_EVENT_STOP_PLAYBACK) stop_playback_sync();
+            last_stack_report_ms = now_ms;
+            Serial.printf("[AUDIO][STACK] Audio_Task high-water=%u bytes\n",
+                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
+                                                sizeof(StackType_t)));
         }
+        const AudioControlMailbox controls = take_audio_controls();
+        if (controls.recording_pending)
+        {
+            const bool applied = stop_recording_for_generation(
+                controls.recording_cancel_through,
+                controls.recording_type == RECORD_CONTROL_CANCEL);
+            for (uint8_t i = 0; i < controls.recording_request_count; ++i)
+                acknowledge_recording_command(controls.recording_request_ids[i], applied);
+        }
+        if (controls.playback_stop_pending)
+            (void)stop_playback_for_generation(controls.playback_cancel_through);
 
         // 0a. Máy trạng thái Handshake dừng/khôi phục Audio Task an toàn
-        if (audio_task_state == AUDIO_TASK_PAUSE_REQUESTED)
+        AudioTaskState task_state;
+        uint32_t pause_request = 0;
+        portENTER_CRITICAL(&audio_task_state_mux);
+        task_state = audio_task_state;
+        pause_request = audio_pause_request_id;
+        portEXIT_CRITICAL(&audio_task_state_mux);
+        if (task_state == AUDIO_TASK_PAUSE_REQUESTED)
         {
             AudioAsyncCommand cancelled = {};
             while (audio_command_queue &&
@@ -1010,25 +1261,40 @@ static void audio_background_task(void *pvParameters)
                 if (cancelled.type == AUDIO_ASYNC_SET_VOLUME)
                     audio_set_volume(cancelled.value);
                 else
+                {
+                    if (cancelled.type == AUDIO_ASYNC_START_RECORDING)
+                        acknowledge_recording_command(cancelled.generation, false);
                     Serial.printf("[AUDIO] command %u cancelled while MUSIC takes I2S\n",
                                   static_cast<unsigned>(cancelled.type));
+                }
             }
-            audio_task_state = AUDIO_TASK_PAUSED;
-            if (audio_task_ack_sem)
+            bool ack_pause = false;
+            portENTER_CRITICAL(&audio_task_state_mux);
+            if (audio_pause_ack_is_current(
+                    pause_request, audio_pause_request_id,
+                    audio_task_state == AUDIO_TASK_PAUSE_REQUESTED))
             {
-                xSemaphoreGive(audio_task_ack_sem);
+                audio_task_state = AUDIO_TASK_PAUSED;
+                audio_pause_ack_id = pause_request;
+                ack_pause = true;
             }
+            task_state = audio_task_state;
+            portEXIT_CRITICAL(&audio_task_state_mux);
+            if (ack_pause && audio_task_ack_sem) xSemaphoreGive(audio_task_ack_sem);
         }
 
-        if (audio_task_state == AUDIO_TASK_PAUSED)
+        if (task_state == AUDIO_TASK_PAUSED)
         {
             vTaskDelay(pdMS_TO_TICKS(15));
             continue;
         }
 
-        if (audio_task_state == AUDIO_TASK_RESUME_REQUESTED)
+        if (task_state == AUDIO_TASK_RESUME_REQUESTED)
         {
-            audio_task_state = AUDIO_TASK_ACTIVE;
+            portENTER_CRITICAL(&audio_task_state_mux);
+            if (audio_task_state == AUDIO_TASK_RESUME_REQUESTED)
+                audio_task_state = AUDIO_TASK_ACTIVE;
+            portEXIT_CRITICAL(&audio_task_state_mux);
         }
 
         AudioAsyncCommand async_cmd;
@@ -1036,7 +1302,9 @@ static void audio_background_task(void *pvParameters)
         {
             if (async_cmd.type == AUDIO_ASYNC_START_RECORDING)
             {
-                if (!start_recording_transaction(async_cmd.value, async_cmd.generation))
+                const bool started = start_recording_transaction(async_cmd.value, async_cmd.generation);
+                acknowledge_recording_command(async_cmd.generation, started);
+                if (!started)
                     Serial.println("[AUDIO] stale/failed queued recording start discarded");
             }
             else if (async_cmd.type == AUDIO_ASYNC_START_PLAYBACK)
@@ -1168,6 +1436,7 @@ static void audio_background_task(void *pvParameters)
                         playback_lease = {};
                         completed_session = playback_owner_session;
                         playback_owner_session = 0;
+                        active_playback_command_generation = 0;
                         playback_complete = true;
                     }
                 }
@@ -1515,6 +1784,7 @@ static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expe
     }
     const uint32_t reservation = ++recording_next_token ? recording_next_token : ++recording_next_token;
     recording_start_token = reservation;
+    active_recording_command_generation = expected_generation;
     recording_state = RECORD_STARTING;
     xSemaphoreGive(audio_state_mutex);
 
@@ -1524,7 +1794,10 @@ static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expe
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
             if (recording_state == RECORD_STARTING && recording_start_token == reservation)
+            {
                 recording_state = RECORD_IDLE;
+                active_recording_command_generation = 0;
+            }
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -1535,14 +1808,24 @@ static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expe
         if (xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
         {
             if (recording_state == RECORD_STARTING && recording_start_token == reservation)
+            {
                 recording_state = RECORD_IDLE;
+                active_recording_command_generation = 0;
+            }
             xSemaphoreGive(audio_state_mutex);
         }
         audio_release_ownership(AUDIO_OWNER_RECORDER);
         return false;
     }
-    if (recording_state != RECORD_STARTING || recording_start_token != reservation)
+    if (recording_state != RECORD_STARTING || recording_start_token != reservation ||
+        (expected_generation != 0 &&
+         !command_generation_current(expected_generation, recording_command_generation)))
     {
+        if (recording_state == RECORD_STARTING && recording_start_token == reservation)
+        {
+            recording_state = RECORD_IDLE;
+            active_recording_command_generation = 0;
+        }
         xSemaphoreGive(audio_state_mutex);
         audio_release_ownership(AUDIO_OWNER_RECORDER);
         return false;
@@ -1563,7 +1846,7 @@ bool audio_start_recording(uint32_t max_duration_sec)
     return start_recording_transaction(max_duration_sec, 0);
 }
 
-bool audio_start_recording_async(uint32_t max_duration_sec)
+bool audio_start_recording_async(uint32_t max_duration_sec, uint32_t *request_id)
 {
     if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
@@ -1577,13 +1860,21 @@ bool audio_start_recording_async(uint32_t max_duration_sec)
     };
     const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
     if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
+    else if (request_id) *request_id = issued;
     return queued;
 }
 
-void audio_stop_recording(void)
+static bool stop_recording_for_generation(uint32_t cancel_through, bool discard)
 {
-    if (!audio_state_mutex ||
-        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE)
+        return false;
+    const bool generation_matches = audio_control_applies_to_generation(
+        active_recording_command_generation, cancel_through);
+    if (!generation_matches)
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return true; // The requested old generation is already gone.
+    }
     const bool was_recording = recording_state == RECORD_ACTIVE;
     if (recording_state == RECORD_STARTING)
     {
@@ -1592,9 +1883,16 @@ void audio_stop_recording(void)
     }
     if (was_recording) recording_state = RECORD_SNAPSHOTTING;
     const uint32_t sample_count = recorded_samples_count;
+    active_recording_command_generation = 0;
+    if (discard)
+    {
+        recording_state = RECORD_IDLE;
+        recorded_samples_count = 0;
+        recording_file_state = AUDIO_FILE_NONE;
+    }
     xSemaphoreGive(audio_state_mutex);
 
-    if (was_recording)
+    if (was_recording && !discard)
     {
         Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
                       sample_count, (float)sample_count / AUDIO_SAMPLE_RATE);
@@ -1602,45 +1900,75 @@ void audio_stop_recording(void)
         if (snapshot_ok) schedule_recording_export();
         audio_release_ownership(AUDIO_OWNER_RECORDER);
     }
+    else if (was_recording)
+    {
+        audio_release_ownership(AUDIO_OWNER_RECORDER);
+    }
+    return true;
 }
 
-bool audio_stop_recording_async(void)
+void audio_stop_recording(void)
+{
+    (void)stop_recording_for_generation(0, false);
+}
+
+bool audio_stop_recording_async(uint32_t *request_id)
 {
     if (!audio_task_handle) return false;
     uint32_t previous = 0;
     const uint32_t issued = next_command_generation(recording_command_generation, &previous);
-    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_RECORDING, eSetBits) == pdPASS;
-    if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
-    return queued;
+    if (!post_recording_control(RECORD_CONTROL_STOP, issued, issued))
+    {
+        rollback_command_generation(recording_command_generation, issued, previous);
+        return false;
+    }
+    if (request_id) *request_id = issued;
+    return true;
 }
 
-bool audio_cancel_recording_async(void)
+bool audio_cancel_recording_async(uint32_t *request_id)
 {
     if (!audio_task_handle) return false;
     uint32_t previous = 0;
     const uint32_t issued = next_command_generation(recording_command_generation, &previous);
-    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_CANCEL_RECORDING, eSetBits) == pdPASS;
-    if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
-    return queued;
+    if (!post_recording_control(RECORD_CONTROL_CANCEL, issued, issued))
+    {
+        rollback_command_generation(recording_command_generation, issued, previous);
+        return false;
+    }
+    if (request_id) *request_id = issued;
+    return true;
 }
 
 void audio_cancel_recording(void)
 {
-    if (!audio_state_mutex ||
-        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
-    const bool was_recording = recording_state == RECORD_ACTIVE;
-    const bool was_starting = recording_state == RECORD_STARTING;
-    if (!was_recording && !was_starting)
+    (void)stop_recording_for_generation(0, true);
+}
+
+bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
+                                      bool *operation_ok)
+{
+    if (request_id == 0) return false;
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    do
     {
-        xSemaphoreGive(audio_state_mutex);
-        return;
-    }
-    recording_state = RECORD_IDLE;
-    ++recording_next_token;
-    recorded_samples_count = 0;
-    recording_file_state = AUDIO_FILE_NONE;
-    xSemaphoreGive(audio_state_mutex);
-    if (was_recording) audio_release_ownership(AUDIO_OWNER_RECORDER);
+        bool found = false;
+        bool ok = false;
+        portENTER_CRITICAL(&audio_command_mux);
+        const AudioCommandAck &slot = recording_acks[request_id %
+            (sizeof(recording_acks) / sizeof(recording_acks[0]))];
+        found = slot.generation == request_id;
+        ok = slot.ok;
+        portEXIT_CRITICAL(&audio_command_mux);
+        if (found)
+        {
+            if (operation_ok) *operation_ok = ok;
+            return true;
+        }
+        if (timeout_ms == 0) return false;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    } while (static_cast<int32_t>(xTaskGetTickCount() - deadline) < 0);
+    return false;
 }
 
 bool audio_is_recording(void)
@@ -1679,6 +2007,7 @@ static bool start_playback_transaction(uint32_t expected_generation)
     }
     const uint32_t reservation = ++playback_next_token ? playback_next_token : ++playback_next_token;
     playback_start_token = reservation;
+    active_playback_command_generation = expected_generation;
     playback_starting = true;
     xSemaphoreGive(audio_state_mutex);
 
@@ -1688,6 +2017,7 @@ static bool start_playback_transaction(uint32_t expected_generation)
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
             if (playback_start_token == reservation) playback_starting = false;
+            if (playback_start_token == reservation) active_playback_command_generation = 0;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -1699,6 +2029,7 @@ static bool start_playback_transaction(uint32_t expected_generation)
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
             if (playback_start_token == reservation) playback_starting = false;
+            if (playback_start_token == reservation) active_playback_command_generation = 0;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -1715,8 +2046,15 @@ static bool start_playback_transaction(uint32_t expected_generation)
         audio_release_recording_lease(&lease);
         return false;
     }
-    if (!playback_starting || playback_start_token != reservation)
+    if (!playback_starting || playback_start_token != reservation ||
+        (expected_generation != 0 &&
+         !command_generation_current(expected_generation, playback_command_generation)))
     {
+        if (playback_start_token == reservation)
+        {
+            playback_starting = false;
+            active_playback_command_generation = 0;
+        }
         xSemaphoreGive(audio_state_mutex);
         audio_release_ownership(AUDIO_OWNER_PLAYBACK);
         audio_release_recording_lease(&lease);
@@ -1730,6 +2068,7 @@ static bool start_playback_transaction(uint32_t expected_generation)
     {
         playback_lease = {};
         playback_starting = false;
+        active_playback_command_generation = 0;
         xSemaphoreGive(audio_state_mutex);
         audio_release_ownership(AUDIO_OWNER_PLAYBACK);
         audio_release_recording_lease(&lease);
@@ -1750,7 +2089,7 @@ bool audio_start_playback(void)
     return start_playback_transaction(0);
 }
 
-bool audio_start_playback_async(void)
+bool audio_start_playback_async(uint32_t *request_id)
 {
     if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
@@ -1762,12 +2101,21 @@ bool audio_start_playback_async(void)
     };
     const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
     if (!queued) rollback_command_generation(playback_command_generation, issued, previous);
+    else if (request_id) *request_id = issued;
     return queued;
 }
 
-static void stop_playback_sync(void)
+static bool stop_playback_for_generation(uint32_t cancel_through)
 {
-    if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE)
+        return false;
+    const bool generation_matches = audio_control_applies_to_generation(
+        active_playback_command_generation, cancel_through);
+    if (!generation_matches)
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return true;
+    }
     const bool was_playing = playback_active;
     playback_starting = false;
     ++playback_next_token;
@@ -1777,6 +2125,7 @@ static void stop_playback_sync(void)
     const uint32_t session = playback_owner_session;
     playback_lease = {};
     playback_owner_session = 0;
+    active_playback_command_generation = 0;
     xSemaphoreGive(audio_state_mutex);
     audio_release_recording_lease(&lease);
     if (was_playing)
@@ -1784,16 +2133,22 @@ static void stop_playback_sync(void)
         audio_drain_tx(250);
         audio_release_ownership_session(AUDIO_OWNER_PLAYBACK, session);
     }
+    return true;
 }
 
-bool audio_stop_playback(void)
+static void stop_playback_sync(void)
+{
+    (void)stop_playback_for_generation(0);
+}
+
+bool audio_stop_playback(uint32_t *request_id)
 {
     if (!audio_task_handle) return false;
     uint32_t previous = 0;
     const uint32_t issued = next_command_generation(playback_command_generation, &previous);
-    const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_PLAYBACK, eSetBits) == pdPASS;
-    if (!queued) rollback_command_generation(playback_command_generation, issued, previous);
-    return queued;
+    post_playback_stop(issued, issued);
+    if (request_id) *request_id = issued;
+    return true;
 }
 
 bool audio_is_playing(void)

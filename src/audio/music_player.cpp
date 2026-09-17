@@ -55,7 +55,11 @@ static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
 static uint32_t codec_sample_rate = 0;
 static constexpr uint32_t MUSIC_EVENT_EOF = 1U << 0;
-static constexpr uint32_t MUSIC_EVENT_STOP = 1U << 1;
+static portMUX_TYPE music_control_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool music_stop_pending = false;
+static uint32_t music_stop_session = 0;
+static uint32_t last_restore_retry_ms = 0;
+static void internal_stop_audio_locked(void);
 
 static bool enqueue_music_command(const MusicCommand &cmd)
 {
@@ -81,13 +85,48 @@ static bool acquire_music_audio(void)
     return true;
 }
 
-static void release_music_audio(void)
+static bool release_music_audio(void)
 {
-    if (!music_owns_audio) return;
-    music_owns_audio = false;
+    if (!music_owns_audio) return true;
     const uint32_t session = music_owner_session;
+    if (!audio_release_ownership_session(AUDIO_OWNER_MUSIC, session))
+    {
+        Serial.println("[MUSIC_AUDIO] Duplex restore pending; MUSIC ownership retained for retry");
+        return false;
+    }
+    music_owns_audio = false;
     music_owner_session = 0;
-    audio_release_ownership_session(AUDIO_OWNER_MUSIC, session);
+    return true;
+}
+
+static bool take_music_stop(uint32_t *session)
+{
+    portENTER_CRITICAL(&music_control_mux);
+    const bool pending = music_stop_pending;
+    if (pending)
+    {
+        if (session) *session = music_stop_session;
+        music_stop_pending = false;
+    }
+    portEXIT_CRITICAL(&music_control_mux);
+    return pending;
+}
+
+static void apply_music_stop(uint32_t target_session)
+{
+    const uint32_t current_session = music_owner_session;
+    if (target_session != 0 && current_session != target_session) return;
+    bool stopped = false;
+    if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (target_session == 0 || music_owner_session == target_session)
+        {
+            internal_stop_audio_locked();
+            stopped = true;
+        }
+        xSemaphoreGive(audio_mutex);
+    }
+    if (stopped) (void)release_music_audio();
 }
 
 /* Hàm hỗ trợ dừng và dọn dẹp Audio engine nội bộ trên Core 0 */
@@ -139,6 +178,8 @@ static void music_audio_task(void *pvParameters)
 
     while (true)
     {
+        uint32_t stop_session = 0;
+        if (take_music_stop(&stop_session)) apply_music_stop(stop_session);
         // 1. Nhận và xử lý các lệnh từ FreeRTOS Queue theo thứ tự (không bao giờ bị race condition)
         MusicCommand cmd;
         while (music_cmd_queue && xQueueReceive(music_cmd_queue, &cmd, 0) == pdTRUE)
@@ -374,23 +415,21 @@ static void music_audio_task(void *pvParameters)
         }
         else
         {
+            // A failed duplex/codec restore keeps MUSIC ownership. Retry only
+            // after the decoder is fully stopped and without claiming READY.
+            const uint32_t now = millis();
+            if (music_owns_audio && !player_state.is_paused &&
+                static_cast<uint32_t>(now - last_restore_retry_ms) >= 1000U)
+            {
+                last_restore_retry_ms = now;
+                (void)release_music_audio();
+            }
             vTaskDelay(pdMS_TO_TICKS(15));
         }
 
         uint32_t events = 0;
         if (xTaskNotifyWait(0, UINT32_MAX, &events, 0) == pdTRUE)
         {
-            if (events & MUSIC_EVENT_STOP)
-            {
-                bool stopped = false;
-                if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
-                {
-                    internal_stop_audio_locked();
-                    stopped = true;
-                    xSemaphoreGive(audio_mutex);
-                }
-                if (stopped) release_music_audio();
-            }
             if (events & MUSIC_EVENT_EOF) handle_eof_event();
         }
     }
@@ -627,8 +666,13 @@ bool music_player_resume(void)
 
 bool music_player_stop(void)
 {
-    if (!audio_task_handle ||
-        xTaskNotify(audio_task_handle, MUSIC_EVENT_STOP, eSetBits) != pdPASS) return false;
+    if (!audio_task_handle) return false;
+    const uint32_t session = audio_get_owner_session(AUDIO_OWNER_MUSIC);
+    portENTER_CRITICAL(&music_control_mux);
+    music_stop_session = session;
+    music_stop_pending = true;
+    portEXIT_CRITICAL(&music_control_mux);
+    xTaskNotify(audio_task_handle, 0, eNoAction);
     Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
     return true;
 }

@@ -46,6 +46,8 @@ uint32_t s_cancelled_through = 0;
 uint32_t s_completed_request_id = 0;
 uint32_t s_recording_base_generation = 0;
 uint32_t s_recording_deadline_ms = 0;
+uint32_t s_audio_start_request_id = 0;
+uint32_t s_audio_control_request_id = 0;
 bool s_waiting_record_start = false;
 bool s_waiting_record_commit = false;
 char s_last_error[128] = "AI endpoint is not configured";
@@ -428,12 +430,18 @@ void ai_task(void *)
         bool wait_commit = false;
         uint32_t base_generation = 0;
         uint32_t recording_deadline = 0;
+        uint32_t audio_start_request = 0;
+        uint32_t audio_control_request = 0;
+        AIVoiceState state_snapshot = AI_STATE_ERROR;
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
         {
             wait_start = s_waiting_record_start;
             wait_commit = s_waiting_record_commit;
             base_generation = s_recording_base_generation;
             recording_deadline = s_recording_deadline_ms;
+            audio_start_request = s_audio_start_request_id;
+            audio_control_request = s_audio_control_request_id;
+            state_snapshot = s_state;
             if (s_pending_request_id != 0)
             {
                 request_id = s_pending_request_id;
@@ -443,9 +451,13 @@ void ai_task(void *)
             }
             xSemaphoreGive(s_mutex);
         }
-        if (wait_start && (audio_is_recording() || deadline_expired(recording_deadline)))
+        bool start_ok = false;
+        const bool start_acked = audio_start_request != 0 &&
+            audio_wait_recording_command_ack(audio_start_request, 0, &start_ok);
+        if (wait_start && ((start_acked && start_ok && audio_is_recording()) ||
+                           deadline_expired(recording_deadline)))
         {
-            const bool started = audio_is_recording();
+            const bool started = start_acked && start_ok && audio_is_recording();
             bool cancel_stale_start = false;
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
@@ -455,20 +467,32 @@ void ai_task(void *)
                     s_recording_started = false;
                     cancel_stale_start = true;
                     strlcpy(s_last_error, "Microphone/I2S start failed", sizeof(s_last_error));
-                    s_state = AI_STATE_ERROR;
+                    s_state = AI_STATE_CANCELING;
                 }
                 xSemaphoreGive(s_mutex);
             }
             // Invalidates the queued audio generation as well as stopping a
             // start that raced the timeout. It cannot retain RECORDER I2S.
-            if (cancel_stale_start && !audio_cancel_recording_async())
-                Serial.println("[AI] Unable to invalidate timed-out recording start");
+            if (cancel_stale_start)
+            {
+                uint32_t cancel_id = 0;
+                if (!audio_cancel_recording_async(&cancel_id))
+                    Serial.println("[AI] Unable to invalidate timed-out recording start");
+                else if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    s_audio_control_request_id = cancel_id;
+                    xSemaphoreGive(s_mutex);
+                }
+            }
         }
         if (wait_commit)
         {
             const uint32_t generation = audio_get_recording_generation();
             const bool committed = generation != base_generation;
-            if (committed || deadline_expired(recording_deadline))
+            bool stop_ok = false;
+            const bool stop_acked = audio_control_request != 0 &&
+                audio_wait_recording_command_ack(audio_control_request, 0, &stop_ok);
+            if ((committed && stop_acked && stop_ok) || deadline_expired(recording_deadline))
             {
                 bool cancel_failed_commit = false;
                 if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
@@ -477,18 +501,46 @@ void ai_task(void *)
                     if (committed && s_state == AI_STATE_PROCESSING &&
                         !s_pending_request_id && !s_active_request_id)
                     {
+                        s_audio_start_request_id = 0;
+                        s_audio_control_request_id = 0;
                         s_pending_request_id = ++s_next_request_id;
                     }
                     else if (!committed && s_state == AI_STATE_PROCESSING)
                     {
                         cancel_failed_commit = true;
                         strlcpy(s_last_error, "Recording finalize failed", sizeof(s_last_error));
-                        s_state = AI_STATE_ERROR;
+                        s_state = AI_STATE_CANCELING;
                     }
                     xSemaphoreGive(s_mutex);
                 }
-                if (cancel_failed_commit && !audio_cancel_recording_async())
-                    Serial.println("[AI] Unable to cancel failed recording finalize");
+                if (cancel_failed_commit)
+                {
+                    uint32_t cancel_id = 0;
+                    if (!audio_cancel_recording_async(&cancel_id))
+                        Serial.println("[AI] Unable to cancel failed recording finalize");
+                    else if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        s_audio_control_request_id = cancel_id;
+                        xSemaphoreGive(s_mutex);
+                    }
+                }
+            }
+        }
+        if (state_snapshot == AI_STATE_CANCELING && audio_control_request != 0)
+        {
+            bool cleanup_ok = false;
+            if (audio_wait_recording_command_ack(audio_control_request, 0, &cleanup_ok) &&
+                s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (s_state == AI_STATE_CANCELING &&
+                    s_audio_control_request_id == audio_control_request &&
+                    s_active_request_id == 0 && s_pending_request_id == 0)
+                {
+                    s_audio_control_request_id = 0;
+                    s_audio_start_request_id = 0;
+                    s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
+                }
+                xSemaphoreGive(s_mutex);
             }
         }
         if (request_id != 0)
@@ -569,9 +621,12 @@ bool ai_voice_start_recording(void)
     s_recording_deadline_ms = millis() + 1000;
     s_waiting_record_start = true;
     s_waiting_record_commit = false;
+    s_audio_start_request_id = 0;
+    s_audio_control_request_id = 0;
     s_state = AI_STATE_LISTENING;
     xSemaphoreGive(s_mutex);
-    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC))
+    uint32_t audio_request_id = 0;
+    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &audio_request_id))
     {
         if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
         {
@@ -582,6 +637,11 @@ bool ai_voice_start_recording(void)
             xSemaphoreGive(s_mutex);
         }
         return false;
+    }
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (s_state == AI_STATE_LISTENING) s_audio_start_request_id = audio_request_id;
+        xSemaphoreGive(s_mutex);
     }
     return true;
 }
@@ -600,7 +660,8 @@ bool ai_voice_stop_and_process(void)
     s_recording_deadline_ms = millis() + 2000;
     s_state = AI_STATE_PROCESSING;
     xSemaphoreGive(s_mutex);
-    if (!audio_stop_recording_async())
+    uint32_t audio_request_id = 0;
+    if (!audio_stop_recording_async(&audio_request_id))
     {
         if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
         {
@@ -611,13 +672,19 @@ bool ai_voice_stop_and_process(void)
         }
         return false;
     }
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (s_state == AI_STATE_PROCESSING) s_audio_control_request_id = audio_request_id;
+        xSemaphoreGive(s_mutex);
+    }
     return true;
 }
 
 void ai_voice_cancel(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
-    const bool cancel_recording = s_recording_started;
+    const bool cancel_recording = s_recording_started || s_waiting_record_start ||
+                                  s_waiting_record_commit || audio_is_recording();
     s_recording_started = false;
     s_waiting_record_start = false;
     s_waiting_record_commit = false;
@@ -631,9 +698,15 @@ void ai_voice_cancel(void)
     if (s_active_request_id > s_cancelled_through) s_cancelled_through = s_active_request_id;
     const bool worker_active = s_active_request_id != 0;
     xSemaphoreGive(s_mutex);
-    if (cancel_recording && !audio_cancel_recording_async())
+    uint32_t cancel_request_id = 0;
+    if (cancel_recording && !audio_cancel_recording_async(&cancel_request_id))
         Serial.println("[AI] Unable to enqueue recording cancel");
-    if (!worker_active && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    if (cancel_request_id && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        s_audio_control_request_id = cancel_request_id;
+        xSemaphoreGive(s_mutex);
+    }
+    if (!worker_active && !cancel_request_id && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
         xSemaphoreGive(s_mutex);
