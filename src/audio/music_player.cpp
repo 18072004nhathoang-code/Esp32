@@ -52,6 +52,8 @@ struct MusicCommand
 
 static QueueHandle_t music_cmd_queue = nullptr;
 static bool music_owns_audio = false;
+static uint32_t music_session_id = 0;
+static uint32_t codec_sample_rate = 0;
 
 static bool enqueue_music_command(const MusicCommand &cmd)
 {
@@ -88,9 +90,14 @@ static void internal_stop_audio_locked(void)
             audio->stopSong();
             storage_unlock();
         }
+        audio_drain_tx(300);
         delete audio;
         audio = nullptr;
     }
+    audio_set_pa_enabled(false);
+    codec_sample_rate = 0;
+    ++music_session_id;
+    if (music_session_id == 0) ++music_session_id;
     player_state.is_playing = false;
     player_state.is_paused = false;
     player_state.current_time_sec = 0;
@@ -142,22 +149,20 @@ static void music_audio_task(void *pvParameters)
                         {
                             if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
                             {
-                                // Mở loa ngoài qua chân PA
-                                pinMode(AUDIO_PA_PIN, OUTPUT);
-                                digitalWrite(AUDIO_PA_PIN, 0);
-
                                 internal_stop_audio_locked();
 
                                 audio = new Audio();
                                 if (audio)
                                 {
-                                    audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS, AUDIO_I2S_DOUT);
-                                    uint8_t scaled_vol = (player_state.volume * 21) / 100;
-                                    audio->setVolume(scaled_vol);
+                                    const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
+                                                                         AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
+                                    audio->setVolume(21); // unity in decoder; ES8311 owns user volume
+                                    audio_set_volume(player_state.volume);
 
                                     // Kết nối FS với khóa bảo vệ storage (Thứ tự khóa: audio_mutex TRƯỚC, storage_lock SAU -> Zero Deadlock)
                                     bool connected = false;
-                                    if (storage_lock(1000))
+                                    if (pins_ok && audio_codec_configure_for_stream(44100, 128) &&
+                                        storage_lock(1000))
                                     {
                                         connected = audio->connecttoFS(storage_get_fs(), cmd.filepath);
                                         storage_unlock();
@@ -170,6 +175,8 @@ static void music_audio_task(void *pvParameters)
                                         player_state.current_time_sec = 0;
                                         player_state.is_playing = true;
                                         player_state.is_paused = false;
+                                        codec_sample_rate = 44100;
+                                        audio_set_pa_enabled(player_state.volume > 0);
                                         Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", cmd.filepath);
                                     }
                                     else
@@ -290,12 +297,8 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
                     {
-                        if (audio)
-                        {
-                            uint8_t scaled_vol = (cmd.param * 21) / 100;
-                            audio->setVolume(scaled_vol);
-                        }
                         player_state.volume = (uint8_t)cmd.param;
+                        audio_set_volume(player_state.volume);
                         xSemaphoreGive(audio_mutex);
                     }
                 }
@@ -320,6 +323,19 @@ static void music_audio_task(void *pvParameters)
                         {
                             audio->loop();
                             storage_unlock();
+                        }
+
+                        const uint32_t decoded_rate = audio->getSampleRate();
+                        if (decoded_rate >= 8000 && decoded_rate <= 96000 &&
+                            decoded_rate != codec_sample_rate)
+                        {
+                            if (audio_codec_configure_for_stream(decoded_rate, 128))
+                                codec_sample_rate = decoded_rate;
+                            else
+                            {
+                                Serial.printf("[MUSIC_AUDIO] ❌ Codec clock rejected Fs=%u\n", decoded_rate);
+                                internal_stop_audio_locked();
+                            }
                         }
 
                         uint32_t cur = audio->getAudioCurrentTime();
@@ -368,9 +384,8 @@ bool music_player_init(void)
         return false;
     }
 
-    // Mở IC khuếch đại PA
-    pinMode(AUDIO_PA_PIN, OUTPUT);
-    digitalWrite(AUDIO_PA_PIN, 0);
+    // PA remains disabled until a decoder has opened a real stream.
+    audio_set_pa_enabled(false);
 
     // Quét thẻ nhớ MicroSD để tìm bài hát (có khóa SPI bus)
     music_player_scan_sd();
@@ -490,7 +505,10 @@ const MusicTrack* music_player_get_track(int index)
 
 int music_player_get_current_index(void)
 {
-    return player_state.current_track_idx;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return -1;
+    const int value = player_state.current_track_idx;
+    xSemaphoreGive(audio_mutex);
+    return value;
 }
 
 bool music_player_play_index(int index)
@@ -511,9 +529,17 @@ bool music_player_play_index(int index)
 
 bool music_player_toggle_play(void)
 {
-    if (player_state.is_playing)
+    bool playing = false;
+    bool paused = false;
+    int current = -1;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    playing = player_state.is_playing;
+    paused = player_state.is_paused;
+    current = player_state.current_track_idx;
+    xSemaphoreGive(audio_mutex);
+    if (playing)
     {
-        if (player_state.is_paused)
+        if (paused)
         {
             return music_player_resume();
         }
@@ -524,21 +550,25 @@ bool music_player_toggle_play(void)
     }
     else
     {
-        return music_player_play_index(player_state.current_track_idx);
+        return music_player_play_index(current);
     }
 }
 
 bool music_player_next(void)
 {
     if (total_tracks_found == 0) return false;
-    int next_idx = (player_state.current_track_idx + 1) % total_tracks_found;
+    const int current = music_player_get_current_index();
+    if (current < 0) return false;
+    int next_idx = (current + 1) % total_tracks_found;
     return music_player_play_index(next_idx);
 }
 
 bool music_player_prev(void)
 {
     if (total_tracks_found == 0) return false;
-    int prev_idx = (player_state.current_track_idx - 1 + total_tracks_found) % total_tracks_found;
+    const int current = music_player_get_current_index();
+    if (current < 0) return false;
+    int prev_idx = (current - 1 + total_tracks_found) % total_tracks_found;
     return music_player_play_index(prev_idx);
 }
 
@@ -574,8 +604,11 @@ bool music_player_stop(void)
 
 bool music_player_seek(uint32_t sec)
 {
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
     const uint32_t duration = player_state.total_duration_sec;
-    if (!player_state.is_playing || duration == 0 || sec > duration) return false;
+    const bool playing = player_state.is_playing;
+    xSemaphoreGive(audio_mutex);
+    if (!playing || duration == 0 || sec > duration) return false;
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_SEEK;
@@ -600,22 +633,34 @@ bool music_player_set_volume(uint8_t vol_percent)
 
 uint8_t music_player_get_volume(void)
 {
-    return player_state.volume;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint8_t value = player_state.volume;
+    xSemaphoreGive(audio_mutex);
+    return value;
 }
 
 bool music_player_is_playing(void)
 {
-    return player_state.is_playing && !player_state.is_paused;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool value = player_state.is_playing && !player_state.is_paused;
+    xSemaphoreGive(audio_mutex);
+    return value;
 }
 
 uint32_t music_player_get_current_time(void)
 {
-    return player_state.current_time_sec;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t value = player_state.current_time_sec;
+    xSemaphoreGive(audio_mutex);
+    return value;
 }
 
 uint32_t music_player_get_duration(void)
 {
-    return player_state.total_duration_sec;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t value = player_state.total_duration_sec;
+    xSemaphoreGive(audio_mutex);
+    return value;
 }
 
 void music_player_format_time(uint32_t sec, char *out, size_t max_len)

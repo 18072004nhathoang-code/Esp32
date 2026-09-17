@@ -11,12 +11,15 @@
 #include <freertos/task.h>
 #include "../storage/storage_manager.h"
 #include "wifi_manager.h"
+#include "firmware_contracts.h"
 
 static volatile uint32_t s_idle_count[2] = {0, 0};
 static uint32_t s_last_idle_count[2] = {0, 0};
-static uint32_t s_idle_baseline[2] = {0, 0};
+static uint64_t s_idle_rate_baseline_q20[2] = {0, 0};
 static uint64_t s_last_cpu_sample_us = 0;
 static bool s_cpu_hooks_ready = false;
+static SystemStats s_cached_stats = {};
+static portMUX_TYPE s_stats_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static bool idle_hook_core0(void) { ++s_idle_count[0]; return true; }
 static bool idle_hook_core1(void) { ++s_idle_count[1]; return true; }
@@ -31,7 +34,7 @@ bool system_info_init(void)
     return s_cpu_hooks_ready;
 }
 
-SystemStats system_get_stats(void)
+void system_info_update(void)
 {
     SystemStats stats = {};
 
@@ -40,26 +43,27 @@ SystemStats system_get_stats(void)
     stats.loop_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
 
     const uint64_t now_us = esp_timer_get_time();
-    if (s_cpu_hooks_ready && s_last_cpu_sample_us != 0 && now_us - s_last_cpu_sample_us >= 250000)
+    const uint64_t elapsed_us = now_us - s_last_cpu_sample_us;
+    if (s_cpu_hooks_ready && s_last_cpu_sample_us != 0 && elapsed_us >= 250000)
     {
-        uint64_t idle_delta = 0;
-        uint64_t idle_capacity = 0;
+        uint64_t idle_rate_sum_q20 = 0;
+        uint64_t idle_capacity_rate_q20 = 0;
         for (int core = 0; core < 2; ++core)
         {
             const uint32_t current = s_idle_count[core];
             const uint32_t delta = current - s_last_idle_count[core];
             s_last_idle_count[core] = current;
-            if (delta > s_idle_baseline[core]) s_idle_baseline[core] = delta;
-            idle_delta += delta;
-            idle_capacity += s_idle_baseline[core];
+            const uint64_t rate_q20 = (static_cast<uint64_t>(delta) << 20) / elapsed_us;
+            if (rate_q20 > s_idle_rate_baseline_q20[core]) s_idle_rate_baseline_q20[core] = rate_q20;
+            idle_rate_sum_q20 += rate_q20;
+            idle_capacity_rate_q20 += s_idle_rate_baseline_q20[core];
         }
-        if (idle_capacity > 0)
+        if (idle_capacity_rate_q20 > 0)
         {
-            uint64_t idle_percent_raw = (idle_delta * 100ULL) / idle_capacity;
-            if (idle_percent_raw > 100) idle_percent_raw = 100;
-            const uint32_t idle_percent = (uint32_t)idle_percent_raw;
-            stats.cpu_usage_percent = 100 - idle_percent;
+            stats.cpu_usage_percent = estimated_cpu_usage_from_rates(
+                idle_rate_sum_q20, idle_capacity_rate_q20);
             stats.cpu_usage_available = true;
+            stats.cpu_usage_estimated = true;
         }
         s_last_cpu_sample_us = now_us;
     }
@@ -94,7 +98,17 @@ SystemStats system_get_stats(void)
     uint32_t secs  = (uint32_t)(total_secs % 60);
     snprintf(stats.uptime_str, sizeof(stats.uptime_str), "%02u:%02u:%02u", hours, mins, secs);
 
-    return stats;
+    portENTER_CRITICAL(&s_stats_mux);
+    s_cached_stats = stats;
+    portEXIT_CRITICAL(&s_stats_mux);
+}
+
+SystemStats system_get_stats(void)
+{
+    portENTER_CRITICAL(&s_stats_mux);
+    const SystemStats snapshot = s_cached_stats;
+    portEXIT_CRITICAL(&s_stats_mux);
+    return snapshot;
 }
 
 BatteryInfo system_get_battery_info(void)

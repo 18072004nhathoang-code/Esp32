@@ -24,7 +24,7 @@
 #endif
 
 // Cấu hình Google Maps Static API Key
-// Để trống để dùng dịch vụ static-map OpenStreetMap cho lớp roadmap.
+// Để trống: chỉ cache offline hoạt động; UI báo PROVIDER_NOT_CONFIGURED.
 #ifndef GOOGLE_MAPS_STATIC_API_KEY
 #define GOOGLE_MAPS_STATIC_API_KEY ""
 #endif
@@ -38,7 +38,8 @@ enum TileDownloadStatus {
     TILE_DOWNLOADING,
     TILE_READY,
     TILE_ERROR,
-    TILE_DEGRADED
+    TILE_DEGRADED,
+    TILE_PROVIDER_NOT_CONFIGURED
 };
 
 // Nguồn cung cấp ảnh bản đồ hiện tại

@@ -143,12 +143,15 @@ void map_app_render(void)
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
             }
         }
-        else if (st == TILE_ERROR || st == TILE_DEGRADED)
+        else if (st == TILE_ERROR || st == TILE_DEGRADED || st == TILE_PROVIDER_NOT_CONFIGURED)
         {
             if (hud_lbl_source)
             {
-                lv_label_set_text(hud_lbl_source,
-                    st == TILE_DEGRADED ? "[Offline] Không có tile cache" : "[!] Không tải được tile");
+                if (st == TILE_PROVIDER_NOT_CONFIGURED)
+                    lv_label_set_text(hud_lbl_source, "Thiếu Google Maps API key");
+                else
+                    lv_label_set_text(hud_lbl_source,
+                        st == TILE_DEGRADED ? "[Offline] Không có tile cache" : "[!] Không tải được tile");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
             }
             render_empty_map();
@@ -186,11 +189,12 @@ void map_app_render(void)
 
 static bool trigger_map_reload(void)
 {
-    if (strcmp(cur_maptype, "satellite") == 0 && !map_tile_downloader_supports_satellite())
+    if (!map_tile_downloader_supports_satellite() &&
+        !(sd_map_cache_is_available() && sd_map_cache_exists(cur_lat, cur_lon, cur_zoom, cur_maptype)))
     {
         if (hud_lbl_source)
         {
-            lv_label_set_text(hud_lbl_source, "Satellite cần Google API key");
+            lv_label_set_text(hud_lbl_source, "Map mạng cần Google API key");
             lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xFF3B30), 0);
         }
         return false;

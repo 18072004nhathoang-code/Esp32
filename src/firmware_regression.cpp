@@ -3,9 +3,13 @@
 #include "firmware_contracts.h"
 #include "touch_contact_tracker.h"
 #include "touch_transform.h"
+#include "ai/ai_voice_service.h"
 
 static_assert(audio_stereo_frames_from_bytes(1024) == 256, "16 kHz DMA frame accounting");
 static_assert(audio_stereo_frames_from_bytes(1023) == 255, "partial DMA reads must not overrun");
+static_assert(audio_rx_carry_after_bytes(1023) == 3, "partial DMA bytes must carry to next read");
+static_assert(audio_write_completed(1024, 1024), "complete I2S write accepted");
+static_assert(!audio_write_completed(1020, 1024), "partial terminal I2S write rejected");
 static_assert(bounded_body_append_allowed(16380, 4, 16384), "exact JSON limit accepted");
 static_assert(!bounded_body_append_allowed(16380, 5, 16384), "oversize JSON rejected");
 static_assert(http_dechunked_body_complete(-1, 128, 128, false), "chunked body accepted after dechunk");
@@ -19,6 +23,14 @@ static_assert(!request_response_is_current(3, 4, 2), "stale AI response rejected
 static_assert(!request_response_is_current(3, 3, 3), "cancelled AI response rejected");
 static_assert(exclusive_start_can_claim(0, 0), "idle audio start may claim");
 static_assert(!exclusive_start_can_claim(1, 0), "concurrent audio start rejected");
+static_assert(es8311_volume_register(0) == 0, "zero volume is hardware mute");
+static_assert(es8311_volume_register(100) == 0xBF, "100 percent stays at codec unity");
+static_assert(wifi_generation_can_commit(5, 5, 5, false), "current WiFi save may commit");
+static_assert(!wifi_generation_can_commit(5, 6, 5, false), "stale WiFi save rejected");
+static_assert(estimated_cpu_usage_from_rates(80, 100) == 20, "CPU estimate normalized by time");
+static_assert(estimated_cpu_usage_from_rates(160, 200) == 20, "CPU estimate independent of interval");
+static_assert(camera_control_can_ack(true, true, true, false), "camera ACK after target reached");
+static_assert(!camera_control_can_ack(false, true, true, false), "failed camera start not ACKed");
 
 bool firmware_regression_run()
 {
@@ -57,5 +69,6 @@ bool firmware_regression_run()
     ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav) - 1, &view);
     wav[24] = 0x44;
     ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav), &view);
+    ok = ok && ai_voice_json_regression_test();
     return ok;
 }

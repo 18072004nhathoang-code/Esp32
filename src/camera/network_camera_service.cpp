@@ -90,7 +90,8 @@ bool url_has_scheme(const char *url, const char *scheme)
 
 NetworkCameraService::NetworkCameraService()
     : _configured(false), _connected(false), _running(false),
-      _runtime_state(CAM_STATE_NOT_CONFIGURED), _frame_sequence(0),
+      _runtime_state(CAM_STATE_NOT_CONFIGURED), _frame_sequence(0), _session_id(0),
+      _worker_session_id(0),
       _transport_security(CAM_TRANSPORT_NONE),
       _config_mutex(nullptr), _worker_exit_sem(nullptr),
       _onvif_probed(false),
@@ -345,6 +346,14 @@ CameraTransportSecurity NetworkCameraService::getTransportSecurity() const
     return security;
 }
 
+uint32_t NetworkCameraService::getSessionId() const
+{
+    if (!_config_mutex || xSemaphoreTake(_config_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    const uint32_t session = _session_id;
+    xSemaphoreGive(_config_mutex);
+    return session;
+}
+
 bool NetworkCameraService::snapshotState(NetworkCameraProfile &profile, bool &configured,
                                          CameraRuntimeState &state) const
 {
@@ -445,8 +454,10 @@ void NetworkCameraService::workerTask()
 {
     Serial.println("[NET_CAM] 🚀 Worker Task nạp HTTP Snapshot bắt đầu trên Core 0");
 
+    uint32_t worker_session = 0;
     if (_config_mutex && xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
+        worker_session = _worker_session_id;
         if (_runtime_state == CAM_STATE_STARTING) _runtime_state = CAM_STATE_RUNNING;
         xSemaphoreGive(_config_mutex);
     }
@@ -512,7 +523,8 @@ void NetworkCameraService::workerTask()
                     if (!has_dim) bytes = -1;
 
                     // Hoán đổi atomic back buffer sang front buffer kèm dung lượng thật
-                    if (bytes > 0 && _frame_mutex && xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                    if (bytes > 0 && worker_session == _worker_session_id && _frame_mutex &&
+                        xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
                         if (!_front_in_use)
                         {
@@ -527,6 +539,7 @@ void NetworkCameraService::workerTask()
                             _frame_front.format = CAM_PIXFORMAT_JPEG;
                             _frame_front.timestamp_ms = millis();
                             _frame_front.frame_id = _frame_sequence;
+                            _frame_front.session_id = worker_session;
 
                             if (_config_mutex && xSemaphoreTake(_config_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                             {
@@ -626,6 +639,9 @@ bool NetworkCameraService::start()
         xSemaphoreTake(_worker_exit_sem, 0); // Xóa token cũ nếu có
 
         _running = true;
+        ++_session_id;
+        if (_session_id == 0) ++_session_id;
+        _worker_session_id = _session_id;
         _runtime_state = CAM_STATE_STARTING;
         BaseType_t ret = xTaskCreatePinnedToCore(
             workerTaskEntry,

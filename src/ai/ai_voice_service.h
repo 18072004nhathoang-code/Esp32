@@ -82,3 +82,6 @@ void ai_voice_clear_history(void);
  * @brief Phát âm thanh phản hồi từ văn bản qua TTS ra Loa ngoài
  */
 bool ai_voice_play_tts(const char *text);
+
+/** Firmware-side regression for the exact ArduinoJson codec used by requests. */
+bool ai_voice_json_regression_test(void);

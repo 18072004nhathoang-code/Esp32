@@ -233,6 +233,14 @@ static void touch_debug_btn_cb(lv_event_t *e)
     ui_touch_debug_open(app_content_container);
 }
 
+static void speaker_test_btn_cb(lv_event_t *e)
+{
+    lv_obj_t *button = lv_event_get_target(e);
+    lv_obj_t *label = button ? lv_obj_get_child(button, 0) : nullptr;
+    const bool started = audio_speaker_self_test_async();
+    if (label) lv_label_set_text(label, started ? "Loa 1kHz đang phát" : "Audio đang bận/lỗi");
+}
+
 /* Callback bấm nút Ngủ Ngay trong Power App */
 static void sleep_now_btn_cb(lv_event_t *e)
 {
@@ -591,7 +599,8 @@ static void open_system_monitor_app(void)
 
     lbl_cpu_arc_val = lv_label_create(arc_cpu);
     if (initial.cpu_usage_available)
-        lv_label_set_text_fmt(lbl_cpu_arc_val, "%u%%\nCPU", initial.cpu_usage_percent);
+        lv_label_set_text_fmt(lbl_cpu_arc_val, "%u%%\n%s", initial.cpu_usage_percent,
+                              initial.cpu_usage_estimated ? "CPU~" : "CPU");
     else
         lv_label_set_text(lbl_cpu_arc_val, "--\nCPU");
     lv_obj_set_style_text_align(lbl_cpu_arc_val, LV_TEXT_ALIGN_CENTER, 0);
@@ -956,6 +965,19 @@ static void open_tools_app(void)
     lv_obj_set_style_text_font(lbl_pitch_val, UI_FONT_12, 0);
     lv_obj_align(lbl_pitch_val, LV_ALIGN_TOP_LEFT, 0, 104);
 
+    lv_obj_t *btn_speaker = lv_btn_create(compass_card);
+    lv_obj_set_size(btn_speaker, SCREEN_WIDTH - 42, 32);
+    lv_obj_align(btn_speaker, LV_ALIGN_BOTTOM_MID, 0, -43);
+    lv_obj_set_style_bg_color(btn_speaker, lv_color_hex(0x1F2937), 0);
+    lv_obj_set_style_border_color(btn_speaker, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+    lv_obj_set_style_border_width(btn_speaker, 1, 0);
+    lv_obj_set_style_radius(btn_speaker, 6, 0);
+    lv_obj_add_event_cb(btn_speaker, speaker_test_btn_cb, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *lbl_speaker = lv_label_create(btn_speaker);
+    lv_label_set_text(lbl_speaker, LV_SYMBOL_VOLUME_MAX " Loa 1kHz (thấp)");
+    lv_obj_set_style_text_font(lbl_speaker, UI_FONT_BUTTON, 0);
+    lv_obj_center(lbl_speaker);
+
     // Nút mở Color Self-Test
     lv_obj_t *btn_ct = lv_btn_create(compass_card);
     lv_obj_set_size(btn_ct, (SCREEN_WIDTH - 42) / 2, 34);
@@ -1164,7 +1186,8 @@ void ui_update_periodic(const SystemStats &stats)
     {
         const int cpu = stats.cpu_usage_available ? stats.cpu_usage_percent : 0;
         lv_arc_set_value(arc_cpu, cpu);
-        if (stats.cpu_usage_available) lv_label_set_text_fmt(lbl_cpu_arc_val, "%d%%\nCPU", cpu);
+        if (stats.cpu_usage_available) lv_label_set_text_fmt(lbl_cpu_arc_val, "%d%%\n%s", cpu,
+                                                              stats.cpu_usage_estimated ? "CPU~" : "CPU");
         else lv_label_set_text(lbl_cpu_arc_val, "--\nCPU");
 
         if (chart_system && ser_cpu)

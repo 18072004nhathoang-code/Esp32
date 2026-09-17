@@ -15,7 +15,7 @@ import os
 import sys
 import shutil
 import subprocess
-import urllib.request
+import hashlib
 
 if sys.platform == "win32":
     try:
@@ -37,7 +37,8 @@ UNICODE_RANGES = (
 
 SIZES = [10, 12, 14, 16]
 
-FONT_DOWNLOAD_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/bevietnampro/BeVietnamPro-SemiBold.ttf"
+FONT_SHA256 = "bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71"
+LV_FONT_CONV_VERSION = "1.5.3"
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -49,13 +50,14 @@ def main():
 
     if not os.path.exists(font_path):
         print(f"Không tìm thấy font tại: {font_path}")
-        print("Đang tự động tải Be Vietnam Pro SemiBold từ Google Fonts (SIL OFL 1.1)...")
-        try:
-            urllib.request.urlretrieve(FONT_DOWNLOAD_URL, font_path)
-            print(f"✔ Đã tải font thành công: {font_path}")
-        except Exception as e:
-            print(f"❌ Không thể tải font: {e}")
-            return 1
+        print("Không tự tải nguồn mutable; dùng file font đã pin trong tools/.")
+        return 1
+
+    with open(font_path, "rb") as font_file:
+        actual_hash = hashlib.sha256(font_file.read()).hexdigest()
+    if actual_hash != FONT_SHA256:
+        print(f"❌ SHA256 font không khớp: {actual_hash}")
+        return 1
 
     npx_bin = shutil.which("npx")
     if not npx_bin:
@@ -68,7 +70,7 @@ def main():
     for size in SIZES:
         out_file = os.path.join(out_dir, f"ui_font_{size}.c")
         cmd = [
-            npx_bin, "lv_font_conv",
+            npx_bin, "--yes", f"lv_font_conv@{LV_FONT_CONV_VERSION}",
             "--bpp", "4",
             "--size", str(size),
             "--font", font_path,

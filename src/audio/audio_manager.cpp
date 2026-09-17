@@ -15,7 +15,13 @@
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
 static uint8_t master_volume = 80; // 0 - 100%
-static bool pa_enabled = true;
+static bool pa_enabled = false;
+static bool codec_ready = false;
+static bool codec_muted = true;
+static uint32_t codec_sample_rate = 0;
+static uint16_t codec_mclk_multiple = 0;
+static bool speaker_self_test_running = false;
+static TaskHandle_t speaker_self_test_task_handle = nullptr;
 
 // Bộ đệm ghi âm trong Octal PSRAM (8MB)
 static int16_t *psram_record_buf = nullptr;
@@ -23,6 +29,8 @@ static uint32_t record_sample_capacity = AUDIO_MAX_SAMPLES;
 static uint32_t recorded_samples_count = 0;
 enum RecordingRunState : uint8_t { RECORD_IDLE, RECORD_STARTING, RECORD_ACTIVE, RECORD_SNAPSHOTTING };
 static RecordingRunState recording_state = RECORD_IDLE;
+static uint32_t recording_start_token = 0;
+static uint32_t recording_next_token = 0;
 
 struct RecordingSnapshot
 {
@@ -38,6 +46,8 @@ static uint32_t recording_generation = 0;
 // Trạng thái phát lại
 static bool playback_active = false;
 static bool playback_starting = false;
+static uint32_t playback_start_token = 0;
+static uint32_t playback_next_token = 0;
 static uint32_t playback_sample_idx = 0;
 static AudioRecordingLease playback_lease = {};
 static volatile AudioRecordingFileState recording_file_state = AUDIO_FILE_NONE;
@@ -60,6 +70,8 @@ static SemaphoreHandle_t audio_state_mutex = nullptr;
 // Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
 static volatile uint32_t audio_owner_refcount = 0;
+static uint32_t audio_owner_session = 0;
+static uint32_t audio_next_session = 0;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
 static bool i2s_duplex_installed = false;
 
@@ -122,6 +134,19 @@ static bool publish_recording_snapshot(size_t count)
         }
     }
 
+    // Allocation failure must never invalidate the last known-good recording:
+    // exporters and uploads may still hold immutable leases to it.
+    if (!fresh)
+    {
+        if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            recording_state = RECORD_IDLE;
+            recording_file_state = AUDIO_FILE_ERROR;
+            xSemaphoreGive(audio_state_mutex);
+        }
+        return false;
+    }
+
     RecordingSnapshot *discard = nullptr;
     if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE)
     {
@@ -138,7 +163,7 @@ static bool publish_recording_snapshot(size_t count)
     current_recording = fresh;
     if (fresh) fresh->generation = ++recording_generation;
     recording_state = RECORD_IDLE;
-    recording_file_state = fresh ? AUDIO_FILE_NONE : AUDIO_FILE_ERROR;
+    recording_file_state = AUDIO_FILE_NONE;
     xSemaphoreGive(audio_state_mutex);
     free_snapshot(discard);
     return fresh != nullptr;
@@ -258,7 +283,9 @@ bool audio_install_duplex_driver(void)
         .dma_buf_len = 128,
         .use_apll = true,
         .tx_desc_auto_clear = true,
-        .fixed_mclk = 0
+        .fixed_mclk = 0,
+        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        .bits_per_chan = I2S_BITS_PER_CHAN_16BIT
     };
 
     i2s_pin_config_t pin_config = {
@@ -285,7 +312,23 @@ bool audio_install_duplex_driver(void)
     }
 
     i2s_duplex_installed = true;
-    Serial.println("[AUDIO] ✔ Đã cài đặt I2S Duplex Driver (16kHz TX+RX) sẵn sàng.");
+    Serial.printf("[AUDIO][I2S] READY Fs=%u PCM16 stereo MCLK=%u BCLK=%d WS=%d DOUT=%d DIN=%d\n",
+                  AUDIO_SAMPLE_RATE, AUDIO_SAMPLE_RATE * 256U, AUDIO_I2S_BCLK, AUDIO_I2S_WS,
+                  AUDIO_I2S_DOUT, AUDIO_I2S_DIN);
+    return true;
+}
+
+bool audio_drain_tx(uint32_t timeout_ms)
+{
+    if (timeout_ms == 0) return false;
+    // Arduino-ESP32's legacy I2S API has no wait_tx_done. Queue a silence
+    // marker behind all existing PCM, then allow the bounded DMA depth to run.
+    int16_t silence[32 * 2] = {};
+    size_t written = 0;
+    const esp_err_t err = i2s_write(I2S_NUM_0, silence, sizeof(silence), &written,
+                                    pdMS_TO_TICKS(timeout_ms));
+    if (err != ESP_OK || written != sizeof(silence)) return false;
+    vTaskDelay(pdMS_TO_TICKS(min<uint32_t>(timeout_ms, 200U)));
     return true;
 }
 
@@ -364,10 +407,13 @@ bool audio_request_ownership(AudioOwner requester)
         return false;
     }
 
-    // Nếu chính requester này đang giữ lease: tăng refcount
+    // Re-entrant owner requests are real leases and must be balanced. Call-site
+    // guards prevent Play/Resume from acquiring twice for one logical session.
     if (current_audio_owner == requester)
     {
-        audio_owner_refcount++;
+        ++audio_owner_refcount;
+        Serial.printf("[AUDIO][OWNER] owner=%u session=%u ref=%u (shared subsystem lease)\n",
+                      requester, audio_owner_session, audio_owner_refcount);
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
@@ -384,7 +430,12 @@ bool audio_request_ownership(AudioOwner requester)
     if (requester == AUDIO_OWNER_MUSIC)
     {
         // Tạm dừng phát âm thanh hệ thống (nếu có)
-        playback_active = false;
+        if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            playback_active = false;
+            playback_starting = false;
+            xSemaphoreGive(audio_state_mutex);
+        }
 
         // BƯỚC BẮT BUỘC: Đồng bộ dừng hoàn toàn Audio Task và chờ ACK trước khi gỡ driver
         if (!audio_manager_pause_task_sync(300))
@@ -399,6 +450,9 @@ bool audio_request_ownership(AudioOwner requester)
 
         current_audio_owner = AUDIO_OWNER_MUSIC;
         audio_owner_refcount = 1;
+        audio_owner_session = ++audio_next_session;
+        if (audio_owner_session == 0) audio_owner_session = ++audio_next_session;
+        Serial.printf("[AUDIO][OWNER] acquire MUSIC session=%u ref=1\n", audio_owner_session);
         xSemaphoreGive(audio_owner_mutex);
         return true;
     }
@@ -416,6 +470,10 @@ bool audio_request_ownership(AudioOwner requester)
 
     current_audio_owner = requester;
     audio_owner_refcount = 1;
+    audio_owner_session = ++audio_next_session;
+    if (audio_owner_session == 0) audio_owner_session = ++audio_next_session;
+    Serial.printf("[AUDIO][OWNER] acquire owner=%u session=%u ref=1\n",
+                  requester, audio_owner_session);
     xSemaphoreGive(audio_owner_mutex);
     return true;
 }
@@ -429,17 +487,23 @@ void audio_release_ownership(AudioOwner requester)
             if (audio_owner_refcount > 1)
             {
                 audio_owner_refcount--;
+                Serial.printf("[AUDIO][OWNER] release owner=%u session=%u ref=%u\n",
+                              requester, audio_owner_session, audio_owner_refcount);
             }
             else
             {
                 audio_owner_refcount = 0;
                 current_audio_owner = AUDIO_OWNER_NONE;
+                audio_owner_session = 0;
+                Serial.printf("[AUDIO][OWNER] release owner=%u complete\n", requester);
 
                 // Nếu MUSIC vừa nhả quyền sở hữu: Cài đặt lại I2S Duplex Driver rồi đánh thức Audio Task
                 if (requester == AUDIO_OWNER_MUSIC)
                 {
                     if (audio_install_duplex_driver())
                     {
+                        if (!audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256))
+                            Serial.println("[AUDIO] ❌ I2S duplex restored but codec clock restore failed");
                         audio_manager_resume_task();
                     }
                     else
@@ -455,7 +519,11 @@ void audio_release_ownership(AudioOwner requester)
 
 AudioOwner audio_get_current_owner(void)
 {
-    return current_audio_owner;
+    if (!audio_owner_mutex || xSemaphoreTake(audio_owner_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return AUDIO_OWNER_NONE;
+    const AudioOwner owner = current_audio_owner;
+    xSemaphoreGive(audio_owner_mutex);
+    return owner;
 }
 
 /* =========================================================================
@@ -466,27 +534,124 @@ static bool es8311_write_reg(uint8_t reg, uint8_t val)
     return shared_i2c_write_reg(AUDIO_ES8311_ADDR, reg, val);
 }
 
+static bool es8311_read_reg(uint8_t reg, uint8_t &val)
+{
+    return shared_i2c_read_reg(AUDIO_ES8311_ADDR, reg, &val, 1);
+}
+
+static bool es8311_write_checked(uint8_t reg, uint8_t val, uint8_t verify_mask = 0xFF)
+{
+    uint8_t actual = 0;
+    if (!es8311_write_reg(reg, val))
+    {
+        Serial.printf("[AUDIO][CODEC] write reg 0x%02X failed\n", reg);
+        return false;
+    }
+    if (!es8311_read_reg(reg, actual) || (actual & verify_mask) != (val & verify_mask))
+    {
+        Serial.printf("[AUDIO][CODEC] readback reg 0x%02X expected=0x%02X actual=0x%02X\n",
+                      reg, val, actual);
+        return false;
+    }
+    return true;
+}
+
+static bool es8311_configure_clock(uint32_t sample_rate, uint16_t mclk_multiple)
+{
+    if (!codec_ready || sample_rate < 8000 || sample_rate > 96000 ||
+        (mclk_multiple != 128 && mclk_multiple != 256)) return false;
+    if (codec_sample_rate == sample_rate && codec_mclk_multiple == mclk_multiple) return true;
+
+    // Coefficients are the ES8311 slave-mode 128Fs/256Fs entries used by
+    // Espressif's codec driver. The ESP32 owns MCLK/BCLK/LRCK.
+    const uint8_t pre_multiplier_bits = mclk_multiple == 128 ? 0x08 : 0x00; // x2 / x1
+    const uint8_t dac_osr = sample_rate <= 16000 ? 0x20 : 0x10;
+    bool ok = true;
+    ok = es8311_write_checked(0x02, pre_multiplier_bits) && ok;
+    ok = es8311_write_checked(0x05, 0x00) && ok; // ADC/DAC clock divide by 1
+    ok = es8311_write_checked(0x03, 0x10) && ok; // single speed, ADC OSR 64Fs
+    ok = es8311_write_checked(0x04, dac_osr) && ok;
+    ok = es8311_write_checked(0x07, 0x00) && ok;
+    ok = es8311_write_checked(0x08, 0xFF) && ok; // LRCK divider 256 in slave profile
+    ok = es8311_write_checked(0x06, 0x03) && ok; // normal BCLK, divider coefficient 4
+    if (!ok) return false;
+    codec_sample_rate = sample_rate;
+    codec_mclk_multiple = mclk_multiple;
+    Serial.printf("[AUDIO][CODEC] clock Fs=%lu MCLK=%lu (%uFs) I2S/PCM16 slave\n",
+                  static_cast<unsigned long>(sample_rate),
+                  static_cast<unsigned long>(sample_rate * mclk_multiple), mclk_multiple);
+    return true;
+}
+
+static bool es8311_set_muted(bool muted)
+{
+    if (!codec_ready) return false;
+    uint8_t reg31 = 0;
+    if (!es8311_read_reg(0x31, reg31)) return false;
+    reg31 &= 0x9F;
+    if (muted) reg31 |= 0x60; // DAC DSM + DEM mute
+    if (!es8311_write_checked(0x31, reg31)) return false;
+    codec_muted = muted;
+    Serial.printf("[AUDIO][CODEC] mute=%s reg31=0x%02X\n", muted ? "ON" : "OFF", reg31);
+    return true;
+}
+
 static bool es8311_init_codec(void)
 {
     if (!shared_i2c_codec_is_detected())
     {
-        Serial.println("[AUDIO] Không phát hiện chip ES8311 qua I2C. Chuyển sang Direct I2S Mode.");
+        Serial.println("[AUDIO] Không phát hiện ES8311; đường loa không khả dụng.");
         return false;
     }
 
-    Serial.println("[AUDIO] Đã nhận diện chip Codec ES8311! Đang khởi tạo thanh ghi...");
-    // Khởi tạo cơ bản thanh ghi ES8311 qua Shared I2C Bus an toàn
-    es8311_write_reg(0x00, 0x1F); // CSM on, reset
-    es8311_write_reg(0x01, 0x30); // Clock manager
-    es8311_write_reg(0x02, 0x00); // Clock inverted/pol
-    es8311_write_reg(0x03, 0x10); // ADC / DAC SCLK divider
-    es8311_write_reg(0x0D, 0x01); // Power up analog
-    es8311_write_reg(0x0E, 0x02); // Power up analog
-    es8311_write_reg(0x12, 0x00); // Enable ADC
-    es8311_write_reg(0x13, 0x10); // ADC PGA gain (+18dB)
-    es8311_write_reg(0x14, 0x1A); // ADC Gain Boost (+30dB cho MEMS mic)
-    es8311_write_reg(0x31, 0x00); // Power up DAC
-    es8311_write_reg(0x32, 0xBF); // DAC Digital Volume (mặc định ~75%)
+    uint8_t chip_id1 = 0, chip_id2 = 0;
+    if (!es8311_read_reg(0xFD, chip_id1) || !es8311_read_reg(0xFE, chip_id2) ||
+        chip_id1 != 0x83 || chip_id2 != 0x11)
+    {
+        Serial.printf("[AUDIO][CODEC] ES8311 ID invalid: %02X %02X\n", chip_id1, chip_id2);
+        return false;
+    }
+
+    Serial.println("[AUDIO][CODEC] ES8311 ID 83:11; applying verified init");
+    bool ok = true;
+    ok = es8311_write_checked(0x44, 0x08) && ok; // I2C noise immunity
+    ok = es8311_write_checked(0x44, 0x08) && ok;
+    ok = es8311_write_checked(0x00, 0x1F) && ok; // reset digital blocks
+    delay(20);
+    ok = es8311_write_checked(0x00, 0x00) && ok;
+    ok = es8311_write_checked(0x00, 0x80) && ok; // CSM on, codec slave
+    ok = es8311_write_checked(0x01, 0x3F) && ok; // external MCLK, all clocks enabled
+    ok = es8311_write_checked(0x09, 0x0C) && ok; // DAC input: I2S, 16-bit, unmuted
+    ok = es8311_write_checked(0x0A, 0x0C) && ok; // ADC output: I2S, 16-bit, unmuted
+    ok = es8311_write_checked(0x0B, 0x00) && ok;
+    ok = es8311_write_checked(0x0C, 0x00) && ok;
+    ok = es8311_write_checked(0x10, 0x1F) && ok;
+    ok = es8311_write_checked(0x11, 0x7F) && ok;
+    ok = es8311_write_checked(0x13, 0x10) && ok; // differential output path
+    ok = es8311_write_checked(0x1B, 0x0A) && ok;
+    ok = es8311_write_checked(0x1C, 0x6A) && ok;
+    ok = es8311_write_checked(0x44, 0x58) && ok; // internal ADC/DAC reference route
+    if (!ok) return false;
+
+    codec_ready = true;
+    if (!es8311_configure_clock(AUDIO_SAMPLE_RATE, 256)) return false;
+    ok = es8311_write_checked(0x17, 0xBF) && ok; // ADC unity gain
+    ok = es8311_write_checked(0x0E, 0x02) && ok; // PGA/modulator powered
+    ok = es8311_write_checked(0x12, 0x00) && ok; // DAC powered
+    ok = es8311_write_checked(0x14, 0x1A) && ok; // analog mic PGA route
+    ok = es8311_write_checked(0x0D, 0x01) && ok; // analog/reference powered
+    ok = es8311_write_checked(0x15, 0x40) && ok;
+    ok = es8311_write_checked(0x37, 0x08) && ok; // DACEQ bypass, no soft ramp
+    ok = es8311_write_checked(0x45, 0x00) && ok;
+    ok = es8311_write_checked(0x32, es8311_volume_register(master_volume)) && ok;
+    ok = es8311_set_muted(false) && ok;
+    if (!ok)
+    {
+        codec_ready = false;
+        return false;
+    }
+    Serial.printf("[AUDIO][CODEC] READY volume=%u%% reg32=0x%02X PA=OFF\n",
+                  master_volume, es8311_volume_register(master_volume));
     return true;
 }
 
@@ -509,10 +674,13 @@ void audio_set_volume(uint8_t volume_percent)
 {
     if (volume_percent > 100) volume_percent = 100;
     master_volume = volume_percent;
-
-    // Cập nhật mức volume vào thanh ghi ES8311 nếu có
-    uint8_t reg_vol = (uint8_t)((volume_percent * 255) / 100);
-    es8311_write_reg(0x32, reg_vol);
+    if (!codec_ready) return;
+    const uint8_t reg_vol = es8311_volume_register(volume_percent);
+    bool ok = es8311_write_checked(0x32, reg_vol);
+    ok = es8311_set_muted(volume_percent == 0) && ok;
+    audio_set_pa_enabled(volume_percent > 0 && ok);
+    Serial.printf("[AUDIO][CODEC] volume=%u%% reg32=0x%02X PA=%s status=%s\n",
+                  volume_percent, reg_vol, pa_enabled ? "ON" : "OFF", ok ? "OK" : "ERROR");
 }
 
 uint8_t audio_get_volume(void)
@@ -520,10 +688,17 @@ uint8_t audio_get_volume(void)
     return master_volume;
 }
 
-static size_t write_stereo_frames(const int16_t *frames, size_t frame_count, uint32_t timeout_ms)
+bool audio_codec_configure_for_stream(uint32_t sample_rate, uint16_t mclk_multiple)
+{
+    return es8311_configure_clock(sample_rate, mclk_multiple) &&
+           es8311_write_checked(0x32, es8311_volume_register(master_volume)) &&
+           es8311_set_muted(master_volume == 0);
+}
+
+static bool write_stereo_frames(const int16_t *frames, size_t frame_count, uint32_t timeout_ms)
 {
     if (!frames || frame_count == 0 || !audio_i2s_tx_mutex ||
-        xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return 0;
+        xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return false;
     const uint8_t *cursor = reinterpret_cast<const uint8_t *>(frames);
     const size_t total_bytes = frame_count * 2U * sizeof(int16_t);
     size_t sent = 0;
@@ -536,12 +711,22 @@ static size_t write_stereo_frames(const int16_t *frames, size_t frame_count, uin
         if (remaining_ticks == 0) break;
         const esp_err_t err = i2s_write(I2S_NUM_0, cursor + sent, total_bytes - sent,
                                         &written, remaining_ticks);
-        if (err != ESP_OK || written == 0 || written > total_bytes - sent) break;
+        if (err != ESP_OK || written == 0 || written > total_bytes - sent)
+        {
+            Serial.printf("[AUDIO][I2S] TX error=0x%X requested=%u written=%u\n",
+                          err, static_cast<unsigned>(total_bytes), static_cast<unsigned>(sent));
+            break;
+        }
         sent += written;
     }
     xSemaphoreGive(audio_i2s_tx_mutex);
-    // I2S DMA is configured for stereo PCM16; never replay a partially accepted frame.
-    return (sent + (2U * sizeof(int16_t) - 1U)) / (2U * sizeof(int16_t));
+    // A partial terminal write is a hard failure. Callers stop the stream instead
+    // of retrying the partially accepted frame and duplicating audio.
+    const bool complete = audio_write_completed(sent, total_bytes);
+    if (!complete)
+        Serial.printf("[AUDIO][I2S] TX partial requested=%u written=%u\n",
+                      static_cast<unsigned>(total_bytes), static_cast<unsigned>(sent));
+    return complete;
 }
 
 /* =========================================================================
@@ -550,7 +735,9 @@ static size_t write_stereo_frames(const int16_t *frames, size_t frame_count, uin
 static void audio_background_task(void *pvParameters)
 {
     const size_t DMA_FRAME_COUNT = 256;
-    int16_t rx_buf[DMA_FRAME_COUNT * 2];
+    alignas(4) uint8_t dma_bytes[DMA_FRAME_COUNT * 2 * sizeof(int16_t)] = {};
+    alignas(4) uint8_t rx_bytes[sizeof(dma_bytes) + 4] = {};
+    size_t rx_carry_bytes = 0;
     size_t bytes_read = 0;
 
     while (1)
@@ -585,10 +772,14 @@ static void audio_background_task(void *pvParameters)
 
         // 1. Đọc luồng âm thanh đầu vào từ Microphone MEMS qua I2S RX
         bytes_read = 0;
-        esp_err_t err = i2s_read(I2S_NUM_0, rx_buf, sizeof(rx_buf), &bytes_read, pdMS_TO_TICKS(25));
+        esp_err_t err = i2s_read(I2S_NUM_0, dma_bytes, sizeof(dma_bytes),
+                                 &bytes_read, pdMS_TO_TICKS(25));
         if (err == ESP_OK && bytes_read > 0)
         {
-            const size_t stereo_frames = audio_stereo_frames_from_bytes(bytes_read);
+            memcpy(rx_bytes + rx_carry_bytes, dma_bytes, bytes_read);
+            const size_t total_rx_bytes = rx_carry_bytes + bytes_read;
+            const size_t stereo_frames = audio_stereo_frames_from_bytes(total_rx_bytes);
+            const int16_t *rx_buf = reinterpret_cast<const int16_t *>(rx_bytes);
             int64_t sum_squares = 0;
             int16_t peak = 0;
             bool recording_complete = false;
@@ -669,17 +860,13 @@ static void audio_background_task(void *pvParameters)
                     for (size_t i = 0; i < to_play; ++i)
                     {
                         int16_t raw_sample = playback_lease.samples[playback_sample_idx + i];
-                        int32_t scaled = ((int32_t)raw_sample * master_volume) / 100;
-                        if (scaled > 32767) scaled = 32767;
-                        if (scaled < -32768) scaled = -32768;
-
-                        tx_buf[i * 2]     = (int16_t)scaled; // Left
-                        tx_buf[i * 2 + 1] = (int16_t)scaled; // Right
+                        tx_buf[i * 2]     = raw_sample; // codec is the single master volume
+                        tx_buf[i * 2 + 1] = raw_sample;
                     }
 
-                    const size_t consumed = write_stereo_frames(tx_buf, to_play, 40);
-                    playback_sample_idx += consumed > to_play ? to_play : consumed;
-                    if (playback_sample_idx >= playback_lease.sample_count)
+                    const bool write_ok = write_stereo_frames(tx_buf, to_play, 40);
+                    if (write_ok) playback_sample_idx += to_play;
+                    if (!write_ok || playback_sample_idx >= playback_lease.sample_count)
                     {
                         playback_active = false;
                         playback_sample_idx = 0;
@@ -692,9 +879,16 @@ static void audio_background_task(void *pvParameters)
             }
             if (playback_complete)
             {
+                audio_drain_tx(300);
+                audio_set_pa_enabled(false);
                 audio_release_recording_lease(&completed_lease);
                 audio_release_ownership(AUDIO_OWNER_SYSTEM);
             }
+
+            const size_t consumed_rx_bytes = stereo_frames * 2U * sizeof(int16_t);
+            rx_carry_bytes = audio_rx_carry_after_bytes(total_rx_bytes);
+            if (rx_carry_bytes > 0)
+                memmove(rx_bytes, rx_bytes + consumed_rx_bytes, rx_carry_bytes);
         }
         else if (err != ESP_OK)
         {
@@ -714,7 +908,7 @@ bool audio_manager_init(void)
 
     // 1. Cấu hình chân Power Amplifier (FM8002E / NS4168)
     pinMode(AUDIO_PA_PIN, OUTPUT);
-    audio_set_pa_enabled(true);
+    audio_set_pa_enabled(false);
 
     // 2. Cài đặt Driver I2S Duplex (16kHz 16-bit Master TX + RX)
     if (!audio_install_duplex_driver())
@@ -725,10 +919,13 @@ bool audio_manager_init(void)
 
     // 3. Khởi tạo Codec ES8311 qua I2C nếu có trên mạch
     bool has_codec = es8311_init_codec();
-    if (has_codec)
+    if (!has_codec)
     {
-        Serial.println("[AUDIO] ✔ ES8311 Codec được cấu hình thành công");
+        Serial.println("[AUDIO] ❌ ES8311 không sẵn sàng; vô hiệu hóa audio thay vì báo thành công giả");
+        audio_uninstall_duplex_driver();
+        return false;
     }
+    Serial.println("[AUDIO] ✔ ES8311 Codec được cấu hình thành công");
     audio_set_volume(80);
 
     // 4. Cấp phát bộ đệm ghi âm 320KB trong 8MB Octal PSRAM
@@ -790,6 +987,83 @@ bool audio_manager_init(void)
     return true;
 }
 
+static void speaker_self_test_task(void *)
+{
+    bool acquired = audio_request_ownership(AUDIO_OWNER_DIAGNOSTIC);
+    if (acquired)
+    {
+        audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+        audio_set_pa_enabled(true);
+        constexpr size_t kFrames = 128;
+        constexpr size_t kTotalFrames = AUDIO_SAMPLE_RATE * 400U / 1000U;
+        int16_t frames[kFrames * 2];
+        float phase = 0.0f;
+        const float step = 2.0f * static_cast<float>(M_PI) * 1000.0f / AUDIO_SAMPLE_RATE;
+        size_t sent = 0;
+        while (sent < kTotalFrames)
+        {
+            const size_t count = min(kFrames, kTotalFrames - sent);
+            for (size_t i = 0; i < count; ++i)
+            {
+                const size_t absolute = sent + i;
+                float envelope = 1.0f;
+                if (absolute < 160) envelope = static_cast<float>(absolute) / 160.0f;
+                if (kTotalFrames - absolute < 160)
+                    envelope = static_cast<float>(kTotalFrames - absolute) / 160.0f;
+                const int16_t sample = static_cast<int16_t>(sinf(phase) * 2800.0f * envelope);
+                frames[i * 2] = sample;
+                frames[i * 2 + 1] = sample;
+                phase += step;
+                if (phase >= 2.0f * static_cast<float>(M_PI)) phase -= 2.0f * static_cast<float>(M_PI);
+            }
+            if (!write_stereo_frames(frames, count, 250)) break;
+            sent += count;
+        }
+        audio_drain_tx(400);
+        audio_set_pa_enabled(false);
+        audio_release_ownership(AUDIO_OWNER_DIAGNOSTIC);
+        Serial.printf("[AUDIO][SELFTEST] speaker tone frames=%u/%u\n",
+                      static_cast<unsigned>(sent), static_cast<unsigned>(kTotalFrames));
+    }
+    if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        speaker_self_test_running = false;
+        speaker_self_test_task_handle = nullptr;
+        xSemaphoreGive(audio_state_mutex);
+    }
+    vTaskDelete(nullptr);
+}
+
+bool audio_speaker_self_test_async(void)
+{
+    if (!is_initialized || !codec_ready || !audio_state_mutex) return false;
+    if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+    if (speaker_self_test_running)
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return false;
+    }
+    speaker_self_test_running = true;
+    BaseType_t created = xTaskCreatePinnedToCore(speaker_self_test_task, "SpeakerTest", 3072,
+                                                 nullptr, 2, &speaker_self_test_task_handle, 0);
+    if (created != pdPASS)
+    {
+        speaker_self_test_running = false;
+        speaker_self_test_task_handle = nullptr;
+    }
+    xSemaphoreGive(audio_state_mutex);
+    return created == pdPASS;
+}
+
+bool audio_speaker_self_test_is_running(void)
+{
+    if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+    const bool running = speaker_self_test_running;
+    xSemaphoreGive(audio_state_mutex);
+    return running;
+}
+
 /* =========================================================================
  * BỘ TỔNG HỢP ÂM THANH (TONE & SOUNDBOARD SYNTHESIZER)
  * ========================================================================= */
@@ -797,6 +1071,7 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
 {
     if (!is_initialized || freq_hz == 0 || duration_ms == 0) return;
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return;
+    audio_set_pa_enabled(master_volume > 0);
 
     if (audio_i2s_tx_mutex == nullptr)
     {
@@ -808,7 +1083,7 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
 
     float phase = 0.0f;
     float phase_step = (2.0f * (float)M_PI * (float)freq_hz) / (float)AUDIO_SAMPLE_RATE;
-    float max_amp = (32767.0f * (float)master_volume) / 100.0f;
+    const float max_amp = 12000.0f; // ES8311 is the single user-volume stage
 
     size_t samples_generated = 0;
     while (samples_generated < total_samples)
@@ -835,13 +1110,16 @@ void audio_play_tone(uint32_t freq_hz, uint32_t duration_ms)
             if (phase >= 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
         }
 
-        const size_t consumed = write_stereo_frames(buffer, count, 250);
-        if (consumed == 0) break;
-        samples_generated += consumed > count ? count : consumed;
-        if (consumed < count) break;
+        if (!write_stereo_frames(buffer, count, 250)) break;
+        samples_generated += count;
     }
 
+    audio_drain_tx(300);
+    audio_set_pa_enabled(false);
     audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    Serial.printf("[AUDIO][TONE] freq=%u requested_frames=%u written_frames=%u\n",
+                  freq_hz, static_cast<unsigned>(total_samples),
+                  static_cast<unsigned>(samples_generated));
 }
 
 void audio_play_sound_effect(SoundEffect fx)
@@ -898,6 +1176,8 @@ bool audio_start_recording(uint32_t max_duration_sec)
         xSemaphoreGive(audio_state_mutex);
         return false;
     }
+    const uint32_t reservation = ++recording_next_token ? recording_next_token : ++recording_next_token;
+    recording_start_token = reservation;
     recording_state = RECORD_STARTING;
     xSemaphoreGive(audio_state_mutex);
 
@@ -906,7 +1186,8 @@ bool audio_start_recording(uint32_t max_duration_sec)
     {
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
-            if (recording_state == RECORD_STARTING) recording_state = RECORD_IDLE;
+            if (recording_state == RECORD_STARTING && recording_start_token == reservation)
+                recording_state = RECORD_IDLE;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -914,10 +1195,16 @@ bool audio_start_recording(uint32_t max_duration_sec)
 
     if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
     {
+        if (xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            if (recording_state == RECORD_STARTING && recording_start_token == reservation)
+                recording_state = RECORD_IDLE;
+            xSemaphoreGive(audio_state_mutex);
+        }
         audio_release_ownership(AUDIO_OWNER_RECORDER);
         return false;
     }
-    if (recording_state != RECORD_STARTING)
+    if (recording_state != RECORD_STARTING || recording_start_token != reservation)
     {
         xSemaphoreGive(audio_state_mutex);
         audio_release_ownership(AUDIO_OWNER_RECORDER);
@@ -939,7 +1226,11 @@ void audio_stop_recording(void)
     if (!audio_state_mutex ||
         xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     const bool was_recording = recording_state == RECORD_ACTIVE;
-    if (recording_state == RECORD_STARTING) recording_state = RECORD_IDLE;
+    if (recording_state == RECORD_STARTING)
+    {
+        ++recording_next_token;
+        recording_state = RECORD_IDLE;
+    }
     if (was_recording) recording_state = RECORD_SNAPSHOTTING;
     const uint32_t sample_count = recorded_samples_count;
     xSemaphoreGive(audio_state_mutex);
@@ -966,6 +1257,7 @@ void audio_cancel_recording(void)
         return;
     }
     recording_state = RECORD_IDLE;
+    ++recording_next_token;
     recorded_samples_count = 0;
     recording_file_state = AUDIO_FILE_NONE;
     xSemaphoreGive(audio_state_mutex);
@@ -997,6 +1289,8 @@ bool audio_start_playback(void)
         xSemaphoreGive(audio_state_mutex);
         return false;
     }
+    const uint32_t reservation = ++playback_next_token ? playback_next_token : ++playback_next_token;
+    playback_start_token = reservation;
     playback_starting = true;
     xSemaphoreGive(audio_state_mutex);
 
@@ -1005,7 +1299,7 @@ bool audio_start_playback(void)
     {
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
-            playback_starting = false;
+            if (playback_start_token == reservation) playback_starting = false;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -1016,7 +1310,7 @@ bool audio_start_playback(void)
         audio_release_recording_lease(&lease);
         if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
         {
-            playback_starting = false;
+            if (playback_start_token == reservation) playback_starting = false;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -1024,11 +1318,16 @@ bool audio_start_playback(void)
 
     if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
     {
+        if (xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            if (playback_start_token == reservation) playback_starting = false;
+            xSemaphoreGive(audio_state_mutex);
+        }
         audio_release_ownership(AUDIO_OWNER_SYSTEM);
         audio_release_recording_lease(&lease);
         return false;
     }
-    if (!playback_starting)
+    if (!playback_starting || playback_start_token != reservation)
     {
         xSemaphoreGive(audio_state_mutex);
         audio_release_ownership(AUDIO_OWNER_SYSTEM);
@@ -1039,6 +1338,7 @@ bool audio_start_playback(void)
     playback_lease = lease;
     playback_active = true;
     playback_starting = false;
+    audio_set_pa_enabled(master_volume > 0);
     const size_t sample_count = lease.sample_count;
     xSemaphoreGive(audio_state_mutex);
     Serial.printf("[AUDIO] Bắt đầu phát lại đoạn ghi âm (%u mẫu)...\n",
@@ -1052,13 +1352,19 @@ void audio_stop_playback(void)
         xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     const bool was_playing = playback_active;
     playback_starting = false;
+    ++playback_next_token;
     playback_active = false;
     playback_sample_idx = 0;
     AudioRecordingLease lease = playback_lease;
     playback_lease = {};
     xSemaphoreGive(audio_state_mutex);
     audio_release_recording_lease(&lease);
-    if (was_playing) audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    if (was_playing)
+    {
+        audio_drain_tx(250);
+        audio_set_pa_enabled(false);
+        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+    }
 }
 
 bool audio_is_playing(void)
@@ -1187,14 +1493,12 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
             stereo[i * 2] = (int16_t)scaled;
             stereo[i * 2 + 1] = (int16_t)scaled;
         }
-        const size_t consumed = write_stereo_frames(stereo, chunk, timeout_ms);
-        if (consumed == 0)
+        if (!write_stereo_frames(stereo, chunk, timeout_ms))
         {
             ok = false;
             break;
         }
-        offset += consumed > chunk ? chunk : consumed;
-        if (consumed < chunk) ok = false;
+        offset += chunk;
     }
     return ok;
 }

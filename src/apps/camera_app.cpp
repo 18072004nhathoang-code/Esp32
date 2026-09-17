@@ -74,6 +74,11 @@ static uint32_t preview_session_id = 0;
 static uint32_t ui_session_id = 0;
 static uint32_t worker_session_id = 0;
 static volatile uint32_t worker_ack_revision = 0;
+static volatile uint32_t worker_received_revision = 0;
+static uint32_t worker_retry_revision = 0;
+static uint8_t worker_retry_count = 0;
+static uint32_t worker_retry_after_ms = 0;
+static uint32_t service_session_id = 0;
 static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
 
 struct CameraWorkerControl
@@ -286,9 +291,23 @@ static uint16_t *allocate_preview_buffer(size_t pixels)
 static bool worker_apply_control(const CameraWorkerControl &control)
 {
     if (!camera_control_needs_apply(control.revision, worker_ack_revision)) return preview_active;
+    worker_received_revision = control.revision;
+    if (worker_retry_revision != control.revision)
+    {
+        worker_retry_revision = control.revision;
+        worker_retry_count = 0;
+        worker_retry_after_ms = 0;
+    }
+    if (worker_retry_count >= 5 || static_cast<int32_t>(millis() - worker_retry_after_ms) < 0)
+        return preview_active;
     if (!control.active)
     {
-        (void)camera_service_stop(2000);
+        if (!camera_service_stop(2000))
+        {
+            ++worker_retry_count;
+            worker_retry_after_ms = millis() + 250U * worker_retry_count;
+            return preview_active;
+        }
         if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
         {
             preview_active = false;
@@ -305,7 +324,12 @@ static bool worker_apply_control(const CameraWorkerControl &control)
                              control.width != worker_canvas_w || control.height != worker_canvas_h;
     if (new_session)
     {
-        (void)camera_service_stop(2000);
+        if (!camera_service_stop(2000))
+        {
+            ++worker_retry_count;
+            worker_retry_after_ms = millis() + 250U * worker_retry_count;
+            return preview_active;
+        }
         const size_t pixels = static_cast<size_t>(control.width) * control.height;
         uint16_t *new_front = allocate_preview_buffer(pixels);
         uint16_t *new_back = allocate_preview_buffer(pixels);
@@ -336,10 +360,42 @@ static bool worker_apply_control(const CameraWorkerControl &control)
             }
             xSemaphoreGive(preview_mutex);
         }
+        if (!preview_active)
+        {
+            ++worker_retry_count;
+            worker_retry_after_ms = millis() + 250U * worker_retry_count;
+            return false;
+        }
     }
-    if (control.run_service && preview_active) (void)camera_service_start();
-    else (void)camera_service_stop(2000);
+    bool applied = false;
+    if (control.run_service && preview_active)
+    {
+        const bool started = camera_service_start();
+        const CameraRuntimeState state = camera_service_get_runtime_state();
+        applied = started && (state == CAM_STATE_STARTING || state == CAM_STATE_RUNNING);
+        if (applied) service_session_id = camera_service_get_session_id();
+    }
+    else
+    {
+        applied = camera_service_stop(2000);
+        if (applied) service_session_id = 0;
+    }
+    const CameraRuntimeState resulting_state = camera_service_get_runtime_state();
+    const bool can_ack = camera_control_can_ack(
+        applied, control.run_service,
+        resulting_state == CAM_STATE_STARTING || resulting_state == CAM_STATE_RUNNING,
+        resulting_state == CAM_STATE_STOPPED || resulting_state == CAM_STATE_NOT_CONFIGURED ||
+            resulting_state == CAM_STATE_PASSWORD_REQUIRED);
+    if (!can_ack)
+    {
+        const bool actionable = resulting_state == CAM_STATE_PASSWORD_REQUIRED ||
+                                resulting_state == CAM_STATE_NOT_CONFIGURED || resulting_state == CAM_STATE_ERROR;
+        worker_retry_count = actionable ? 5 : static_cast<uint8_t>(worker_retry_count + 1);
+        worker_retry_after_ms = millis() + 250U * worker_retry_count;
+        return preview_active;
+    }
     worker_ack_revision = control.revision;
+    worker_retry_count = 0;
     return preview_active;
 }
 
@@ -349,6 +405,11 @@ static void decode_latest_frame(uint32_t session_id)
         !preview_back || !preview_front) return;
     CameraFrame *frame = camera_service_get_frame(10);
     if (!frame) return;
+    if (frame->session_id == 0 || frame->session_id != service_session_id)
+    {
+        camera_service_return_frame(frame);
+        return;
+    }
     if (!frame->buf || frame->len == 0 || frame->len > 512U * 1024U)
     {
         camera_service_return_frame(frame);
@@ -425,10 +486,12 @@ static void camera_ui_worker(void *)
             {
                 if (camera_service_configure_network(command.profile))
                 {
-                    (void)camera_service_save_network_profile();
+                    const bool saved = camera_service_save_network_profile();
                     const CameraWorkerControl latest = get_camera_control();
-                    if (latest.session_id == command.session_id && latest.active && latest.run_service)
-                        (void)camera_service_start();
+                    if (saved && latest.session_id == command.session_id && latest.active && latest.run_service)
+                    {
+                        if (camera_service_start()) service_session_id = camera_service_get_session_id();
+                    }
                 }
             }
         }
@@ -795,9 +858,11 @@ void camera_app_update(void)
     uint32_t ready_jpeg_bytes = 0;
     uint16_t ready_width = 0;
     uint16_t ready_height = 0;
+    uint32_t latest_preview_timestamp = 0;
     if (preview_mutex && xSemaphoreTake(preview_mutex, 0) == pdTRUE)
     {
         ready_frame_id = preview_frame_id;
+        latest_preview_timestamp = preview_timestamp_ms;
         const size_t copy_pixels = static_cast<size_t>(canvas_w) * canvas_h;
         if (camera_session_accepts(preview_session_id, ui_session_id, preview_active) &&
             ready_frame_id != last_rendered_frame_id && preview_front &&
@@ -841,6 +906,15 @@ void camera_app_update(void)
 
     if (lbl_cam_status)
     {
-        lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
+        const CameraRuntimeState state = camera_service_get_runtime_state();
+        const uint32_t age = latest_preview_timestamp == 0 ? UINT32_MAX : millis() - latest_preview_timestamp;
+        if (state == CAM_STATE_RUNNING && latest_preview_timestamp == 0)
+            lv_label_set_text(lbl_cam_status, "RUNNING • NO FRAME");
+        else if (state == CAM_STATE_RUNNING && age > 5000)
+            lv_label_set_text(lbl_cam_status, "FRAME STALE");
+        else if (state == CAM_STATE_RUNNING && camera_service_get_snapshot_status() == CAM_STATUS_ERROR)
+            lv_label_set_text(lbl_cam_status, "FETCH/DECODE ERROR");
+        else
+            lv_label_set_text(lbl_cam_status, camera_service_get_status_text());
     }
 }

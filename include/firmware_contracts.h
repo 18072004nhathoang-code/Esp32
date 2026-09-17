@@ -35,6 +35,62 @@ constexpr size_t audio_stereo_frames_from_bytes(size_t bytes)
     return bytes / (2U * sizeof(int16_t));
 }
 
+constexpr size_t audio_rx_carry_after_bytes(size_t bytes)
+{
+    return bytes % (2U * sizeof(int16_t));
+}
+
+constexpr bool audio_write_completed(size_t sent_bytes, size_t expected_bytes)
+{
+    return expected_bytes > 0 && sent_bytes == expected_bytes;
+}
+
+// ES8311 DAC volume is -95.5 dB at 0x00, 0 dB at 0xBF and +32 dB at 0xFF.
+// Keep the user range at/below unity gain; zero is handled as a real mute.
+constexpr uint8_t es8311_volume_register(uint8_t percent)
+{
+    return percent == 0 ? 0U
+                        : static_cast<uint8_t>(0x47U +
+                              ((static_cast<uint32_t>(percent > 100 ? 100 : percent) - 1U) *
+                               (0xBFU - 0x47U)) / 99U);
+}
+
+constexpr bool audio_session_cleanup_allowed(uint32_t cleanup_session, uint32_t active_session)
+{
+    return cleanup_session != 0 && cleanup_session == active_session;
+}
+
+inline bool valid_utf8_text(const char *text, size_t length)
+{
+    if (!text && length != 0) return false;
+    for (size_t i = 0; i < length;)
+    {
+        const uint8_t lead = static_cast<uint8_t>(text[i++]);
+        if (lead <= 0x7F)
+        {
+            if (lead < 0x20 && lead != '\n' && lead != '\r' && lead != '\t') return false;
+            continue;
+        }
+        uint32_t codepoint = 0;
+        size_t continuation = 0;
+        uint32_t minimum = 0;
+        if ((lead & 0xE0) == 0xC0) { codepoint = lead & 0x1F; continuation = 1; minimum = 0x80; }
+        else if ((lead & 0xF0) == 0xE0) { codepoint = lead & 0x0F; continuation = 2; minimum = 0x800; }
+        else if ((lead & 0xF8) == 0xF0) { codepoint = lead & 0x07; continuation = 3; minimum = 0x10000; }
+        else return false;
+        if (i + continuation > length) return false;
+        for (size_t n = 0; n < continuation; ++n)
+        {
+            const uint8_t byte = static_cast<uint8_t>(text[i++]);
+            if ((byte & 0xC0) != 0x80) return false;
+            codepoint = (codepoint << 6) | (byte & 0x3F);
+        }
+        if (codepoint < minimum || codepoint > 0x10FFFF ||
+            (codepoint >= 0xD800 && codepoint <= 0xDFFF)) return false;
+    }
+    return true;
+}
+
 constexpr bool exclusive_start_can_claim(uint8_t state, uint8_t idle_state)
 {
     return state == idle_state;
@@ -114,4 +170,35 @@ constexpr bool camera_session_accepts(uint32_t frame_session, uint32_t active_se
 constexpr bool camera_control_needs_apply(uint32_t requested_revision, uint32_t acknowledged_revision)
 {
     return requested_revision != acknowledged_revision;
+}
+
+constexpr bool camera_control_can_ack(bool operation_ok, bool target_running,
+                                      bool running_or_starting, bool stopped)
+{
+    return operation_ok && (target_running ? running_or_starting : stopped);
+}
+
+constexpr bool wifi_generation_can_commit(uint32_t save_generation, uint32_t current_generation,
+                                          uint32_t pending_generation, bool manual_disconnect)
+{
+    return save_generation != 0 && save_generation == current_generation &&
+           save_generation == pending_generation && !manual_disconnect;
+}
+
+constexpr uint8_t estimated_cpu_usage_from_rates(uint64_t idle_rate, uint64_t idle_capacity_rate)
+{
+    return idle_capacity_rate == 0 ? 0U
+        : static_cast<uint8_t>(100U - (idle_rate >= idle_capacity_rate
+            ? 100U : static_cast<uint32_t>((idle_rate * 100ULL) / idle_capacity_rate)));
+}
+
+constexpr bool complete_jpeg_signature(const uint8_t *data, size_t size)
+{
+    return data && size >= 4 && data[0] == 0xFF && data[1] == 0xD8 &&
+           data[size - 2] == 0xFF && data[size - 1] == 0xD9;
+}
+
+constexpr bool cache_temp_can_replace(bool exact_write, bool exact_size, bool backup_ready)
+{
+    return exact_write && exact_size && backup_ready;
 }

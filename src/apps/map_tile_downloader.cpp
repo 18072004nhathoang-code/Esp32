@@ -16,6 +16,7 @@
 #include <TJpg_Decoder.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "firmware_contracts.h"
 
 // Root CA certificates (Google Trust Services GTS Root R1, ISRG Root X1, GlobalSign R3)
 static const char MAPS_TRUSTED_ROOT_CA_PEM[] PROGMEM =
@@ -127,6 +128,49 @@ static volatile bool has_new_tile = false;
 static TaskHandle_t download_task_handle = nullptr;
 static QueueHandle_t map_request_queue = nullptr;
 
+class BoundedBufferStream final : public Stream
+{
+public:
+    BoundedBufferStream(uint8_t *buffer, size_t capacity)
+        : _buffer(buffer), _capacity(capacity) {}
+    size_t write(uint8_t value) override { return write(&value, 1); }
+    size_t write(const uint8_t *data, size_t length) override
+    {
+        if (!data || _overflow || length > _capacity - _size)
+        {
+            _overflow = true;
+            return 0;
+        }
+        memcpy(_buffer + _size, data, length);
+        _size += length;
+        return length;
+    }
+    int available() override { return 0; }
+    int read() override { return -1; }
+    int peek() override { return -1; }
+    void flush() override {}
+    size_t size() const { return _size; }
+    bool overflowed() const { return _overflow; }
+private:
+    uint8_t *_buffer;
+    size_t _capacity;
+    size_t _size = 0;
+    bool _overflow = false;
+};
+
+static bool valid_map_jpeg(const uint8_t *data, size_t size)
+{
+    if (!complete_jpeg_signature(data, size)) return false;
+    uint16_t width = 0, height = 0;
+    JRESULT result = JDR_INTR;
+    if (tjpg_guard_lock())
+    {
+        result = TJpgDec.getJpgSize(&width, &height, data, size);
+        tjpg_guard_unlock();
+    }
+    return result == JDR_OK && width == MAP_TILE_WIDTH && height == MAP_TILE_HEIGHT;
+}
+
 /* Callback của thư viện TJpgDec: Nhận khối điểm ảnh MCU (RGB565) và ghi vào tile_buf_back */
 static bool tjpg_output_callback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
@@ -173,7 +217,7 @@ static void map_download_task(void *pvParameters)
             {
                 Serial.println("[MAP_TASK] 🎯 Đang nạp ảnh trực tiếp từ thẻ MicroSD...");
                 int bytes_read = sd_map_cache_read(target_lat, target_lon, target_zoom, target_type, jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
-                if (bytes_read > 200)
+                if (bytes_read > 200 && valid_map_jpeg(jpeg_raw_buffer, bytes_read))
                 {
                     JRESULT res = JDR_INTR;
                     if (tjpg_guard_lock())
@@ -224,21 +268,18 @@ static void map_download_task(void *pvParameters)
                 continue;
             }
 
+            if (!map_tile_downloader_supports_satellite())
+            {
+                Serial.println("[MAP_TASK] PROVIDER_NOT_CONFIGURED: GOOGLE_MAPS_STATIC_API_KEY trống");
+                current_status = TILE_PROVIDER_NOT_CONFIGURED;
+                continue;
+            }
+
             // Xây dựng URL chuẩn Google Maps Static API kèm tham số bắt buộc solution_id
             char url_buf[512];
-            if (strlen(GOOGLE_MAPS_STATIC_API_KEY) > 5)
-            {
-                snprintf(url_buf, sizeof(url_buf),
+            snprintf(url_buf, sizeof(url_buf),
                     "https://maps.googleapis.com/maps/api/staticmap?center=%.5f,%.5f&zoom=%d&size=%dx%d&scale=1&maptype=%s&format=jpg&key=%s&solution_id=%s",
                     target_lat, target_lon, target_zoom, MAP_TILE_WIDTH, MAP_TILE_HEIGHT, target_type, GOOGLE_MAPS_STATIC_API_KEY, GMP_SOLUTION_ID);
-            }
-            else
-            {
-                // Không có Google key: chỉ roadmap được phục vụ bởi OpenStreetMap.
-                snprintf(url_buf, sizeof(url_buf),
-                    "https://staticmap.openstreetmap.de/staticmap.php?center=%.5f,%.5f&zoom=%d&size=%dx%d&maptype=%s",
-                    target_lat, target_lon, target_zoom, MAP_TILE_WIDTH, MAP_TILE_HEIGHT, "mapnik");
-            }
 
             // Bảo mật: Không in khóa API plaintext ra log Serial
             Serial.printf("[MAP_TASK] 🌐 Tải bản đồ (Lat: %.4f, Lon: %.4f, Zoom: %d, Type: %s)\n",
@@ -257,50 +298,21 @@ static void map_download_task(void *pvParameters)
 
                 if (httpCode == HTTP_CODE_OK)
                 {
-                    int total_len = http.getSize();
-                    WiFiClient *stream = http.getStreamPtr();
-                    int bytes_read = 0;
+                    const int total_len = http.getSize();
+                    const String content_type = http.header("Content-Type");
+                    int bytes_read = -1;
 
-                    if (jpeg_raw_buffer != nullptr)
+                    if (jpeg_raw_buffer != nullptr && total_len <= JPEG_MAX_RAW_SIZE &&
+                        (content_type.length() == 0 || content_type.startsWith("image/jpeg")))
                     {
-                        uint32_t start_read_time = millis();
-                        while (http.connected() && (total_len > 0 || total_len == -1))
-                        {
-                            // Cơ chế chống treo máy: Timeout 6 giây khi đọc stream
-                            if (millis() - start_read_time > 6000)
-                            {
-                                Serial.println("[MAP_TASK] ⚠️ Hết thời gian đọc luồng dữ liệu mạng!");
-                                break;
-                            }
+                        BoundedBufferStream sink(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
+                        const int received = http.writeToStream(&sink); // HTTPClient dechunks first.
+                        const bool complete = received >= 0 && !sink.overflowed() &&
+                            static_cast<size_t>(received) == sink.size() &&
+                            (total_len < 0 || received == total_len);
+                        if (complete) bytes_read = received;
 
-                            size_t avail = stream->available();
-                            if (avail > 0)
-                            {
-                                int read_size = avail;
-                                if (bytes_read + read_size > JPEG_MAX_RAW_SIZE)
-                                {
-                                    read_size = JPEG_MAX_RAW_SIZE - bytes_read;
-                                }
-                                int r = stream->readBytes(&jpeg_raw_buffer[bytes_read], read_size);
-                                if (r > 0)
-                                {
-                                    bytes_read += r;
-                                    if (total_len > 0)
-                                    {
-                                        total_len -= r;
-                                        if (total_len <= 0) break; // Đã nhận đủ dung lượng file
-                                    }
-                                }
-                                if (bytes_read >= JPEG_MAX_RAW_SIZE) break;
-                            }
-                            else if (total_len == -1 && !http.connected())
-                            {
-                                break; // Stream chunked hoàn tất khi socket đóng
-                            }
-                            vTaskDelay(pdMS_TO_TICKS(2));
-                        }
-
-                        if (bytes_read > 200)
+                        if (bytes_read > 200 && valid_map_jpeg(jpeg_raw_buffer, bytes_read))
                         {
                             Serial.printf("[MAP_TASK] Đã tải về: %d bytes. Bắt đầu giải mã TJpgDec...\n", bytes_read);
 
@@ -352,6 +364,8 @@ static void map_download_task(void *pvParameters)
                         }
                         else
                         {
+                            Serial.printf("[MAP_TASK] ❌ JPEG invalid/truncated/oversize: got=%d len=%d type=%s\n",
+                                          bytes_read, total_len, content_type.c_str());
                             current_status = TILE_ERROR;
                         }
                     }
@@ -457,8 +471,7 @@ bool map_tile_downloader_request(double lat, double lon, int zoom, const char *m
 {
     const char *requested_type = (maptype && *maptype) ? maptype : "roadmap";
     if (lat < -85.0 || lat > 85.0 || lon < -180.0 || lon > 180.0 || zoom < 5 || zoom > 20 ||
-        (strcmp(requested_type, "roadmap") != 0 && strcmp(requested_type, "satellite") != 0) ||
-        (strcmp(requested_type, "satellite") == 0 && !map_tile_downloader_supports_satellite()))
+        (strcmp(requested_type, "roadmap") != 0 && strcmp(requested_type, "satellite") != 0))
     {
         current_status = TILE_ERROR;
         return false;
@@ -556,5 +569,5 @@ bool map_tile_downloader_supports_satellite(void)
 
 const char *map_tile_downloader_get_network_provider(void)
 {
-    return map_tile_downloader_supports_satellite() ? "Google Static API" : "OpenStreetMap";
+    return map_tile_downloader_supports_satellite() ? "Google Static API" : "PROVIDER_NOT_CONFIGURED";
 }

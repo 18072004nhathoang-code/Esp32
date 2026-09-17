@@ -40,6 +40,7 @@ NetworkCameraProfile camera_service_get_network_profile(void);
  * @brief Lấy trạng thái runtime hiện tại của camera
  */
 CameraRuntimeState camera_service_get_runtime_state(void);
+uint32_t camera_service_get_session_id(void);
 
 /**
  * @brief Kiểm tra camera đã kết nối và sẵn sàng truyền frame

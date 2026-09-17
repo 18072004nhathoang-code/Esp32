@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 #include <ctype.h>
 #include <limits.h>
+#include <ArduinoJson.h>
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -63,10 +64,10 @@ bool deadline_expired(uint32_t deadline_ms)
 
 void set_error(const char *message)
 {
-    const bool locked = s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE;
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     strlcpy(s_last_error, message ? message : "Unknown AI error", sizeof(s_last_error));
     s_state = AI_STATE_ERROR;
-    if (locked) xSemaphoreGive(s_mutex);
+    xSemaphoreGive(s_mutex);
 }
 
 const char *active_token()
@@ -230,193 +231,66 @@ private:
     bool failed_;
 };
 
-bool extract_json_string(const String &json, const char *key, char *out, size_t out_size)
+bool parse_ai_response_json(const uint8_t *data, size_t size, char *transcript,
+                            size_t transcript_size, char *reply, size_t reply_size)
 {
-    if (!key || !out || out_size == 0) return false;
-    int pos = -1;
-    int depth = 0;
-    const size_t key_len = strlen(key);
-    for (int i = 0; i < static_cast<int>(json.length()); ++i)
-    {
-        const char c = json[i];
-        if (c == '{' || c == '[') { ++depth; continue; }
-        if (c == '}' || c == ']') { --depth; if (depth < 0) return false; continue; }
-        if (c != '"') continue;
-        const int token_start = ++i;
-        bool token_escape = false;
-        while (i < static_cast<int>(json.length()))
-        {
-            const char value = json[i];
-            if (token_escape) token_escape = false;
-            else if (value == '\\') token_escape = true;
-            else if (value == '"') break;
-            ++i;
-        }
-        if (i >= static_cast<int>(json.length())) return false;
-        if (depth != 1 || token_escape || static_cast<size_t>(i - token_start) != key_len ||
-            strncmp(json.c_str() + token_start, key, key_len) != 0) continue;
-        int cursor = i + 1;
-        while (cursor < static_cast<int>(json.length()) &&
-               isspace(static_cast<unsigned char>(json[cursor]))) ++cursor;
-        if (cursor >= static_cast<int>(json.length()) || json[cursor++] != ':') return false;
-        while (cursor < static_cast<int>(json.length()) &&
-               isspace(static_cast<unsigned char>(json[cursor]))) ++cursor;
-        if (cursor >= static_cast<int>(json.length()) || json[cursor] != '"') return false;
-        pos = cursor + 1;
-        break;
-    }
-    if (pos < 0 || depth < 0) return false;
-    size_t written = 0;
-    bool escaped = false;
-    bool closed = false;
-    bool overflow = false;
-    auto hex_value = [](char value) -> int {
-        if (value >= '0' && value <= '9') return value - '0';
-        if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-        if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-        return -1;
-    };
-    auto append_utf8 = [&](uint32_t cp) {
-        uint8_t bytes[4];
-        size_t count = 0;
-        if (cp <= 0x7F) bytes[count++] = cp;
-        else if (cp <= 0x7FF)
-        {
-            bytes[count++] = 0xC0 | (cp >> 6);
-            bytes[count++] = 0x80 | (cp & 0x3F);
-        }
-        else if (cp <= 0xFFFF)
-        {
-            bytes[count++] = 0xE0 | (cp >> 12);
-            bytes[count++] = 0x80 | ((cp >> 6) & 0x3F);
-            bytes[count++] = 0x80 | (cp & 0x3F);
-        }
-        else if (cp <= 0x10FFFF)
-        {
-            bytes[count++] = 0xF0 | (cp >> 18);
-            bytes[count++] = 0x80 | ((cp >> 12) & 0x3F);
-            bytes[count++] = 0x80 | ((cp >> 6) & 0x3F);
-            bytes[count++] = 0x80 | (cp & 0x3F);
-        }
-        if (written + count < out_size)
-            for (size_t i = 0; i < count; ++i) out[written++] = static_cast<char>(bytes[i]);
-        else overflow = true;
-    };
-    for (; pos < (int)json.length(); ++pos)
-    {
-        char c = json[pos];
-        if (escaped)
-        {
-            if (c == 'u' && pos + 4 < (int)json.length())
-            {
-                uint32_t cp = 0;
-                bool valid_hex = true;
-                for (int i = 1; i <= 4; ++i)
-                {
-                    int nibble = hex_value(json[pos + i]);
-                    if (nibble < 0) { valid_hex = false; break; }
-                    cp = (cp << 4) | static_cast<uint32_t>(nibble);
-                }
-                if (valid_hex)
-                {
-                    pos += 4;
-                    if (cp >= 0xD800 && cp <= 0xDBFF)
-                    {
-                        if (pos + 6 >= (int)json.length() || json[pos + 1] != '\\' ||
-                            json[pos + 2] != 'u') return false;
-                        uint32_t low = 0;
-                        bool valid_low = true;
-                        for (int i = 3; i <= 6; ++i)
-                        {
-                            int nibble = hex_value(json[pos + i]);
-                            if (nibble < 0) { valid_low = false; break; }
-                            low = (low << 4) | static_cast<uint32_t>(nibble);
-                        }
-                        if (valid_low && low >= 0xDC00 && low <= 0xDFFF)
-                        {
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
-                            pos += 6;
-                        }
-                        else return false;
-                    }
-                    else if (cp >= 0xDC00 && cp <= 0xDFFF) return false;
-                    append_utf8(cp);
-                }
-                else return false;
-            }
-            else
-            {
-                if (c == 'n') c = '\n';
-                else if (c == 'r') c = '\r';
-                else if (c == 't') c = '\t';
-                else if (c != '"' && c != '\\' && c != '/' && c != 'b' && c != 'f') return false;
-                if (c == 'b') c = '\b';
-                if (c == 'f') c = '\f';
-                if (written + 1 < out_size) out[written++] = c;
-                else overflow = true;
-            }
-            escaped = false;
-        }
-        else if (c == '\\') escaped = true;
-        else if (c == '"') { closed = true; break; }
-        else if (static_cast<uint8_t>(c) < 0x20) return false;
-        else if (written + 1 < out_size) out[written++] = c;
-        else overflow = true;
-    }
-    out[written] = '\0';
-    return closed && !escaped && !overflow && written > 0;
-}
-
-bool json_object_envelope_valid(const String &json)
-{
-    size_t begin = 0;
-    while (begin < json.length() && isspace(static_cast<unsigned char>(json[begin]))) ++begin;
-    size_t end = json.length();
-    while (end > begin && isspace(static_cast<unsigned char>(json[end - 1]))) --end;
-    if (end <= begin + 1 || json[begin] != '{' || json[end - 1] != '}') return false;
-    char stack[16] = {};
-    size_t depth = 0;
+    if (!data || size == 0 || !transcript || transcript_size < 2 || !reply || reply_size < 2)
+        return false;
+    size_t first = 0;
+    while (first < size && isspace(data[first])) ++first;
+    if (first == size || data[first] != '{') return false;
     bool in_string = false;
     bool escaped = false;
-    for (size_t i = begin; i < end; ++i)
+    int depth = 0;
+    size_t document_end = 0;
+    for (size_t i = first; i < size; ++i)
     {
-        const char c = json[i];
+        const uint8_t c = data[i];
         if (in_string)
         {
             if (escaped) escaped = false;
             else if (c == '\\') escaped = true;
             else if (c == '"') in_string = false;
-            else if (static_cast<uint8_t>(c) < 0x20) return false;
             continue;
         }
-        if (c == '"') { in_string = true; continue; }
-        if (c == '{' || c == '[')
-        {
-            if (depth >= sizeof(stack)) return false;
-            stack[depth++] = c;
-        }
+        if (c == '"') in_string = true;
+        else if (c == '{' || c == '[') ++depth;
         else if (c == '}' || c == ']')
         {
-            if (depth == 0) return false;
-            const char open = stack[--depth];
-            if ((c == '}' && open != '{') || (c == ']' && open != '[')) return false;
+            if (--depth < 0) return false;
+            if (depth == 0) { document_end = i + 1; break; }
         }
     }
-    return depth == 0 && !in_string && !escaped;
+    if (document_end == 0 || in_string || escaped) return false;
+    for (size_t i = document_end; i < size; ++i)
+        if (!isspace(data[i])) return false;
+
+    DynamicJsonDocument document(4096);
+    const DeserializationError error = deserializeJson(
+        document, data, size, DeserializationOption::NestingLimit(4));
+    if (error || !document.is<JsonObject>()) return false;
+    JsonObject root = document.as<JsonObject>();
+    if (root.size() != 2 || !root.containsKey("transcript") || !root.containsKey("reply") ||
+        !root["transcript"].is<const char *>() || !root["reply"].is<const char *>()) return false;
+    const char *transcript_value = root["transcript"].as<const char *>();
+    const char *reply_value = root["reply"].as<const char *>();
+    const size_t transcript_length = transcript_value ? strlen(transcript_value) : 0;
+    const size_t reply_length = reply_value ? strlen(reply_value) : 0;
+    if (transcript_length == 0 || reply_length == 0 || transcript_length >= transcript_size ||
+        reply_length >= reply_size || !valid_utf8_text(transcript_value, transcript_length) ||
+        !valid_utf8_text(reply_value, reply_length)) return false;
+    memcpy(transcript, transcript_value, transcript_length + 1);
+    memcpy(reply, reply_value, reply_length + 1);
+    return true;
 }
 
-String json_escape(const char *text)
+bool serialize_tts_request_json(const char *text, String &body)
 {
-    String escaped;
-    if (!text) return escaped;
-    escaped.reserve(strlen(text) + 16);
-    for (const char *p = text; *p; ++p)
-    {
-        if (*p == '"' || *p == '\\') escaped += '\\';
-        if (*p == '\n') escaped += "\\n";
-        else if (*p != '\r') escaped += *p;
-    }
-    return escaped;
+    if (!text || !*text || !valid_utf8_text(text, strlen(text))) return false;
+    StaticJsonDocument<768> request_json;
+    request_json["text"] = text;
+    body = "";
+    return serializeJson(request_json, body) > 0;
 }
 
 bool post_recording(uint32_t request_id, char *transcript, size_t transcript_size,
@@ -472,10 +346,8 @@ bool post_recording(uint32_t request_id, char *transcript, size_t transcript_siz
         set_error("AI response is truncated, cancelled or oversized");
         return false;
     }
-    const String response(reinterpret_cast<const char *>(sink.data()));
-    if (!json_object_envelope_valid(response) ||
-        !extract_json_string(response, "transcript", transcript, transcript_size) ||
-        !extract_json_string(response, "reply", reply, reply_size))
+    if (!parse_ai_response_json(sink.data(), sink.size(), transcript, transcript_size,
+                                reply, reply_size))
     {
         set_error("AI response JSON is invalid");
         return false;
@@ -496,7 +368,8 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
     http.addHeader("Content-Type", "application/json");
     http.addHeader("Accept", "audio/wav");
     http.addHeader("Authorization", String("Bearer ") + active_token());
-    String body = String("{\"text\":\"") + json_escape(text) + "\"}";
+    String body;
+    if (!serialize_tts_request_json(text, body)) { http.end(); return false; }
     int code = http.POST(reinterpret_cast<uint8_t *>(const_cast<char *>(body.c_str())), body.length());
     const int content_length = http.getSize();
     if (code < 200 || code >= 300 ||
@@ -522,9 +395,10 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
         return false;
     }
 
-    bool ok = true;
+    bool ok = audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
+    audio_set_pa_enabled(ok && audio_get_volume() > 0);
     size_t offset = 0;
-    while (offset < wav.sample_count)
+    while (ok && offset < wav.sample_count)
     {
         if (request_cancelled(request_id) || deadline_expired(deadline_ms)) { ok = false; break; }
         size_t count = wav.sample_count - offset;
@@ -532,6 +406,8 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
         if (!audio_write_pcm16_mono(wav.samples + offset, count, 250)) { ok = false; break; }
         offset += count;
     }
+    if (ok) ok = audio_drain_tx(400);
+    audio_set_pa_enabled(false);
     audio_release_ownership(AUDIO_OWNER_AI_VOICE);
     return ok;
 }
@@ -709,11 +585,17 @@ void ai_voice_cancel(void)
     }
 }
 
-AIVoiceState ai_voice_get_state(void) { return s_state; }
+AIVoiceState ai_voice_get_state(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return AI_STATE_ERROR;
+    const AIVoiceState state = s_state;
+    xSemaphoreGive(s_mutex);
+    return state;
+}
 
 const char *ai_voice_get_state_text(void)
 {
-    switch (s_state)
+    switch (ai_voice_get_state())
     {
         case AI_STATE_LISTENING: return "Đang thu âm từ microphone...";
         case AI_STATE_PROCESSING: return "Đang gửi HTTPS và xử lý...";
@@ -790,4 +672,24 @@ bool ai_voice_play_tts(const char *text)
     }
     if (!ok && !cancelled) set_error("TTS HTTPS/WAV playback failed");
     return ok;
+}
+
+bool ai_voice_json_regression_test(void)
+{
+    char transcript[64] = {};
+    char reply[64] = {};
+    const char valid[] = "{\"transcript\":\"xin ch\\u00e0o\",\"reply\":\"d\\u00f2ng 1\\n\\t2\"}";
+    const char trailing[] = "{\"transcript\":\"a\",\"reply\":\"b\"} garbage";
+    const char wrong_type[] = "{\"transcript\":1,\"reply\":\"b\"}";
+    if (!parse_ai_response_json(reinterpret_cast<const uint8_t *>(valid), strlen(valid),
+                                transcript, sizeof(transcript), reply, sizeof(reply)) ||
+        parse_ai_response_json(reinterpret_cast<const uint8_t *>(trailing), strlen(trailing),
+                               transcript, sizeof(transcript), reply, sizeof(reply)) ||
+        parse_ai_response_json(reinterpret_cast<const uint8_t *>(wrong_type), strlen(wrong_type),
+                               transcript, sizeof(transcript), reply, sizeof(reply))) return false;
+    String encoded;
+    if (!serialize_tts_request_json("tab\tnewline\nquote\"", encoded)) return false;
+    StaticJsonDocument<128> decoded;
+    if (deserializeJson(decoded, encoded) || !decoded["text"].is<const char *>()) return false;
+    return strcmp(decoded["text"].as<const char *>(), "tab\tnewline\nquote\"") == 0;
 }

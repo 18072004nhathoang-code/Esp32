@@ -43,6 +43,7 @@ public:
     // Lấy trạng thái runtime thật (NOT_CONFIGURED, CONNECTING, CONNECTED, PASSWORD_REQUIRED, ERROR, STOPPED)
     CameraRuntimeState getRuntimeState() const;
     CameraTransportSecurity getTransportSecurity() const;
+    uint32_t getSessionId() const;
 
     // Lưu & Nạp cấu hình Camera từ NVS Flash (không lưu password dạng plaintext)
     bool saveProfileToNVS();
@@ -60,6 +61,8 @@ private:
     CameraRuntimeState _runtime_state;
     volatile CameraTransportSecurity _transport_security;
     uint32_t _frame_sequence;
+    uint32_t _session_id;
+    uint32_t _worker_session_id;
     NetworkCameraProfile _profile;
     mutable SemaphoreHandle_t _config_mutex;
     SemaphoreHandle_t _worker_exit_sem;

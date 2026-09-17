@@ -12,7 +12,7 @@ static SemaphoreHandle_t s_storage_mutex = nullptr;
 
 bool storage_lock(uint32_t timeout_ms)
 {
-    if (!s_storage_mutex) return true;
+    if (!s_storage_mutex) return false;
     return (xSemaphoreTake(s_storage_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE);
 }
 

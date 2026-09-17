@@ -7,7 +7,22 @@
 namespace
 {
 constexpr const char *kNamespace = "mini_os";
-constexpr uint32_t kSchemaVersion = 1;
+constexpr uint32_t kSchemaVersion = 2;
+constexpr uint32_t kRecordMagic = 0x534F5345U; // "ESOS"
+
+struct __attribute__((packed)) SettingsRecord
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t size;
+    uint8_t brightness;
+    uint8_t wifi_auto_reconnect;
+    uint16_t reserved;
+    uint32_t accent_rgb;
+    uint32_t dim_timeout_sec;
+    uint32_t sleep_timeout_sec;
+    uint32_t checksum;
+};
 
 MiniOsSettings s_settings = {85, 0x00F2FE, 60, 120, true};
 SemaphoreHandle_t s_mutex = nullptr;
@@ -25,7 +40,41 @@ bool valid(const MiniOsSettings &value)
            value.sleep_timeout_sec > value.dim_timeout_sec && value.sleep_timeout_sec <= 7200;
 }
 
-bool persist_locked()
+uint32_t checksum_record(const SettingsRecord &record)
+{
+    const uint8_t *bytes = reinterpret_cast<const uint8_t *>(&record);
+    uint32_t hash = 2166136261UL;
+    for (size_t i = 0; i < offsetof(SettingsRecord, checksum); ++i)
+        hash = (hash ^ bytes[i]) * 16777619UL;
+    return hash;
+}
+
+SettingsRecord make_record(const MiniOsSettings &value)
+{
+    SettingsRecord record = {};
+    record.magic = kRecordMagic;
+    record.version = kSchemaVersion;
+    record.size = sizeof(record);
+    record.brightness = value.brightness;
+    record.wifi_auto_reconnect = value.wifi_auto_reconnect ? 1 : 0;
+    record.accent_rgb = value.accent_rgb;
+    record.dim_timeout_sec = value.dim_timeout_sec;
+    record.sleep_timeout_sec = value.sleep_timeout_sec;
+    record.checksum = checksum_record(record);
+    return record;
+}
+
+bool decode_record(const SettingsRecord &record, MiniOsSettings &value)
+{
+    if (record.magic != kRecordMagic || record.version != kSchemaVersion ||
+        record.size != sizeof(record) || record.checksum != checksum_record(record) ||
+        record.wifi_auto_reconnect > 1) return false;
+    value = {record.brightness, record.accent_rgb, record.dim_timeout_sec,
+             record.sleep_timeout_sec, record.wifi_auto_reconnect != 0};
+    return valid(value);
+}
+
+bool persist_locked(const MiniOsSettings &value)
 {
     Preferences prefs;
     if (!prefs.begin(kNamespace, false))
@@ -33,12 +82,8 @@ bool persist_locked()
         set_error("Cannot open NVS namespace");
         return false;
     }
-    bool ok = prefs.putUInt("schema", kSchemaVersion) == sizeof(uint32_t);
-    ok = prefs.putUChar("brightness", s_settings.brightness) == sizeof(uint8_t) && ok;
-    ok = prefs.putUInt("accent", s_settings.accent_rgb) == sizeof(uint32_t) && ok;
-    ok = prefs.putUInt("dim_sec", s_settings.dim_timeout_sec) == sizeof(uint32_t) && ok;
-    ok = prefs.putUInt("sleep_sec", s_settings.sleep_timeout_sec) == sizeof(uint32_t) && ok;
-    ok = prefs.putBool("wifi_reconn", s_settings.wifi_auto_reconnect) == sizeof(bool) && ok;
+    const SettingsRecord record = make_record(value);
+    const bool ok = prefs.putBytes("record", &record, sizeof(record)) == sizeof(record);
     prefs.end();
     set_error(ok ? "OK" : "NVS write failed");
     return ok;
@@ -52,10 +97,10 @@ bool update(Mutator mutator)
         set_error("Settings mutex unavailable");
         return false;
     }
-    const MiniOsSettings previous = s_settings;
-    mutator(s_settings);
-    bool ok = valid(s_settings) && persist_locked();
-    if (!ok) s_settings = previous;
+    MiniOsSettings candidate = s_settings;
+    mutator(candidate);
+    const bool ok = valid(candidate) && persist_locked(candidate);
+    if (ok) s_settings = candidate;
     xSemaphoreGive(s_mutex);
     return ok;
 }
@@ -73,33 +118,39 @@ bool settings_service_init(void)
     Preferences prefs;
     bool has_namespace = prefs.begin(kNamespace, true);
     bool needs_persist = !has_namespace;
-    if (has_namespace && prefs.getUInt("schema", 0) == kSchemaVersion)
+    if (has_namespace && prefs.getBytesLength("record") == sizeof(SettingsRecord))
     {
-        MiniOsSettings loaded = {
+        SettingsRecord record = {};
+        MiniOsSettings loaded = s_settings;
+        const bool read_ok = prefs.getBytes("record", &record, sizeof(record)) == sizeof(record);
+        if (read_ok && decode_record(record, loaded)) s_settings = loaded;
+        else needs_persist = true;
+    }
+    else if (has_namespace)
+    {
+        // One-time migration from schema 1's independent keys.
+        MiniOsSettings migrated = {
             prefs.getUChar("brightness", s_settings.brightness),
             prefs.getUInt("accent", s_settings.accent_rgb),
             prefs.getUInt("dim_sec", s_settings.dim_timeout_sec),
             prefs.getUInt("sleep_sec", s_settings.sleep_timeout_sec),
             prefs.getBool("wifi_reconn", s_settings.wifi_auto_reconnect)
         };
-        if (valid(loaded)) s_settings = loaded;
-        else needs_persist = true;
+        if (valid(migrated)) s_settings = migrated;
+        needs_persist = true;
     }
-    else if (has_namespace) needs_persist = true;
     if (has_namespace) prefs.end();
-    if (needs_persist && !persist_locked()) return false;
+    if (needs_persist && !persist_locked(s_settings)) return false;
     set_error("OK");
     return true;
 }
 
 MiniOsSettings settings_service_get(void)
 {
-    MiniOsSettings copy = s_settings;
-    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
-    {
-        copy = s_settings;
-        xSemaphoreGive(s_mutex);
-    }
+    const MiniOsSettings defaults = {85, 0x00F2FE, 60, 120, true};
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return defaults;
+    const MiniOsSettings copy = s_settings;
+    xSemaphoreGive(s_mutex);
     return copy;
 }
 

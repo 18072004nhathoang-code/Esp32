@@ -135,6 +135,7 @@ struct CameraFrame
     CameraPixelFormat format;
     uint32_t timestamp_ms;
     uint32_t frame_id; // Sequence ID phân biệt frame mới
+    uint32_t session_id; // Worker session that produced this frame
 };
 
 // Cấu hình Camera DVP cục bộ

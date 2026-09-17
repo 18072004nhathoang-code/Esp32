@@ -79,6 +79,11 @@ CameraRuntimeState camera_service_get_runtime_state(void)
     return g_network_camera.getRuntimeState();
 }
 
+uint32_t camera_service_get_session_id(void)
+{
+    return active_source == CAM_SOURCE_NETWORK_STREAM ? g_network_camera.getSessionId() : 0;
+}
+
 bool camera_service_is_connected(void)
 {
     if (active_source == CAM_SOURCE_LOCAL_DVP)

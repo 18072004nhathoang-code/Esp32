@@ -38,6 +38,7 @@ void setup()
                   firmware_regression_run() ? "PASS" : "FAIL");
 
     system_info_init();
+    system_info_update();
     bool settings_ok = settings_service_init();
     MiniOsSettings saved_settings = settings_service_get();
     Serial.printf("[SETTINGS] Status: %s\n", settings_ok ? "Ready (NVS)" : settings_service_get_last_error());
@@ -108,14 +109,7 @@ void setup()
     bool audio_ok = audio_manager_init();
     if (audio_ok)
     {
-        if (shared_i2c_codec_is_detected())
-        {
-            Serial.println("[AUDIO] Status: Ready (ES8311 Codec Detected)");
-        }
-        else
-        {
-            Serial.println("[AUDIO] Status: Ready (Direct I2S / Bypass Mode)");
-        }
+        Serial.println("[AUDIO] Status: Ready (ES8311 configured + register readback passed)");
         audio_play_sound_effect(FX_CHIME); // Âm thanh khởi động Mini OS
     }
     else
@@ -180,6 +174,7 @@ void loop()
         last_tick = millis();
 
         // Thu thập thông số phần cứng
+        system_info_update();
         SystemStats current_stats = system_get_stats();
 
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)

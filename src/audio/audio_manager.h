@@ -59,7 +59,8 @@ enum AudioOwner
     AUDIO_OWNER_SYSTEM,     // System tones, sound effects, audio lab
     AUDIO_OWNER_RECORDER,   // Mic input, AI voice input
     AUDIO_OWNER_MUSIC,      // ESP32-audioI2S playback
-    AUDIO_OWNER_AI_VOICE    // AI voice speech synthesis playback
+    AUDIO_OWNER_AI_VOICE,   // AI voice speech synthesis playback
+    AUDIO_OWNER_DIAGNOSTIC  // Speaker self-test; never overlaps app audio
 };
 
 enum AudioRecordingFileState
@@ -113,6 +114,12 @@ void audio_uninstall_duplex_driver(void);
  */
 bool audio_is_driver_installed(void);
 
+/** Reconfigure ES8311 clocks for the active I2S producer. */
+bool audio_codec_configure_for_stream(uint32_t sample_rate, uint16_t mclk_multiple);
+
+/** Wait until queued TX DMA data has left I2S. */
+bool audio_drain_tx(uint32_t timeout_ms = 250);
+
 /**
  * @brief Yêu cầu dừng an toàn tác vụ Audio Task nền và chờ xác nhận ACK trước khi gỡ driver
  * @param timeout_ms Thời gian chờ tối đa (ms)
@@ -130,6 +137,10 @@ void audio_manager_resume_task(void);
  * Chạy tác vụ xử lý âm thanh ngầm trên Core 0 (đảm bảo không gián đoạn đồ họa LVGL trên Core 1)
  */
 bool audio_manager_init(void);
+
+/** Start a quiet, asynchronous speaker-path diagnostic tone. */
+bool audio_speaker_self_test_async(void);
+bool audio_speaker_self_test_is_running(void);
 
 /**
  * @brief Điều chỉnh âm lượng phát ra loa (0 - 100%)

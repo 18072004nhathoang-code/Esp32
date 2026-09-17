@@ -11,6 +11,7 @@ struct SystemStats {
     uint32_t cpu_freq_mhz;
     uint8_t  cpu_usage_percent;
     bool     cpu_usage_available;
+    bool     cpu_usage_estimated;
     uint32_t task_count;
     uint32_t loop_stack_free_words;
     uint32_t free_heap;
@@ -43,6 +44,7 @@ struct BatteryInfo {
  * @brief Thu thập thông số hoạt động của chip ESP32-S3
  */
 bool system_info_init(void);
+void system_info_update(void);
 SystemStats system_get_stats(void);
 
 /**

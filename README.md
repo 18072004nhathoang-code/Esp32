@@ -18,7 +18,7 @@ Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.
 - Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`) với mapping board cố định và màn hình chẩn đoán thụ động 40Hz (raw/mapped/contact ID), không calibration.
 - Thẻ nhớ MicroSD kết nối qua **SDMMC / SDIO chuyên dụng** (không chia sẻ bus với màn hình).
 - Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
-- Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> Tự động chuyển toàn diện sang Network IP Camera (Hikvision, KBVision, Ezviz, Yoosee, ONVIF).
+- Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> dùng Network Camera HTTP(S) Snapshot cấu hình thủ công; ONVIF/MJPEG/RTSP chưa được triển khai.
 
 ```text
 +-------------------------------------------------------------------------------+
@@ -27,7 +27,7 @@ Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.
 |          [WiFi Settings] [Control Center] [Power Manager] [Camera IP]         |
 +-------------------------------------------------------------------------------+
 |                     LVGL 8.3.11 High-Level Graphics Engine                    |
-|      (Be Vietnam Pro SemiBold Typography, 240x320 Portrait, Fast 60 FPS)     |
+|          (Be Vietnam Pro SemiBold Typography, 240x320 Portrait)             |
 +-------------------------------------------------------------------------------+
 |                 FreeRTOS Multi-Tasking & Thread-Safe Porting                  |
 |  - Core 1: LVGL GUI Engine (Priority 4, 12KB Stack, Mutex Protected)          |
@@ -97,6 +97,11 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | `madhephaestus/ESP32Encoder` | **0.11.7** | Đọc rotary encoder nếu có ngoại vi |
 | `ESP32-audioI2S` | **3.0.12** (Git commit `#3.0.12`) | Giải mã MP3 từ thẻ nhớ SD qua I2S |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
+| `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
+
+Font được tái tạo bằng `lv_font_conv@1.5.3`; nguồn `tools/BeVietnamPro-SemiBold.ttf`
+có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
+(SIL OFL 1.1). Script dừng nếu hash thay đổi và không tự tải từ nhánh mutable.
 
 ---
 
@@ -105,7 +110,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | Tên Luồng / Task | Nhân Core | Priority | Cơ chế vận hành & Vai trò |
 | :--- | :--- | :--- | :--- |
 | **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng qua `lvgl_port_lock()`. |
-| **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, đồng bộ `audio_mutex` và `storage_lock` an toàn tuyệt đối không deadlock. |
+| **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, đồng bộ `audio_mutex` và `storage_lock` theo thứ tự cố định. |
 | **Audio_Task (AudioManager)** | **Core 0** | **3** | Đọc DMA theo số stereo frame thực nhận, ghi bù partial I2S không lặp frame, snapshot bản thu bất biến có lease và mutex trạng thái STARTING/ACTIVE. |
 | **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và auto-reconnect, lưu NVS ngoài vùng lock_wifi chống deadlock. |
 | **Map_Worker** | **Core 0** | **2** | Tải tile HTTP/HTTPS qua FreeRTOS Queue, giải mã JPEG ping-pong buffer vào PSRAM, TLS Root CA bundle. |
@@ -153,7 +158,7 @@ pio device monitor -b 115200
 ## 📱 7. Các phân hệ ứng dụng
 
 1. **System Monitor**: Đọc tần số CPU, tải CPU ước lượng từ idle hooks của hai core, heap/PSRAM, nhiệt độ chip, uptime 64-bit, dung lượng MicroSD, WiFi/RSSI và số task FreeRTOS thật.
-2. **Network Map**: Tải ảnh bản đồ HTTPS từ Google Static Maps khi có key, hoặc roadmap OpenStreetMap khi không có key; hỗ trợ pan/zoom, cache MicroSD, ping-pong RGB565 và empty/error state khi mất mạng. Satellite bị vô hiệu hóa nếu chưa cấu hình Google key.
+2. **Network Map**: Tải ảnh bản đồ HTTPS từ Google Static Maps khi có key; hỗ trợ pan/zoom, cache MicroSD, ping-pong RGB565 và empty/error state khi mất mạng. Khi thiếu key, cache offline vẫn đọc được và mạng báo `PROVIDER_NOT_CONFIGURED`; không dùng endpoint fallback không được cấu hình.
 3. **Music Player**: Quét file MP3 thật trong `/music`, phát/tạm dừng/tua/chuyển bài qua command queue, lấy thời lượng từ decoder, quản lý độc quyền I2S và khóa I/O MicroSD.
 4. **AI Voice**: Thu PCM thật từ micro, đóng gói WAV từ snapshot có lease và POST tới `AI_VOICE_ENDPOINT`; gateway phải trả JSON `transcript`/`reply` hợp lệ, tối đa 16KB sau dechunk. TTS tối đa 2MB sau dechunk và chỉ được phát khi RIFF hoàn chỉnh, PCM16 mono 16kHz, data chunk không cắt. Request cũ bị loại theo request ID; cancel giữ trạng thái `CANCELING` tới khi worker ACK. Cả hai endpoint bắt buộc HTTPS với CA và bearer token; firmware không log secret.
 5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, kết nối/ngắt/quên mạng, ghi nhớ credential trong NVS, báo lỗi scan/connect/NVS thật và hỗ trợ auto-reconnect có backoff.
