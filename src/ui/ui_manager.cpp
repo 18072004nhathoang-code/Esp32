@@ -132,17 +132,19 @@ static void app_icon_event_cb(lv_event_t *e)
     uintptr_t app_id = (uintptr_t)lv_event_get_user_data(e);
     switch (app_id)
     {
-        case APP_SYSTEM:     open_system_monitor_app(); break;
-        case APP_SETTINGS:   open_settings_app(); break;
-        case APP_WIFI:       open_wifi_app(); break;
-        case APP_ABOUT:      open_about_app(); break;
-        case APP_MAP:        open_map_app(); break;
-        case APP_TOOLS:      open_tools_app(); break;
-        case APP_AUDIO:      open_audio_app(); break;
-        case APP_MUSIC:      open_music_app(); break;
-        case APP_AI_VOICE:   open_ai_voice_app(); break;
-        case APP_CAMERA:     open_camera_app(); break;
-        case APP_POWER:      open_power_app(); break;
+        case APP_SYSTEM:      open_system_monitor_app(); break;
+        case APP_SETTINGS:    open_settings_app(); break;
+        case APP_WIFI:        open_wifi_app(); break;
+        case APP_ABOUT:       open_about_app(); break;
+        case APP_MAP:         open_map_app(); break;
+        case APP_TOOLS:       open_tools_app(); break;
+        case APP_AUDIO:       open_audio_app(); break;
+        case APP_MUSIC:       open_music_app(); break;
+        case APP_AI_VOICE:    open_ai_voice_app(); break;
+        case APP_CAMERA:      open_camera_app(); break;
+        case APP_POWER:       open_power_app(); break;
+        case APP_COLOR_TEST:  prepare_app_window("Display Diagnostic", APP_COLOR_TEST); ui_color_test_open(app_content_container); break;
+        case APP_TOUCH_DEBUG: prepare_app_window("Touch Diagnostic", APP_TOUCH_DEBUG); ui_touch_debug_open(app_content_container); break;
         default: break;
     }
 }
@@ -285,18 +287,32 @@ static void create_status_bar(void)
     lv_obj_set_style_radius(status_bar, 0, 0);
     lv_obj_set_style_border_width(status_bar, 1, 0);
     lv_obj_set_style_border_side(status_bar, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_color(status_bar, lv_color_hex(COLOR_CARD_BORDER), 0);
-    lv_obj_set_style_bg_color(status_bar, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_border_color(status_bar, lv_color_hex(0x1F293D), 0);
+    lv_obj_set_style_bg_color(status_bar, lv_color_hex(0x0C101A), 0);
+    lv_obj_set_style_bg_grad_color(status_bar, lv_color_hex(0x06080E), 0);
+    lv_obj_set_style_bg_grad_dir(status_bar, LV_GRAD_DIR_VER, 0);
     lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_hor(status_bar, 6, 0);
     lv_obj_set_style_pad_ver(status_bar, 1, 0);
+
+    // Live status dot
+    lv_obj_t *dot = lv_obj_create(status_bar);
+    lv_obj_set_size(dot, 6, 6);
+    lv_obj_set_style_radius(dot, 3, 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_shadow_width(dot, 4, 0);
+    lv_obj_set_style_shadow_color(dot, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+    lv_obj_set_style_shadow_opa(dot, LV_OPA_60, 0);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 2, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
 
     // Bên trái: Giờ / Đồng hồ số
     lbl_clock = lv_label_create(status_bar);
     lv_label_set_text(lbl_clock, "00:00");
     lv_obj_set_style_text_color(lbl_clock, lv_color_hex(COLOR_TEXT_WHITE), 0);
     lv_obj_set_style_text_font(lbl_clock, UI_FONT_12, 0);
-    lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 12, 0);
 
     // Bên phải: Cụm chỉ số tối giản (Speaker khi phát, WiFi, Pin)
     lv_obj_t *right_cluster = lv_obj_create(status_bar);
@@ -364,7 +380,9 @@ static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const cha
     lv_obj_set_size(btn, APP_ICON_BOX_SIZE, APP_ICON_BOX_SIZE);
     lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(btn, APP_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_CARD_BG), LV_OPA_20), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(0x182030), LV_OPA_20), 0);
+    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x0C101A), 0);
+    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_color(btn, accent, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
@@ -396,6 +414,8 @@ static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t ac
     lv_obj_set_pos(btn, x_pos, 4);
     lv_obj_set_style_radius(btn, DOCK_ICON_RADIUS, 0);
     lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_DOCK_BG), LV_OPA_20), 0);
+    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x0A0D14), 0);
+    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_color(btn, accent, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
@@ -421,18 +441,22 @@ static void create_desktop(void)
     lv_obj_align(desktop_view, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(desktop_view, 0, 0);
     lv_obj_set_style_border_width(desktop_view, 0, 0);
-    lv_obj_set_style_bg_color(desktop_view, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_color(desktop_view, lv_color_hex(0x131A29), 0);
+    lv_obj_set_style_bg_grad_color(desktop_view, lv_color_hex(0x06080E), 0);
+    lv_obj_set_style_bg_grad_dir(desktop_view, LV_GRAD_DIR_VER, 0);
     lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(desktop_view, 0, 0);
 
-    // Grid 3 cột x 3 hàng; dock luôn nằm dưới và không chồng nội dung.
-    create_grid_app_icon(desktop_view, LV_SYMBOL_CHARGE,   "System",    lv_color_hex(COLOR_ACCENT_CYAN),   APP_SYSTEM,     0, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",  lv_color_hex(COLOR_ACCENT_CYAN),   APP_AI_VOICE,   1, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_PLAY,     "Voice Lab", lv_color_hex(COLOR_ACCENT_BLUE),   APP_AUDIO,      2, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_SETTINGS, "Settings",  lv_color_hex(COLOR_ACCENT_AMBER),  APP_SETTINGS,   0, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,      1, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,      2, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,      0, 2);
+    // Lưới 3 cột x 3 hàng cân đối 9 icon (hoàn chỉnh, không khuyết ô)
+    create_grid_app_icon(desktop_view, LV_SYMBOL_CHARGE,   "System",    lv_color_hex(COLOR_ACCENT_CYAN),   APP_SYSTEM,      0, 0);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",  lv_color_hex(COLOR_ACCENT_CYAN),   APP_AI_VOICE,    1, 0);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_PLAY,     "Voice Lab", lv_color_hex(COLOR_ACCENT_BLUE),   APP_AUDIO,       2, 0);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_SETTINGS, "Settings",  lv_color_hex(COLOR_ACCENT_AMBER),  APP_SETTINGS,    0, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,       1, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,       2, 1);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,       0, 2);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_IMAGE,    "Display",   lv_color_hex(COLOR_ACCENT_RED),    APP_COLOR_TEST,  1, 2);
+    create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch",     lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_DEBUG, 2, 2);
 
     // 5. FLOATING BOTTOM DOCK (Chứa 4 app hay dùng: WiFi, Music, Maps, Camera)
     dock_bar = lv_obj_create(desktop_view);
@@ -441,9 +465,13 @@ static void create_desktop(void)
     lv_obj_align(dock_bar, LV_ALIGN_BOTTOM_MID, 0, -4);
     lv_obj_set_style_radius(dock_bar, 22, 0);
     lv_obj_set_style_bg_color(dock_bar, lv_color_hex(COLOR_DOCK_BG), 0);
-    lv_obj_set_style_bg_opa(dock_bar, LV_OPA_90, 0);
+    lv_obj_set_style_bg_grad_color(dock_bar, lv_color_hex(0x0B0E16), 0);
+    lv_obj_set_style_bg_grad_dir(dock_bar, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_color(dock_bar, lv_color_hex(COLOR_DOCK_BORDER), 0);
     lv_obj_set_style_border_width(dock_bar, 1, 0);
+    lv_obj_set_style_shadow_width(dock_bar, 12, 0);
+    lv_obj_set_style_shadow_color(dock_bar, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(dock_bar, LV_OPA_50, 0);
     lv_obj_set_style_pad_all(dock_bar, 0, 0);
     lv_obj_clear_flag(dock_bar, LV_OBJ_FLAG_SCROLLABLE);
 
@@ -466,16 +494,20 @@ static void ensure_app_window(void)
     lv_obj_align(app_window, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(app_window, 0, 0);
     lv_obj_set_style_border_width(app_window, 0, 0);
-    lv_obj_set_style_bg_color(app_window, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_color(app_window, lv_color_hex(0x131A29), 0);
+    lv_obj_set_style_bg_grad_color(app_window, lv_color_hex(0x06080E), 0);
+    lv_obj_set_style_bg_grad_dir(app_window, LV_GRAD_DIR_VER, 0);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_window, 0, 0);
 
-    // Thanh tiêu đề App
+    // Thanh tiêu đề App phong cách kính mờ
     lv_obj_t *header = lv_obj_create(app_window);
     lv_obj_set_size(header, SCREEN_WIDTH, APP_HEADER_HEIGHT);
     lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(COLOR_HEADER_BG), 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x121827), 0);
+    lv_obj_set_style_bg_grad_color(header, lv_color_hex(0x0A0E17), 0);
+    lv_obj_set_style_bg_grad_dir(header, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_color(header, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_border_width(header, 1, 0);
     lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
@@ -489,17 +521,23 @@ static void ensure_app_window(void)
     lv_obj_set_width(app_title_lbl, SCREEN_WIDTH - 58);
     lv_label_set_long_mode(app_title_lbl, LV_LABEL_LONG_DOT);
 
-    // Nút đóng app (X) tối thiểu >=32x32 hit area
+    // Nút đóng app (X) tối thiểu >=32x32 hit area với viền đỏ neon
     lv_obj_t *close_btn = lv_btn_create(header);
-    lv_obj_set_size(close_btn, 34, 28);
-    lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
+    lv_obj_set_size(close_btn, 32, 24);
+    lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x231418), 0);
+    lv_obj_set_style_border_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
+    lv_obj_set_style_border_width(close_btn, 1, 0);
     lv_obj_set_style_radius(close_btn, 6, 0);
-    lv_obj_set_ext_click_area(close_btn, 6); // Hit area 46x34 >= 32x32
+    lv_obj_set_style_shadow_width(close_btn, 4, 0);
+    lv_obj_set_style_shadow_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
+    lv_obj_set_style_shadow_opa(close_btn, LV_OPA_30, 0);
+    lv_obj_set_ext_click_area(close_btn, 6);
     lv_obj_add_event_cb(close_btn, close_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
     lv_obj_t *close_lbl = lv_label_create(close_btn);
     lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_color(close_lbl, lv_color_hex(COLOR_ACCENT_RED), 0);
     lv_obj_set_style_text_font(close_lbl, UI_FONT_12, 0);
     lv_obj_center(close_lbl);
 
@@ -507,7 +545,9 @@ static void ensure_app_window(void)
     app_content_container = lv_obj_create(app_window);
     lv_obj_set_size(app_content_container, SCREEN_WIDTH, APP_CONTENT_HEIGHT);
     lv_obj_align(app_content_container, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(app_content_container, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_color(app_content_container, lv_color_hex(0x0C101A), 0);
+    lv_obj_set_style_bg_grad_color(app_content_container, lv_color_hex(0x06080E), 0);
+    lv_obj_set_style_bg_grad_dir(app_content_container, LV_GRAD_DIR_VER, 0);
     lv_obj_set_style_border_width(app_content_container, 0, 0);
     lv_obj_set_style_pad_all(app_content_container, 0, 0);
 
