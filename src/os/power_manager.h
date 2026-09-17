@@ -1,6 +1,6 @@
 /**
  * @file power_manager.h
- * @brief Module Quản lý Nguồn & Tiết kiệm Năng lượng (Power Manager) cho ESP32-S3 3.5" IPS
+ * @brief Module Quản lý Nguồn & Tiết kiệm Năng lượng (Power Manager) cho ES3C28P ESP32-S3 2.8" IPS
  * Hỗ trợ bộ đếm không hoạt động (Inactivity Timer 60s Dimming, 120s Sleep/Tắt màn hình)
  * và cơ chế Chạm để Đánh thức (Touch to Wake) tức thì không chạm nhầm nút bấm.
  */

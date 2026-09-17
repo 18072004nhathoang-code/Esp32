@@ -1,7 +1,6 @@
 /**
  * @file storage_manager.h
- * @brief Phân hệ quản lý lưu trữ thẻ nhớ MicroSD đa giao tiếp (SDMMC 4-bit / 1-bit & SPI)
- * Cung cấp giao diện trừu tượng hóa thống nhất (HAL) cho toàn bộ Mini OS
+ * @brief Phân hệ quản lý thẻ MicroSD SDMMC 4-bit/1-bit của ES3C28P.
  */
 
 #pragma once
@@ -10,12 +9,7 @@
 #include <FS.h>
 #include "board_config.h"
 
-#if (BOARD_SD_INTERFACE == SD_IF_SPI)
-#include <SD.h>
-#include <SPI.h>
-#else
 #include <SD_MMC.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +50,7 @@ uint64_t storage_get_free_mb(void);
 }
 
 /**
- * @brief Lấy đối tượng FileSystem đa hình (SD hoặc SD_MMC)
+ * @brief Lấy đối tượng file system của thẻ SDMMC.
  */
 fs::FS& storage_get_fs(void);
 

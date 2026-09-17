@@ -1,7 +1,7 @@
 /**
  * @file audio_manager.h
  * @brief Phân hệ điều khiển âm thanh I2S Duplex (Microphone MEMS & Loa ngoài FM8002E/ES8311)
- * Thiết kế chuẩn cho bo mạch DIYMORE ESP32-S3 3.5" IPS (XiaoZhi AI Native)
+ * Thiết kế cho bo mạch ES3C28P ESP32-S3 2.8" IPS (XiaoZhi AI Native)
  */
 
 #pragma once
@@ -150,6 +150,8 @@ void audio_play_sound_effect(SoundEffect fx);
  */
 bool audio_start_recording(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SEC);
 void audio_stop_recording(void);
+/** Stop a recording and discard it without scheduling a WAV export. */
+void audio_cancel_recording(void);
 bool audio_is_recording(void);
 
 /**

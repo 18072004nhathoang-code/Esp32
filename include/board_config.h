@@ -5,16 +5,11 @@
 
 #pragma once
 
-// Tự động chọn profile theo build flag trong platformio.ini
-#if defined(BOARD_DIYMORE_S3_35C)
-    #include "boards/board_diymore_s3_35.hpp"
-#elif defined(BOARD_ES3C28P)
-    #include "boards/board_es3c28p.hpp"
-#else
-    // Mặc định chọn ES3C28P nếu không chỉ định
+// Firmware chỉ hỗ trợ profile ES3C28P.
+#ifndef BOARD_ES3C28P
     #define BOARD_ES3C28P
-    #include "boards/board_es3c28p.hpp"
 #endif
+#include "boards/board_es3c28p.hpp"
 
 // ==============================================================================
 // COMPILE-TIME PIN CONFLICT VALIDATION (Section 11)
@@ -52,13 +47,7 @@
     #error "[PIN CONFLICT] AUDIO_I2S_DOUT conflicts with TOUCH_SCL!"
 #endif
 
-// 5. Kiểm tra Audio I2C vs Touch I2C:
-// Nếu cùng GPIO thì phải cùng sử dụng bus I2C (hợp lệ). Nếu khác GPIO trên cùng chip thì cảnh báo hoặc xác nhận.
-#if defined(BOARD_AUDIO_I2C_SDA) && defined(BOARD_TOUCH_SDA) && (BOARD_AUDIO_I2C_SDA != BOARD_TOUCH_SDA)
-    // Cả 2 dùng I2C riêng biệt (hợp lệ trên DIYMORE: Touch=8/9, Audio=38/39)
-#endif
-
-// 6. Kiểm tra Backlight vs Audio PA
+// 5. Kiểm tra Backlight vs Audio PA
 #if defined(BOARD_LCD_BL) && defined(BOARD_AUDIO_PA_PIN) && (BOARD_LCD_BL == BOARD_AUDIO_PA_PIN)
     #error "[PIN CONFLICT] LCD_BL conflicts with AUDIO_PA_PIN!"
 #endif

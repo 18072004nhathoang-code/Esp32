@@ -67,7 +67,7 @@ static uint32_t preview_jpeg_bytes = 0;
 static uint16_t preview_source_w = 0;
 static uint16_t preview_source_h = 0;
 
-enum CameraUiCommandType : uint8_t { CAM_UI_START, CAM_UI_STOP, CAM_UI_CONFIGURE };
+enum CameraUiCommandType : uint8_t { CAM_UI_START, CAM_UI_STOP, CAM_UI_CONFIGURE, CAM_UI_RELEASE };
 struct CameraUiCommand
 {
     CameraUiCommandType type;
@@ -287,6 +287,24 @@ static void camera_ui_worker(void *)
             if (command.type == CAM_UI_STOP)
             {
                 (void)camera_service_stop(2000);
+            }
+            else if (command.type == CAM_UI_RELEASE)
+            {
+                (void)camera_service_stop(2000);
+                if (preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(500)) == pdTRUE)
+                {
+                    // Nếu app đã được mở lại trước khi command chạy thì buffer đang được dùng lại.
+                    if (!preview_active)
+                    {
+                        if (preview_front) free(preview_front);
+                        if (preview_back) free(preview_back);
+                        preview_front = nullptr;
+                        preview_back = nullptr;
+                        preview_capacity_pixels = 0;
+                        preview_frame_id = 0;
+                    }
+                    xSemaphoreGive(preview_mutex);
+                }
             }
             else if (command.type == CAM_UI_START)
             {
@@ -654,7 +672,7 @@ void camera_app_close(void)
         xSemaphoreGive(preview_mutex);
     }
     CameraUiCommand stop_command = {};
-    stop_command.type = CAM_UI_STOP;
+    stop_command.type = CAM_UI_RELEASE;
     if (!enqueue_camera_command(stop_command))
         Serial.println("[CAMERA_UI] Không thể gửi lệnh stop; service giữ trạng thái hiện tại");
     if (cam_canvas) lv_obj_del(cam_canvas);

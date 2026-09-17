@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 function findChrome() {
@@ -28,6 +29,20 @@ const HTML_FILE = path.join(__dirname, 'index.html');
 const HTML_PATH = 'file:///' + HTML_FILE.replace(/\\/g, '/');
 const OUT_DIR = path.join(__dirname, 'screenshots');
 const ARTIFACT_DIR = process.env.ANTIGRAVITY_ARTIFACT_DIR || null;
+const DEBUG_PORT = 9300 + (process.pid % 500);
+let activeChrome = null;
+let chromeProfile = null;
+
+function cleanupChrome() {
+    if (activeChrome) {
+        activeChrome.kill();
+        activeChrome = null;
+    }
+    if (chromeProfile) {
+        try { fs.rmSync(chromeProfile, { recursive: true, force: true }); } catch (_) {}
+        chromeProfile = null;
+    }
+}
 
 if (!fs.existsSync(OUT_DIR)) {
     fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -54,9 +69,11 @@ async function main() {
         process.exit(1);
     }
 
+    chromeProfile = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-os-e2e-'));
     const chrome = spawn(CHROME_PATH, [
         '--headless=new',
-        '--remote-debugging-port=9222',
+        `--remote-debugging-port=${DEBUG_PORT}`,
+        `--user-data-dir=${chromeProfile}`,
         '--window-size=1000,1180',
         '--disable-gpu',
         '--no-first-run',
@@ -64,17 +81,17 @@ async function main() {
         '--run-all-compositor-stages-before-draw',
         HTML_PATH
     ]);
+    activeChrome = chrome;
 
     await sleep(2500);
 
-    let res = await fetch('http://localhost:9222/json');
+    let res = await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`);
     let tabs = await res.json();
     let simTab = tabs.find(t => t.url.includes('simulator/index.html') && t.type === 'page');
 
     if (!simTab) {
         console.error("[ERROR] Không tìm thấy tab Simulator trong Chrome!");
-        chrome.kill();
-        process.exit(1);
+        throw new Error('Không tìm thấy tab Simulator trong Chrome');
     }
 
     console.log(`[INFO] Kết nối CDP WebSocket: ${simTab.webSocketDebuggerUrl}`);
@@ -357,11 +374,11 @@ async function main() {
     console.log("==================================================================");
 
     ws.close();
-    chrome.kill();
-    process.exit(0);
+    cleanupChrome();
 }
 
 main().catch(err => {
+    cleanupChrome();
     console.error("Test Suite Error:", err);
     process.exit(1);
 });

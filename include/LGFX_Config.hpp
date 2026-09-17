@@ -1,7 +1,6 @@
 /**
  * @file LGFX_Config.hpp
- * @brief Cấu hình phần cứng LovyanGFX siêu tốc tự động thích ứng qua Hardware Abstraction Layer
- * Hỗ trợ ES3C28P (ILI9341V 240x320) và DIYMORE ESP32-S3 3.5" (ST7796 480x320)
+ * @brief Cấu hình LovyanGFX cho màn hình ILI9341V 240x320 của ES3C28P.
  */
 
 #pragma once
@@ -16,15 +15,7 @@
 // ==============================================================================
 class LGFX : public lgfx::LGFX_Device
 {
-#if (BOARD_LCD_CONTROLLER == LCD_CTRL_ILI9341)
-    lgfx::Panel_ILI9341 _panel_instance;    // Màn hình ILI9341 / ILI9341V (ES3C28P 2.8")
-#elif (BOARD_LCD_CONTROLLER == LCD_CTRL_ST7796)
-    lgfx::Panel_ST7796  _panel_instance;    // Màn hình ST7796 IPS (DIYMORE 3.5")
-#elif (BOARD_LCD_CONTROLLER == LCD_CTRL_ST7789)
-    lgfx::Panel_ST7789  _panel_instance;    // Màn hình ST7789
-#else
-    lgfx::Panel_ILI9341 _panel_instance;
-#endif
+    lgfx::Panel_ILI9341 _panel_instance;    // Màn hình ILI9341V (ES3C28P 2.8")
 
     lgfx::Bus_SPI       _bus_instance;      // Giao tiếp SPI phần cứng
     lgfx::Light_PWM     _light_instance;    // PWM LED Backlight

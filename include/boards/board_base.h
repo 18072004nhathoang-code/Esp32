@@ -14,7 +14,6 @@
 #define LCD_BUS_I8080          4
 
 // Loại IC điều khiển màn hình
-#define LCD_CTRL_ST7796        1
 #define LCD_CTRL_ILI9341       2
 #define LCD_CTRL_ST7789        3
 #define LCD_CTRL_ILI9488       4
@@ -31,7 +30,6 @@
 
 // Loại giao tiếp thẻ nhớ MicroSD
 #define SD_IF_NONE             0
-#define SD_IF_SPI              1
 #define SD_IF_SDMMC_1BIT       2
 #define SD_IF_SDMMC_4BIT       3
 

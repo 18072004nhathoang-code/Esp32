@@ -63,22 +63,7 @@ bool shared_i2c_init(void)
 #endif
 
 #if defined(BOARD_AUDIO_ES8311_ADDR)
-    // Nếu Audio I2C dùng chung SDA/SCL với Touch (như trên ES3C28P IO16/15)
-    if (BOARD_AUDIO_I2C_SDA == BOARD_TOUCH_SDA && BOARD_AUDIO_I2C_SCL == BOARD_TOUCH_SCL)
-    {
-        s_codec_detected = shared_i2c_probe(BOARD_AUDIO_ES8311_ADDR);
-    }
-    else
-    {
-        // Nếu khác bus (như DIYMORE), thử khởi tạo Wire1 nếu cần
-        #if defined(BOARD_AUDIO_I2C_SDA) && (BOARD_AUDIO_I2C_SDA >= 0)
-        Wire1.begin(BOARD_AUDIO_I2C_SDA, BOARD_AUDIO_I2C_SCL, 100000);
-        Wire1.beginTransmission(BOARD_AUDIO_ES8311_ADDR);
-        s_codec_detected = (Wire1.endTransmission() == 0);
-        #else
-        s_codec_detected = false;
-        #endif
-    }
+    s_codec_detected = shared_i2c_probe(BOARD_AUDIO_ES8311_ADDR);
 #endif
 
     s_bus_initialized = true;
@@ -121,23 +106,10 @@ bool shared_i2c_write_reg(uint8_t dev_addr, uint8_t reg, uint8_t val)
 {
     if (!shared_i2c_lock(100)) return false;
 
-    bool ok = false;
-    if (BOARD_AUDIO_I2C_SDA == BOARD_TOUCH_SDA && BOARD_AUDIO_I2C_SCL == BOARD_TOUCH_SCL)
-    {
-        Wire.beginTransmission(dev_addr);
-        Wire.write(reg);
-        Wire.write(val);
-        ok = (Wire.endTransmission() == 0);
-    }
-    else
-    {
-        #if defined(BOARD_AUDIO_I2C_SDA) && (BOARD_AUDIO_I2C_SDA >= 0)
-        Wire1.beginTransmission(dev_addr);
-        Wire1.write(reg);
-        Wire1.write(val);
-        ok = (Wire1.endTransmission() == 0);
-        #endif
-    }
+    Wire.beginTransmission(dev_addr);
+    Wire.write(reg);
+    Wire.write(val);
+    const bool ok = (Wire.endTransmission() == 0);
 
     shared_i2c_unlock();
     return ok;
@@ -149,41 +121,23 @@ bool shared_i2c_read_reg(uint8_t dev_addr, uint8_t reg, uint8_t *data, size_t le
     if (!shared_i2c_lock(100)) return false;
 
     bool ok = false;
-    if (BOARD_AUDIO_I2C_SDA == BOARD_TOUCH_SDA && BOARD_AUDIO_I2C_SCL == BOARD_TOUCH_SCL)
+    Wire.beginTransmission(dev_addr);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) == 0)
     {
-        Wire.beginTransmission(dev_addr);
-        Wire.write(reg);
-        if (Wire.endTransmission(false) == 0)
+        size_t count = Wire.requestFrom((int)dev_addr, (int)len);
+        if (count == len)
         {
-            size_t count = Wire.requestFrom((int)dev_addr, (int)len);
-            if (count == len)
+            for (size_t i = 0; i < len; i++)
             {
-                for (size_t i = 0; i < len; i++)
-                {
-                    data[i] = Wire.read();
-                }
-                ok = true;
+                data[i] = Wire.read();
             }
+            ok = true;
         }
-    }
-    else
-    {
-        #if defined(BOARD_AUDIO_I2C_SDA) && (BOARD_AUDIO_I2C_SDA >= 0)
-        Wire1.beginTransmission(dev_addr);
-        Wire1.write(reg);
-        if (Wire1.endTransmission(false) == 0)
+        else
         {
-            size_t count = Wire1.requestFrom((int)dev_addr, (int)len);
-            if (count == len)
-            {
-                for (size_t i = 0; i < len; i++)
-                {
-                    data[i] = Wire1.read();
-                }
-                ok = true;
-            }
+            while (Wire.available()) (void)Wire.read();
         }
-        #endif
     }
 
     shared_i2c_unlock();

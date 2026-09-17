@@ -1,6 +1,6 @@
 /**
  * @file audio_manager.cpp
- * @brief Triển khai hệ thống âm thanh I2S Duplex cho DIYMORE ESP32-S3 3.5" (XiaoZhi AI)
+ * @brief Triển khai hệ thống âm thanh I2S Duplex cho ES3C28P ESP32-S3 2.8" (XiaoZhi AI)
  * Tích hợp Microphone MEMS, Bộ khuếch đại Loa PA FM8002E/ES8311, Synthesizer & PSRAM Recorder
  */
 
@@ -37,8 +37,10 @@ static size_t waveform_head = 0;
 
 // FreeRTOS Task & Mutex
 static TaskHandle_t audio_task_handle = nullptr;
-static SemaphoreHandle_t audio_mutex = nullptr;
 static SemaphoreHandle_t audio_i2s_tx_mutex = nullptr; // Mutex độc quyền đường truyền TX i2s_write
+// Protects recorder/playback state, the shared PSRAM buffer and waveform telemetry
+// across the audio worker (core 0) and LVGL/application tasks (core 1).
+static SemaphoreHandle_t audio_state_mutex = nullptr;
 
 // Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
@@ -74,6 +76,13 @@ static void put_le32(uint8_t *p, uint32_t value)
 static void recording_export_task(void *)
 {
     bool ok = false;
+    uint32_t export_sample_count = 0;
+    if (audio_state_mutex &&
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        export_sample_count = recorded_samples_count;
+        xSemaphoreGive(audio_state_mutex);
+    }
     if (storage_is_available() && storage_lock(1000))
     {
         fs::FS &fs = storage_get_fs();
@@ -82,7 +91,7 @@ static void recording_export_task(void *)
         File file = (directory_ready && old_file_removed) ? fs.open(kRecordingPath, FILE_WRITE) : File();
         if (file)
         {
-            const uint32_t data_bytes = recorded_samples_count * sizeof(int16_t);
+            const uint32_t data_bytes = export_sample_count * sizeof(int16_t);
             uint8_t header[44] = {};
             memcpy(header, "RIFF", 4); put_le32(header + 4, 36 + data_bytes);
             memcpy(header + 8, "WAVEfmt ", 8); put_le32(header + 16, 16);
@@ -106,17 +115,29 @@ static void recording_export_task(void *)
         }
         storage_unlock();
     }
-    recording_file_state = ok ? AUDIO_FILE_SAVED : AUDIO_FILE_ERROR;
-    recording_export_task_handle = nullptr;
+    if (audio_state_mutex &&
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    {
+        recording_file_state = ok ? AUDIO_FILE_SAVED : AUDIO_FILE_ERROR;
+        recording_export_task_handle = nullptr;
+        xSemaphoreGive(audio_state_mutex);
+    }
     vTaskDelete(nullptr);
 }
 
 static void schedule_recording_export(void)
 {
-    if (recorded_samples_count == 0 || recording_export_task_handle) return;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    if (recorded_samples_count == 0 || recording_export_task_handle)
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return;
+    }
     if (!storage_is_available())
     {
         recording_file_state = AUDIO_FILE_ERROR;
+        xSemaphoreGive(audio_state_mutex);
         return;
     }
     recording_file_state = AUDIO_FILE_SAVING;
@@ -127,6 +148,7 @@ static void schedule_recording_export(void)
         recording_export_task_handle = nullptr;
         recording_file_state = AUDIO_FILE_ERROR;
     }
+    xSemaphoreGive(audio_state_mutex);
 }
 
 /* Cấu hình và cài đặt Driver I2S Duplex (16kHz 16-bit Duplex) cho Microphone & Tone/Voice */
@@ -453,6 +475,10 @@ static void audio_background_task(void *pvParameters)
             size_t sample_count = bytes_read / sizeof(int16_t);
             int64_t sum_squares = 0;
             int16_t peak = 0;
+            bool recording_complete = false;
+
+            const bool state_locked = audio_state_mutex &&
+                                      xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE;
 
             for (size_t i = 0; i < sample_count; i += 2) // Lấy kênh Mic (thường là Left hoặc Right)
             {
@@ -462,19 +488,23 @@ static void audio_background_task(void *pvParameters)
                 sum_squares += ((int32_t)s * (int32_t)s);
 
                 // Lưu vào lịch sử waveform
-                waveform_history[waveform_head] = s;
-                waveform_head = (waveform_head + 1) % 128;
+                if (state_locked)
+                {
+                    waveform_history[waveform_head] = s;
+                    waveform_head = (waveform_head + 1) % 128;
+                }
 
                 // Nếu đang ghi âm: lưu trực tiếp vào bộ nhớ 8MB PSRAM
-                if (recording_active && psram_record_buf && recorded_samples_count < record_sample_capacity)
+                if (state_locked && recording_active && psram_record_buf &&
+                    recorded_samples_count < record_sample_capacity)
                 {
                     psram_record_buf[recorded_samples_count++] = s;
                 }
-                else if (recording_active && recorded_samples_count >= record_sample_capacity)
+                else if (state_locked && recording_active &&
+                         recorded_samples_count >= record_sample_capacity)
                 {
                     recording_active = false;
-                    audio_release_ownership(AUDIO_OWNER_RECORDER);
-                    schedule_recording_export();
+                    recording_complete = true;
                 }
             }
 
@@ -498,52 +528,71 @@ static void audio_background_task(void *pvParameters)
                     current_mic_db = -60.0f;
                 }
             }
+
+            if (state_locked) xSemaphoreGive(audio_state_mutex);
+            if (recording_complete)
+            {
+                schedule_recording_export();
+                audio_release_ownership(AUDIO_OWNER_RECORDER);
+            }
         }
 
         // 2. Nếu đang phát lại đoạn ghi âm qua I2S TX
-        if (playback_active && psram_record_buf && recorded_samples_count > 0)
+        bool playback_complete = false;
+        if (audio_state_mutex &&
+            xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
         {
-            const size_t PLAY_CHUNK = 64;
-            int16_t tx_buf[PLAY_CHUNK * 2];
-            size_t to_play = PLAY_CHUNK;
-            if (playback_sample_idx + to_play > recorded_samples_count)
+            if (playback_active && psram_record_buf && recorded_samples_count > 0)
             {
-                to_play = recorded_samples_count - playback_sample_idx;
-            }
-
-            if (to_play > 0)
-            {
-                for (size_t i = 0; i < to_play; i++)
+                const size_t PLAY_CHUNK = 64;
+                int16_t tx_buf[PLAY_CHUNK * 2];
+                size_t to_play = PLAY_CHUNK;
+                if (playback_sample_idx + to_play > recorded_samples_count)
                 {
-                    int16_t raw_sample = psram_record_buf[playback_sample_idx + i];
-                    // Nhân hệ số âm lượng Master Volume
-                    int32_t scaled = ((int32_t)raw_sample * master_volume) / 100;
-                    if (scaled > 32767) scaled = 32767;
-                    if (scaled < -32768) scaled = -32768;
-
-                    tx_buf[i * 2]     = (int16_t)scaled; // Left
-                    tx_buf[i * 2 + 1] = (int16_t)scaled; // Right
+                    to_play = recorded_samples_count - playback_sample_idx;
                 }
 
-                if (audio_i2s_tx_mutex == nullptr)
+                if (to_play > 0)
                 {
-                    audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+                    for (size_t i = 0; i < to_play; i++)
+                    {
+                        int16_t raw_sample = psram_record_buf[playback_sample_idx + i];
+                        // Nhân hệ số âm lượng Master Volume
+                        int32_t scaled = ((int32_t)raw_sample * master_volume) / 100;
+                        if (scaled > 32767) scaled = 32767;
+                        if (scaled < -32768) scaled = -32768;
+
+                        tx_buf[i * 2]     = (int16_t)scaled; // Left
+                        tx_buf[i * 2 + 1] = (int16_t)scaled; // Right
+                    }
+
+                    if (audio_i2s_tx_mutex &&
+                        xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                    {
+                        size_t bytes_written = 0;
+                        const esp_err_t write_err = i2s_write(
+                            I2S_NUM_0, tx_buf, to_play * 2 * sizeof(int16_t),
+                            &bytes_written, pdMS_TO_TICKS(20));
+                        xSemaphoreGive(audio_i2s_tx_mutex);
+                        if (write_err == ESP_OK && bytes_written == to_play * 2 * sizeof(int16_t))
+                        {
+                            playback_sample_idx += to_play;
+                        }
+                    }
                 }
-                if (audio_i2s_tx_mutex && xSemaphoreTake(audio_i2s_tx_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+
+                if (playback_sample_idx >= recorded_samples_count)
                 {
-                    size_t bytes_written = 0;
-                    i2s_write(I2S_NUM_0, tx_buf, to_play * 2 * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(20));
-                    xSemaphoreGive(audio_i2s_tx_mutex);
-                    playback_sample_idx += to_play;
+                    playback_active = false;
+                    playback_sample_idx = 0;
+                    playback_complete = true;
                 }
             }
-            else
-            {
-                // Đã phát hết đoạn ghi âm
-                playback_active = false;
-                playback_sample_idx = 0;
-                audio_release_ownership(AUDIO_OWNER_SYSTEM);
-            }
+            xSemaphoreGive(audio_state_mutex);
+        }
+        if (playback_complete)
+        {
+            audio_release_ownership(AUDIO_OWNER_SYSTEM);
         }
 
         vTaskDelay(pdMS_TO_TICKS(10));
@@ -607,7 +656,8 @@ bool audio_manager_init(void)
 
     if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
     if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
-    if (!audio_owner_mutex || !audio_i2s_tx_mutex)
+    if (audio_state_mutex == nullptr) audio_state_mutex = xSemaphoreCreateMutex();
+    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex)
     {
         Serial.println("[AUDIO] ❌ Chế độ suy giảm: không tạo được mutex audio");
         audio_uninstall_duplex_driver();
@@ -732,12 +782,23 @@ void audio_play_sound_effect(SoundEffect fx)
  * ========================================================================= */
 bool audio_start_recording(uint32_t max_duration_sec)
 {
-    if (!psram_record_buf) return false;
-    if (recording_export_task_handle) return false;
-    if (recording_active) return true;
+    if (!psram_record_buf || !audio_state_mutex || max_duration_sec == 0) return false;
+
+    if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const bool export_active = recording_export_task_handle != nullptr;
+    const bool already_recording = recording_active;
+    xSemaphoreGive(audio_state_mutex);
+    if (export_active) return false;
+    if (already_recording) return true;
+
     audio_stop_playback();
     if (!audio_request_ownership(AUDIO_OWNER_RECORDER)) return false;
 
+    if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        audio_release_ownership(AUDIO_OWNER_RECORDER);
+        return false;
+    }
     record_sample_capacity = AUDIO_SAMPLE_RATE * max_duration_sec;
     if (record_sample_capacity > AUDIO_MAX_SAMPLES)
     {
@@ -746,92 +807,152 @@ bool audio_start_recording(uint32_t max_duration_sec)
     recorded_samples_count = 0;
     recording_file_state = AUDIO_FILE_NONE;
     recording_active = true;
+    xSemaphoreGive(audio_state_mutex);
     Serial.printf("[AUDIO] Bắt đầu ghi âm Mic vào PSRAM (Tối đa %u giây)...\n", max_duration_sec);
     return true;
 }
 
 void audio_stop_recording(void)
 {
-    if (recording_active)
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    const bool was_recording = recording_active;
+    recording_active = false;
+    const uint32_t sample_count = recorded_samples_count;
+    xSemaphoreGive(audio_state_mutex);
+
+    if (was_recording)
     {
-        recording_active = false;
-        audio_release_ownership(AUDIO_OWNER_RECORDER);
         Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
-                      recorded_samples_count, (float)recorded_samples_count / AUDIO_SAMPLE_RATE);
+                      sample_count, (float)sample_count / AUDIO_SAMPLE_RATE);
         schedule_recording_export();
+        audio_release_ownership(AUDIO_OWNER_RECORDER);
     }
+}
+
+void audio_cancel_recording(void)
+{
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    const bool was_recording = recording_active;
+    recording_active = false;
+    recorded_samples_count = 0;
+    recording_file_state = AUDIO_FILE_NONE;
+    xSemaphoreGive(audio_state_mutex);
+    if (was_recording) audio_release_ownership(AUDIO_OWNER_RECORDER);
 }
 
 bool audio_is_recording(void)
 {
-    return recording_active;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool active = recording_active;
+    xSemaphoreGive(audio_state_mutex);
+    return active;
 }
 
 bool audio_start_playback(void)
 {
-    if (!psram_record_buf || recorded_samples_count == 0) return false;
-    if (playback_active) return true;
+    if (!psram_record_buf || !audio_state_mutex) return false;
     audio_stop_recording();
+
+    if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    const bool already_playing = playback_active;
+    const bool has_samples = recorded_samples_count > 0;
+    xSemaphoreGive(audio_state_mutex);
+    if (already_playing) return true;
+    if (!has_samples) return false;
+
     if (!audio_request_ownership(AUDIO_OWNER_SYSTEM)) return false;
 
+    if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        audio_release_ownership(AUDIO_OWNER_SYSTEM);
+        return false;
+    }
     playback_sample_idx = 0;
     playback_active = true;
-    Serial.printf("[AUDIO] Bắt đầu phát lại đoạn ghi âm (%u mẫu)...\n", recorded_samples_count);
+    const uint32_t sample_count = recorded_samples_count;
+    xSemaphoreGive(audio_state_mutex);
+    Serial.printf("[AUDIO] Bắt đầu phát lại đoạn ghi âm (%u mẫu)...\n", sample_count);
     return true;
 }
 
 void audio_stop_playback(void)
 {
-    if (playback_active)
-    {
-        playback_active = false;
-        playback_sample_idx = 0;
-        audio_release_ownership(AUDIO_OWNER_SYSTEM);
-    }
-    else
-    {
-        playback_sample_idx = 0;
-    }
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    const bool was_playing = playback_active;
+    playback_active = false;
+    playback_sample_idx = 0;
+    xSemaphoreGive(audio_state_mutex);
+    if (was_playing) audio_release_ownership(AUDIO_OWNER_SYSTEM);
 }
 
 bool audio_is_playing(void)
 {
-    return playback_active;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool active = playback_active;
+    xSemaphoreGive(audio_state_mutex);
+    return active;
 }
 
 uint32_t audio_get_recorded_duration_ms(void)
 {
-    return (recorded_samples_count * 1000) / AUDIO_SAMPLE_RATE;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t duration = (recorded_samples_count * 1000) / AUDIO_SAMPLE_RATE;
+    xSemaphoreGive(audio_state_mutex);
+    return duration;
 }
 
 uint32_t audio_get_playback_progress_ms(void)
 {
-    return (playback_sample_idx * 1000) / AUDIO_SAMPLE_RATE;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t progress = (playback_sample_idx * 1000) / AUDIO_SAMPLE_RATE;
+    xSemaphoreGive(audio_state_mutex);
+    return progress;
 }
 
 size_t audio_get_recorded_sample_count(void)
 {
-    return recording_active ? 0 : recorded_samples_count;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const size_t count = recording_active ? 0 : recorded_samples_count;
+    xSemaphoreGive(audio_state_mutex);
+    return count;
 }
 
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples)
 {
-    if (!dest || max_samples == 0 || recording_active || !psram_record_buf || offset >= recorded_samples_count)
+    if (!dest || max_samples == 0 || !audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    if (recording_active || !psram_record_buf || offset >= recorded_samples_count)
+    {
+        xSemaphoreGive(audio_state_mutex);
         return 0;
+    }
     size_t count = recorded_samples_count - offset;
     if (count > max_samples) count = max_samples;
     memcpy(dest, psram_record_buf + offset, count * sizeof(int16_t));
+    xSemaphoreGive(audio_state_mutex);
     return count;
 }
 
 AudioRecordingFileState audio_get_recording_file_state(void)
 {
-    return recording_file_state;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return AUDIO_FILE_ERROR;
+    const AudioRecordingFileState state = recording_file_state;
+    xSemaphoreGive(audio_state_mutex);
+    return state;
 }
 
 const char *audio_get_recording_file_path(void)
 {
-    return recording_file_state == AUDIO_FILE_SAVED ? kRecordingPath : "";
+    return audio_get_recording_file_state() == AUDIO_FILE_SAVED ? kRecordingPath : "";
 }
 
 bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeout_ms)
@@ -873,22 +994,37 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
  * ========================================================================= */
 uint8_t audio_get_mic_level(void)
 {
-    return current_mic_level;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint8_t level = current_mic_level;
+    xSemaphoreGive(audio_state_mutex);
+    return level;
 }
 
 float audio_get_mic_db(void)
 {
-    return current_mic_db;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return -60.0f;
+    const float db = current_mic_db;
+    xSemaphoreGive(audio_state_mutex);
+    return db;
 }
 
 void audio_get_waveform_samples(int16_t *dest, size_t count)
 {
     if (!dest || count == 0) return;
     if (count > 128) count = 128;
+    if (!audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+    {
+        memset(dest, 0, count * sizeof(int16_t));
+        return;
+    }
 
     size_t start = (waveform_head + 128 - count) % 128;
     for (size_t i = 0; i < count; i++)
     {
         dest[i] = waveform_history[(start + i) % 128];
     }
+    xSemaphoreGive(audio_state_mutex);
 }

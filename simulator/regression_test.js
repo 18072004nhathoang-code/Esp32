@@ -38,8 +38,6 @@ function transform(rawX, rawY, cfg) {
 
 const es3 = { nativeW: 240, nativeH: 320, logicalW: 240, logicalH: 320, rotation: 2,
     swap: false, invertX: true, invertY: true };
-const diy = { nativeW: 320, nativeH: 480, logicalW: 480, logicalH: 320, rotation: 1,
-    swap: false, invertX: false, invertY: false };
 
 // ES3C28P's FT6336 axes already follow the installed portrait orientation.
 // Its 180-degree sensor mounting offset and LCD rotation 2 must cancel out.
@@ -50,9 +48,6 @@ assert.deepStrictEqual(transform(239, 319, es3), [239, 319]);
 assert.deepStrictEqual(transform(120, 160, es3), [120, 160]);
 assert.strictEqual(transform(240, 0, es3), null);
 assert.strictEqual(transform(0, 320, es3), null);
-assert.deepStrictEqual(transform(0, 0, diy), [0, 319]);
-assert.deepStrictEqual(transform(319, 479, diy), [479, 0]);
-assert.deepStrictEqual(transform(160, 240, diy), [240, 159]);
 for (const [rotation, logicalW, logicalH, expected] of [
     [0, 240, 320, [0, 0]], [1, 320, 240, [0, 239]],
     [2, 240, 320, [239, 319]], [3, 320, 240, [319, 0]]
@@ -65,9 +60,6 @@ for (const [rotation, logicalW, logicalH, expected] of [
 const horizontal = [20, 60, 100].map(x => transform(x, 100, es3));
 assert.deepStrictEqual(horizontal.map(p => p[0]), [20, 60, 100]);
 assert.ok(horizontal.every(p => p[1] === 100));
-const vertical = [20, 60, 100].map(y => transform(50, y, diy));
-assert.deepStrictEqual(vertical.map(p => p[0]), [20, 60, 100]);
-assert.ok(vertical.every(p => p[1] === 269));
 
 class TouchReleaseState {
     constructor(timeoutMs) { this.timeoutMs = timeoutMs; this.pressed = false; this.lastGood = 0; }
@@ -168,6 +160,7 @@ const mapUi = source('src/apps/map_app.cpp');
 const settingsService = source('src/os/settings_service.cpp');
 const wifiService = source('src/os/wifi_manager.cpp');
 const cameraUi = source('src/apps/camera_app.cpp');
+const audioService = source('src/audio/audio_manager.cpp');
 
 assert.match(aiService, /https:\/\//);
 assert.match(aiService, /Content-Type", "audio\/wav/);
@@ -184,5 +177,13 @@ assert.match(wifiService, /WIFI_SCAN_FAILED/);
 assert.match(wifiService, /xQueue|xTaskCreatePinnedToCore/);
 assert.doesNotMatch(cameraUi, /MJPEG \(Chưa\)|RTSP\/H\.264 \(Chưa\)/);
 assert.match(cameraUi, /HTTP\(S\) Snapshot/);
+assert.match(cameraUi, /CAM_UI_RELEASE/);
+assert.match(cameraUi, /if \(!preview_active\)/);
+assert.match(audioService, /void audio_cancel_recording/);
+assert.match(audioService, /audio_state_mutex = xSemaphoreCreateMutex/);
+assert.match(audioService, /xSemaphoreTake\(audio_state_mutex/);
+assert.doesNotMatch(audioService, /static SemaphoreHandle_t audio_mutex/);
+assert.match(aiService, /audio_cancel_recording/);
+assert.match(aiService, /size_t readBytes\(char \*buffer/);
 
 console.log('Behavioral regression tests: PASS');

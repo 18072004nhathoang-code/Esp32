@@ -4,7 +4,6 @@
  */
 
 #include "lvgl_port.h"
-#include "spi_bus_guard.h"
 #include "../os/power_manager.h"
 #include "../ui/fonts/ui_fonts.h"
 #include "../ui/ui_theme.h"
@@ -56,41 +55,30 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    // Đồng bộ bus SPI dùng chung với thẻ nhớ MicroSD
-    if (spi_bus_lock(500))
+    gfx.startWrite();
+    gfx.setAddrWindow(area->x1, area->y1, w, h);
+    uint32_t pixel_count = w * h;
+    const bool swap_red_blue = software_red_blue_swap_required();
+    if (swap_red_blue)
     {
-        gfx.startWrite();
-        gfx.setAddrWindow(area->x1, area->y1, w, h);
-        uint32_t pixel_count = w * h;
-        const bool swap_red_blue = software_red_blue_swap_required();
-        if (swap_red_blue)
+        for (uint32_t i = 0; i < pixel_count; ++i)
         {
-            for (uint32_t i = 0; i < pixel_count; ++i)
-            {
-                uint16_t p = color_p[i].full;
-                color_p[i].full = swap_red_blue_565(p);
-            }
+            uint16_t p = color_p[i].full;
+            color_p[i].full = swap_red_blue_565(p);
         }
-        const lgfx::rgb565_t *pixels = reinterpret_cast<const lgfx::rgb565_t *>(color_p);
-        gfx.writePixelsDMA(pixels, pixel_count);
-        gfx.waitDMA(); // Đảm bảo DMA hoàn tất truyền dữ liệu pixel trước khi nhả SPI bus
-        if (swap_red_blue)
-        {
-            for (uint32_t i = 0; i < pixel_count; ++i)
-            {
-                uint16_t p = color_p[i].full;
-                color_p[i].full = swap_red_blue_565(p);
-            }
-        }
-        gfx.endWrite();
-        spi_bus_unlock();
     }
-    else
+    const lgfx::rgb565_t *pixels = reinterpret_cast<const lgfx::rgb565_t *>(color_p);
+    gfx.writePixelsDMA(pixels, pixel_count);
+    gfx.waitDMA();
+    if (swap_red_blue)
     {
-        // Tuyệt đối không truy cập SPI khi lock thất bại để tránh xung đột với thẻ MicroSD
-        // Bỏ qua frame hiện tại và báo cho LVGL tiếp tục chu trình tiếp theo
-        Serial.println("[LVGL] Cảnh báo: spi_bus_lock() timeout trong disp_flush_cb, bỏ qua frame!");
+        for (uint32_t i = 0; i < pixel_count; ++i)
+        {
+            uint16_t p = color_p[i].full;
+            color_p[i].full = swap_red_blue_565(p);
+        }
     }
+    gfx.endWrite();
 
     // Báo cho LVGL biết hoàn tất lượt flush
     lv_disp_flush_ready(disp);
@@ -274,12 +262,6 @@ const char* display_orientation_name(uint8_t rotation)
 
 bool lvgl_port_init(void)
 {
-    if (!spi_bus_guard_init())
-    {
-        log_e("Không tạo được SPI bus guard!");
-        return false;
-    }
-
     log_i("Khởi tạo phần cứng LovyanGFX...");
     if (!gfx.init())
     {

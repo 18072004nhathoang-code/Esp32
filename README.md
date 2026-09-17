@@ -1,5 +1,5 @@
-# ESP32-S3 Touch Display Multi-Board Mini OS Pro Max
-**Kiến trúc:** Hardware Abstraction Layer (HAL) • FreeRTOS Multi-tasking • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S 3.0.12 • Dual Storage (SDMMC & SPI) • XiaoZhi AI Voice
+# ESP32-S3 ES3C28P Touch Display Mini OS Pro Max
+**Kiến trúc:** ES3C28P Hardware Profile • FreeRTOS Multi-tasking • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S 3.0.12 • SDMMC Storage • XiaoZhi AI Voice
 
 [![Build Status](https://github.com/18072004nhathoang-code/Esp32/actions/workflows/build.yml/badge.svg)](https://github.com/18072004nhathoang-code/Esp32/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -7,23 +7,18 @@
 
 ---
 
-## 🚀 1. Tổng quan hệ thống & Kiến trúc Đa Bo Mạch (Multi-Board HAL)
+## 🚀 1. Tổng quan hệ thống
 
-Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần cứng thống nhất (**Hardware Abstraction Layer - HAL**), cho phép chạy trên nhiều dòng bo mạch ESP32-S3 màn hình cảm ứng khác nhau chỉ bằng cách lựa chọn cấu hình môi trường biên dịch trong `platformio.ini`:
+Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.8" IPS HMI. Môi trường biên dịch duy nhất trong `platformio.ini` là `esp32-s3-es3c28p`.
 
-1. **ES3C28P 2.8" IPS HMI (Mặc định)**:
-   - Bo mạch thông minh chuyên dụng trợ lý ảo AI (Xiaozhi/ChatGPT, Cheap Black Display).
-   - Màn hình 2.8 inch IPS panel native/logical **240x320 Portrait Flipped** (`BOARD_LCD_ROTATION 2`).
-   - Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`) với cơ chế ánh xạ ma trận xoay phần cứng sang logic hiển thị, tích hợp màn hình chẩn đoán **Touch Test 5 điểm**.
-   - Thẻ nhớ MicroSD kết nối qua **SDMMC / SDIO chuyên dụng** (không chia sẻ bus với màn hình).
-   - Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
-   - Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> Tự động chuyển toàn diện sang Network IP Camera (Hikvision, KBVision, Ezviz, Yoosee, ONVIF).
+**ES3C28P 2.8" IPS HMI**:
 
-2. **DIYMORE ESP32-S3 3.5" IPS (Compile-Supported Legacy Board với Partial UI Optimization)**:
-   - Bo mạch cũ hỗ trợ biên dịch và tương thích HAL (`pio run -e esp32-s3-mini-os`).
-   - Màn hình 3.5 inch IPS ST7796 (480x320), cảm ứng điện dung FT6336U.
-   - Thẻ nhớ MicroSD kết nối qua SPI Bus dùng chung (FSPI) được bảo vệ bằng `spi_bus_guard`.
-   - *Lưu ý*: UI được tối ưu cho ES3C28P 240x320 Portrait Flipped; rotation của DIYMORE vẫn giữ nguyên.
+- Bo mạch thông minh chuyên dụng trợ lý ảo AI (Xiaozhi/ChatGPT, Cheap Black Display).
+- Màn hình 2.8 inch IPS panel native/logical **240x320 Portrait Flipped** (`BOARD_LCD_ROTATION 2`).
+- Cảm ứng điện dung đa điểm FocalTech FT6336G (I2C `0x38`) với cơ chế ánh xạ ma trận xoay phần cứng sang logic hiển thị, tích hợp màn hình chẩn đoán **Touch Test 5 điểm**.
+- Thẻ nhớ MicroSD kết nối qua **SDMMC / SDIO chuyên dụng** (không chia sẻ bus với màn hình).
+- Âm thanh Codec ES8311 + IC khuếch đại PA FM8002E (Active LOW) + Micro MEMS tích hợp.
+- Không có cổng camera DVP vật lý (`BOARD_HAS_LOCAL_CAMERA 0`) -> Tự động chuyển toàn diện sang Network IP Camera (Hikvision, KBVision, Ezviz, Yoosee, ONVIF).
 
 ```text
 +-------------------------------------------------------------------------------+
@@ -38,11 +33,10 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 |  - Core 1: LVGL GUI Engine (Priority 4, 12KB Stack, Mutex Protected)          |
 |  - Core 0: I2S Audio Engine / MP3 Decoder (Priority 3, Dynamic Arbiter)       |
 |  - Core 0: WiFi Service & Auto-Reconnect (Priority 2, Exp-Backoff 2s-60s)    |
-|  - Core 0: Storage Manager (Unified SDMMC / SPI SD Hardware Abstraction)      |
+|  - Core 0: Storage Manager (SDMMC / SDIO)                                      |
 +-------------------------------------------------------------------------------+
 |              Hardware Abstraction Layer (include/board_config.h)               |
 |  - board_es3c28p.hpp       : ILI9341V (240x320 Portrait Flipped) + FT6336G    |
-|  - board_diymore_s3_35.hpp : ST7796 (Landscape HAL)         + FT6336U + SPI   |
 +-------------------------------------------------------------------------------+
 |       Hardware: ESP32-S3-WROOM-1 N16R8 (Dual-Core LX7 @ 240MHz, 16M/8M OPI)   |
 +-------------------------------------------------------------------------------+
@@ -50,9 +44,9 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 
 ---
 
-## ⚡ 2. Bảng đối chiếu sơ đồ chân phần cứng (Pinout Mapping)
+## ⚡ 2. Sơ đồ chân phần cứng (Pinout Mapping)
 
-### A. Bo mạch ES3C28P 2.8" IPS HMI (Mục tiêu phần cứng mới)
+### Bo mạch ES3C28P 2.8" IPS HMI
 
 | Module / Ngoại vi | Chức năng tín hiệu | Chân ESP32-S3 (GPIO) | Trạng thái phần cứng & Ghi chú |
 | :--- | :--- | :--- | :--- |
@@ -87,22 +81,8 @@ Dự án firmware Mini OS Pro Max hỗ trợ kiến trúc phân tầng phần c�
 | | UART0 TX / RX | **GPIO 43 / 44** | `Configured in firmware` (Nạp Serial / Monitor) |
 | | Camera DVP | *Không hỗ trợ* | `Configured in firmware` (`BOARD_HAS_LOCAL_CAMERA 0`) |
 
----
-
-### B. Bo mạch DIYMORE ESP32-S3 3.5" IPS (Legacy Target)
-
-| Module / Ngoại vi | Chức năng tín hiệu | Chân ESP32-S3 (GPIO) | Trạng thái kiểm nghiệm |
-| :--- | :--- | :--- | :--- |
-| **Màn hình LCD (ST7796 SPI)** | MOSI, MISO, SCK, CS, DC, BL | **11, 13, 12, 10, 4, 45** | `[TESTED]` Đã test thực tế trên phần cứng cũ |
-| **Cảm ứng (FT6336U)** | SDA, SCL, RST | **8, 9, 3** | `[TESTED]` Đã test thực tế trên phần cứng cũ |
-| **Thẻ nhớ MicroSD (SPI)** | MOSI, MISO, SCK, CS | **11, 13, 12, 42** | `[TESTED]` Bus FSPI dùng chung với LCD |
-| **Âm thanh I2S & Codec** | BCLK, WS, DOUT, DIN, MCLK, PA | **18, 21, 15, 16, 17, 1** | `[TESTED]` Đã test thực tế trên phần cứng cũ |
-| | I2C SDA / SCL (Codec) | **38, 39** | `[TESTED]` Đã test thực tế trên phần cứng cũ |
-
 > [!IMPORTANT]
 > **Shared I2C Bus (ES3C28P)**: Màn hình cảm ứng FT6336G (`0x38`) và Audio Codec ES8311 (`0x18`) chia sẻ cùng chân GPIO 16 (SDA) và GPIO 15 (SCL). Hệ thống sử dụng module `shared_i2c_bus` với duy nhất một Wire controller được đồng bộ bằng FreeRTOS Mutex (`shared_i2c_lock` / `shared_i2c_unlock`), ngăn chặn xung đột driver hoặc tranh chấp bus.
->
-> **Bảo vệ Bus SPI (FSPI trên DIYMORE)**: Màn hình ST7796 và thẻ nhớ MicroSD chia sẻ GPIO 11, 12, 13. Hệ thống sử dụng `spi_bus_lock()` và `spi_bus_unlock()` trong `spi_bus_guard.cpp` để đợi DMA màn hình (`gfx.waitDMA()`) hoàn tất trước khi thao tác thẻ SD. Nếu lock fail, frame vẽ sẽ bị bỏ qua và tuyệt đối không truy cập SPI khi chưa chiếm được bus.
 
 ---
 
@@ -113,7 +93,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | Thư viện | Phiên bản cố định | Mục đích sử dụng |
 | :--- | :--- | :--- |
 | `lvgl/lvgl` | **8.3.11** | Nhân giao diện đồ họa chính |
-| `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V / ST7796 SPI & Touch Controller |
+| `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V SPI và touch controller |
 | `madhephaestus/ESP32Encoder` | **0.11.7** | Đọc rotary encoder nếu có ngoại vi |
 | `ESP32-audioI2S` | **3.0.12** (Git commit `#3.0.12`) | Giải mã MP3 từ thẻ nhớ SD qua I2S |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
@@ -124,7 +104,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 
 | Tên Luồng / Task | Nhân Core | Priority | Cơ chế vận hành & Vai trò |
 | :--- | :--- | :--- | :--- |
-| **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng, đồng bộ qua `lvgl_port_lock()` và `spi_bus_lock()`. |
+| **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng qua `lvgl_port_lock()`. |
 | **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, đồng bộ `audio_mutex` và `storage_lock` an toàn tuyệt đối không deadlock. |
 | **Audio_Task (AudioManager)** | **Core 0** | **3** | Xử lý âm thanh I2S Duplex nội bộ, độc quyền `audio_i2s_tx_mutex` chống va chạm `i2s_write`. |
 | **WiFi_Manager** | **Core 0** | **2** | Event-driven, quản lý kết nối, hỗ trợ quên mạng (`forget_network`) và auto-reconnect, lưu NVS ngoài vùng lock_wifi chống deadlock. |
@@ -158,19 +138,13 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 ## 🛠️ 6. Biên dịch và Nạp Firmware
 
 ```bash
-# 1. Biên dịch mục tiêu mặc định: Bo mạch ES3C28P 2.8" IPS HMI (Shopee / Xiaozhi)
+# Biên dịch firmware cho bo mạch ES3C28P 2.8" IPS HMI (Shopee / Xiaozhi)
 pio run -e esp32-s3-es3c28p
 
 # Nạp firmware vào bo mạch ES3C28P
 pio run -e esp32-s3-es3c28p -t upload
 
-# 2. Biên dịch mục tiêu phụ: Bo mạch DIYMORE ESP32-S3 3.5" IPS (ST7796)
-pio run -e esp32-s3-mini-os
-
-# Nạp firmware vào bo mạch DIYMORE
-pio run -e esp32-s3-mini-os -t upload
-
-# 3. Mở Serial Monitor để theo dõi hệ thống (115200 baud)
+# Mở Serial Monitor để theo dõi hệ thống (115200 baud)
 pio device monitor -b 115200
 ```
 
@@ -183,7 +157,7 @@ pio device monitor -b 115200
 3. **Music Player**: Quét file MP3 thật trong `/music`, phát/tạm dừng/tua/chuyển bài qua command queue, lấy thời lượng từ decoder, quản lý độc quyền I2S và khóa I/O MicroSD.
 4. **AI Voice**: Thu PCM thật từ micro, đóng gói WAV và POST tới `AI_VOICE_ENDPOINT`; gateway phải trả JSON `transcript`/`reply`. TTS endpoint phải trả WAV PCM16 mono 16 kHz để phát qua I2S. Cả hai endpoint bắt buộc HTTPS với CA và bearer token; firmware không log secret.
 5. **WiFi Hub & Control Center**: Quét mạng 2.4GHz, kết nối/ngắt/quên mạng, ghi nhớ credential trong NVS, báo lỗi scan/connect/NVS thật và hỗ trợ auto-reconnect có backoff.
-6. **Sensors & Diagnostics**: Đọc trạng thái thật của FT6336, ES8311, MicroSD và camera DVP. Hai profile hiện không khai báo IMU/la bàn/barometer nên UI vô hiệu hóa và báo “không khả dụng”, không sinh số đo giả.
+6. **Sensors & Diagnostics**: Đọc trạng thái thật của FT6336, ES8311, MicroSD và camera DVP. Profile ES3C28P không khai báo IMU/la bàn/barometer nên UI vô hiệu hóa và báo “không khả dụng”, không sinh số đo giả.
 7. **Camera Subsystem**:
    - **HTTP Snapshot (JPEG)**: `READY` (Nhập cấu hình IP/Port/User/Pass trên UI, tải ảnh tĩnh qua mạng, kiểm tra tính toàn vẹn SOI `0xFF 0xD8` và EOI `0xFF 0xD9`, cơ chế Ping-Pong Double Buffer với per-buffer capacity độc lập lên tới 512KB chống heap overflow, giải mã tự động bằng TJpg_Decoder theo scale lũy thừa 2 và letterbox/center-crop căn giữa hiển thị trực tiếp lên LVGL Canvas kèm đo FPS thực tế).
    - **ONVIF/MJPEG/RTSP**: không được bật trong UI vì firmware chưa có decoder/protocol hoàn chỉnh; chỉ Snapshot HTTP(S) được cho phép.

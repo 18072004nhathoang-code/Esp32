@@ -34,6 +34,7 @@ int s_message_count = 0;
 SemaphoreHandle_t s_mutex = nullptr;
 TaskHandle_t s_task = nullptr;
 volatile bool s_process_requested = false;
+volatile bool s_cancel_requested = false;
 bool s_recording_started = false;
 char s_last_error[128] = "AI endpoint is not configured";
 
@@ -99,6 +100,48 @@ public:
         int16_t sample = 0;
         if (audio_copy_recorded_samples(byte_offset / 2, &sample, 1) != 1) return -1;
         return (byte_offset & 1U) ? (((uint16_t)sample >> 8) & 0xFF) : ((uint16_t)sample & 0xFF);
+    }
+    size_t readBytes(char *buffer, size_t length) override
+    {
+        if (!buffer || length == 0 || position_ >= total_size()) return 0;
+        size_t remaining = total_size() - position_;
+        if (length > remaining) length = remaining;
+        size_t written = 0;
+        if (position_ < sizeof(header_))
+        {
+            size_t bytes = sizeof(header_) - position_;
+            if (bytes > length) bytes = length;
+            memcpy(buffer, header_ + position_, bytes);
+            position_ += bytes;
+            buffer += bytes;
+            length -= bytes;
+            written += bytes;
+        }
+        while (length > 0)
+        {
+            const size_t byte_offset = position_ - sizeof(header_);
+            if ((byte_offset & 1U) != 0 || length == 1)
+            {
+                int value = read();
+                if (value < 0) break;
+                *buffer++ = static_cast<char>(value);
+                --length;
+                ++written;
+                continue;
+            }
+            size_t samples = length / sizeof(int16_t);
+            if (samples > 256) samples = 256;
+            int16_t chunk[256];
+            const size_t got = audio_copy_recorded_samples(byte_offset / 2, chunk, samples);
+            if (got == 0) break;
+            const size_t bytes = got * sizeof(int16_t);
+            memcpy(buffer, chunk, bytes);
+            buffer += bytes;
+            length -= bytes;
+            written += bytes;
+            position_ += bytes;
+        }
+        return written;
     }
     int peek() override
     {
@@ -313,7 +356,7 @@ bool stream_tts_wav(const char *text)
     int16_t pcm[256];
     size_t received = sizeof(header);
     uint32_t last_data_ms = millis();
-    while ((http.connected() || stream->available() > 0) &&
+    while (!s_cancel_requested && (http.connected() || stream->available() > 0) &&
            (content_length < 0 || received < (size_t)content_length))
     {
         int available = stream->available();
@@ -353,7 +396,7 @@ void ai_task(void *)
             s_state = AI_STATE_PROCESSING;
             char transcript[AI_MAX_TEXT_LEN] = {};
             char reply[AI_MAX_TEXT_LEN] = {};
-            if (post_recording(transcript, sizeof(transcript), reply, sizeof(reply)))
+            if (post_recording(transcript, sizeof(transcript), reply, sizeof(reply)) && !s_cancel_requested)
             {
                 ai_voice_add_message(true, transcript);
                 ai_voice_add_message(false, reply);
@@ -361,6 +404,7 @@ void ai_task(void *)
                 if (!stream_tts_wav(reply)) set_error("TTS HTTPS/WAV playback failed");
                 else s_state = AI_STATE_IDLE;
             }
+            if (s_cancel_requested && ai_voice_is_available()) s_state = AI_STATE_IDLE;
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -398,6 +442,7 @@ bool ai_voice_start_recording(void)
     if (s_state == AI_STATE_PROCESSING || s_state == AI_STATE_SPEAKING) return false;
     if (!wifi_manager_is_connected()) { set_error("WiFi is not connected"); return false; }
     if (!audio_start_recording(AUDIO_RECORD_MAX_SEC)) { set_error("Microphone/I2S is busy"); return false; }
+    s_cancel_requested = false;
     s_recording_started = true;
     s_state = AI_STATE_LISTENING;
     return true;
@@ -416,13 +461,14 @@ bool ai_voice_stop_and_process(void)
 
 void ai_voice_cancel(void)
 {
+    s_cancel_requested = true;
     s_process_requested = false;
     if (s_recording_started)
     {
-        audio_stop_recording();
+        audio_cancel_recording();
         s_recording_started = false;
     }
-    if (s_state == AI_STATE_LISTENING)
+    if (s_state == AI_STATE_LISTENING || s_state == AI_STATE_PROCESSING || s_state == AI_STATE_SPEAKING)
         s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
 }
 
@@ -483,6 +529,7 @@ void ai_voice_clear_history(void)
 bool ai_voice_play_tts(const char *text)
 {
     if (!configuration_ready()) return false;
+    s_cancel_requested = false;
     s_state = AI_STATE_SPEAKING;
     const bool ok = stream_tts_wav(text);
     if (ok) s_state = AI_STATE_IDLE;

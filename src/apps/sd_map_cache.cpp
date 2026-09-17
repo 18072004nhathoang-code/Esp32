@@ -1,7 +1,7 @@
 /**
  * @file sd_map_cache.cpp
  * @brief Triển khai phân hệ bộ nhớ đệm bản đồ trên thẻ MicroSD FAT32 cho ESP32-S3
- * Đã tích hợp trừu tượng hóa qua storage_manager (hỗ trợ SDMMC trên ES3C28P & SPI trên DIYMORE)
+ * Dùng storage_manager cho thẻ SDMMC của ES3C28P.
  */
 
 #include "sd_map_cache.h"

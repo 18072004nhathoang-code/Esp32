@@ -46,7 +46,6 @@
 
 // --- MicroSD Card: Giao tiếp SDMMC / SDIO chuyên dụng (Không chia sẻ bus với LCD) ---
 #define BOARD_SD_INTERFACE          SD_IF_SDMMC_4BIT
-#define BOARD_SD_SHARED_SPI         false   // Độc lập hoàn toàn với FSPI của LCD
 #define BOARD_SD_CLK                38      // IO38 là SD_CLK
 #define BOARD_SD_CMD                40      // IO40 là SD_CMD
 #define BOARD_SD_D0                 39      // IO39 là SD_D0

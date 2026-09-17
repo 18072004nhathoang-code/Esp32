@@ -54,13 +54,7 @@ void setup()
 
     // 2. [LCD] Khởi tạo tầng đồ họa LovyanGFX + LVGL 8 (Core 1)
     Serial.printf("[LCD] Panel: %s | Resolution: %dx%d | Bus: SPI 40MHz DMA\n",
-#if (BOARD_LCD_CONTROLLER == LCD_CTRL_ILI9341)
                   "ILI9341V (2.8\" IPS)",
-#elif (BOARD_LCD_CONTROLLER == LCD_CTRL_ST7796)
-                  "ST7796 (3.5\" IPS)",
-#else
-                  "Generic LCD",
-#endif
                   DISP_HOR_RES, DISP_VER_RES);
 
     if (!lvgl_port_init())
@@ -93,8 +87,7 @@ void setup()
     }
 
     // 4. [SD] Khởi tạo phân hệ lưu trữ thẻ nhớ MicroSD qua HAL storage_manager
-    Serial.printf("[SD] Interface: %s\n",
-                  (BOARD_SD_INTERFACE == SD_IF_SPI) ? "SPI (FSPI)" : "SDMMC 4-bit (Hardware Host)");
+    Serial.println("[SD] Interface: SDMMC 4-bit (Hardware Host)");
     bool sd_ok = storage_init();
     if (sd_ok)
     {
