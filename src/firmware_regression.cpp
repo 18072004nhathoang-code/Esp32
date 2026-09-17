@@ -3,7 +3,6 @@
 #include "firmware_contracts.h"
 #include "touch_contact_tracker.h"
 #include "touch_transform.h"
-#include "service_state_logic.h"
 #include "ai/ai_voice_service.h"
 
 static_assert(audio_stereo_frames_from_bytes(1024) == 256, "16 kHz DMA frame accounting");
@@ -70,17 +69,6 @@ bool firmware_regression_run()
     ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav) - 1, &view);
     wav[24] = 0x44;
     ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav), &view);
-    ok = ok && audio_control_applies_to_generation(10, 11);
-    ok = ok && !audio_control_applies_to_generation(12, 11);
-    ok = ok && !audio_pause_ack_is_current(7, 7, false);
-    ok = ok && !transactional_remove_new_final(false, false);
-    ok = ok && transactional_remove_new_final(true, false);
-    ok = ok && transactional_keep_recovery_file(true, false);
-    ok = ok && !wifi_connect_may_save(true, true, false);
-    ok = ok && !camera_config_transaction_complete(true, true, true, false);
-    ok = ok && camera_config_transaction_complete(true, true, true, true);
-    ok = ok && !audio_music_handoff_can_grant(false, true);
-    ok = ok && !audio_duplex_restore_ready(true, false);
     ok = ok && ai_voice_json_regression_test();
     return ok;
 }

@@ -122,8 +122,7 @@ struct AudioControlMailbox
     bool recording_pending;
     RecordingControlType recording_type;
     uint32_t recording_cancel_through;
-    uint32_t recording_request_ids[8];
-    uint8_t recording_request_count;
+    uint32_t recording_request_id;
     bool playback_stop_pending;
     uint32_t playback_cancel_through;
     uint32_t playback_request_id;
@@ -167,34 +166,25 @@ static void acknowledge_recording_command(uint32_t generation, bool ok)
     portEXIT_CRITICAL(&audio_command_mux);
 }
 
-static bool post_recording_control(RecordingControlType type, uint32_t request_id,
+static void post_recording_control(RecordingControlType type, uint32_t request_id,
                                    uint32_t cancel_through)
 {
-    bool accepted = false;
     portENTER_CRITICAL(&audio_command_mux);
-    if (audio_control_mailbox.recording_request_count <
-        sizeof(audio_control_mailbox.recording_request_ids) /
-            sizeof(audio_control_mailbox.recording_request_ids[0]))
+    // CANCEL dominates STOP for the same or older recording generations.
+    if (!audio_control_mailbox.recording_pending ||
+        cancel_through >= audio_control_mailbox.recording_cancel_through)
     {
-        audio_control_mailbox.recording_request_ids[
-            audio_control_mailbox.recording_request_count++] = request_id;
-        // CANCEL dominates STOP for the same or older recording generations.
-        if (!audio_control_mailbox.recording_pending ||
-            cancel_through >= audio_control_mailbox.recording_cancel_through)
-        {
-            const RecordingControlType effective =
-                audio_control_mailbox.recording_pending &&
-                audio_control_mailbox.recording_type == RECORD_CONTROL_CANCEL
-                    ? RECORD_CONTROL_CANCEL : type;
-            audio_control_mailbox.recording_pending = true;
-            audio_control_mailbox.recording_type = effective;
-            audio_control_mailbox.recording_cancel_through = cancel_through;
-        }
-        accepted = true;
+        const RecordingControlType effective =
+            audio_control_mailbox.recording_pending &&
+            audio_control_mailbox.recording_type == RECORD_CONTROL_CANCEL
+                ? RECORD_CONTROL_CANCEL : type;
+        audio_control_mailbox.recording_pending = true;
+        audio_control_mailbox.recording_type = effective;
+        audio_control_mailbox.recording_cancel_through = cancel_through;
+        audio_control_mailbox.recording_request_id = request_id;
     }
     portEXIT_CRITICAL(&audio_command_mux);
-    if (accepted && audio_task_handle) xTaskNotifyGive(audio_task_handle);
-    return accepted;
+    if (audio_task_handle) xTaskNotifyGive(audio_task_handle);
 }
 
 static void post_playback_stop(uint32_t request_id, uint32_t cancel_through)
@@ -212,7 +202,6 @@ static AudioControlMailbox take_audio_controls()
     portENTER_CRITICAL(&audio_command_mux);
     const AudioControlMailbox pending = audio_control_mailbox;
     audio_control_mailbox.recording_pending = false;
-    audio_control_mailbox.recording_request_count = 0;
     audio_control_mailbox.playback_stop_pending = false;
     portEXIT_CRITICAL(&audio_command_mux);
     return pending;
@@ -251,12 +240,6 @@ static uint32_t get_le32(const uint8_t *p)
            (static_cast<uint32_t>(p[1]) << 8) |
            (static_cast<uint32_t>(p[2]) << 16) |
            (static_cast<uint32_t>(p[3]) << 24);
-}
-
-static uint16_t get_le16(const uint8_t *p)
-{
-    return static_cast<uint16_t>(p[0]) |
-           static_cast<uint16_t>(static_cast<uint16_t>(p[1]) << 8);
 }
 
 static void stop_playback_sync(void);
@@ -321,7 +304,6 @@ static bool publish_recording_snapshot(size_t count)
         if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
         {
             recording_state = RECORD_IDLE;
-            active_recording_command_generation = 0;
             recording_file_state = AUDIO_FILE_ERROR;
             xSemaphoreGive(audio_state_mutex);
         }
@@ -344,7 +326,6 @@ static bool publish_recording_snapshot(size_t count)
     current_recording = fresh;
     if (fresh) fresh->generation = ++recording_generation;
     recording_state = RECORD_IDLE;
-    active_recording_command_generation = 0;
     recording_file_state = AUDIO_FILE_NONE;
     xSemaphoreGive(audio_state_mutex);
     free_snapshot(discard);
@@ -367,12 +348,7 @@ static bool valid_recording_file_locked(fs::FS &fs, const char *path)
         memcmp(header + 8, "WAVEfmt ", 8) != 0 || memcmp(header + 36, "data", 4) != 0)
         return false;
     const uint32_t data_size = get_le32(header + 40);
-    return get_le32(header + 4) == data_size + 36U && get_le32(header + 16) == 16U &&
-           get_le16(header + 20) == 1U && get_le16(header + 22) == 1U &&
-           get_le32(header + 24) == AUDIO_SAMPLE_RATE &&
-           get_le32(header + 28) == AUDIO_SAMPLE_RATE * sizeof(int16_t) &&
-           get_le16(header + 32) == sizeof(int16_t) && get_le16(header + 34) == 16U &&
-           (data_size % sizeof(int16_t)) == 0U &&
+    return get_le32(header + 4) == data_size + 36U &&
            total_size == static_cast<size_t>(data_size) + sizeof(header);
 }
 
@@ -433,21 +409,7 @@ static void recording_export_task(void *arg)
     {
         fs::FS &fs = storage_get_fs();
         bool directory_ready = fs.exists("/voice") || fs.mkdir("/voice");
-        if (directory_ready)
-        {
-            (void)recover_recording_files_locked(fs);
-            const bool final_valid = fs.exists(kRecordingPath) &&
-                                     valid_recording_file_locked(fs, kRecordingPath);
-            const bool unresolved_backup = fs.exists(kRecordingBackupPath) &&
-                valid_recording_file_locked(fs, kRecordingBackupPath);
-            const bool unresolved_temp = fs.exists(kRecordingTempPath) &&
-                valid_recording_file_locked(fs, kRecordingTempPath);
-            // Do not overwrite a recoverable artifact after its restore rename
-            // failed. A later mount/boot gets another recovery attempt.
-            if (!final_valid && (unresolved_backup || unresolved_temp))
-                directory_ready = false;
-        }
-        if (directory_ready && fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
+        if (fs.exists(kRecordingTempPath)) fs.remove(kRecordingTempPath);
         File file = directory_ready ? fs.open(kRecordingTempPath, FILE_WRITE) : File();
         if (file)
         {
@@ -783,6 +745,14 @@ bool audio_request_ownership(AudioOwner requester)
     // 1. Phân hệ MUSIC (ESP32-audioI2S) yêu cầu độc quyền I2S_NUM_0
     if (requester == AUDIO_OWNER_MUSIC)
     {
+        // Tạm dừng phát âm thanh hệ thống (nếu có)
+        if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+        {
+            playback_active = false;
+            playback_starting = false;
+            xSemaphoreGive(audio_state_mutex);
+        }
+
         // Reserve the transition, but never hold the owner mutex while waiting
         // for an ACK from Audio_Task (the worker also queries ownership).
         audio_owner_transition = AUDIO_OWNER_MUSIC;
@@ -816,11 +786,8 @@ bool audio_request_ownership(AudioOwner requester)
 
         if (xSemaphoreTake(audio_owner_mutex, portMAX_DELAY) != pdTRUE)
         {
-            const bool driver_ok = audio_install_duplex_driver();
-            const bool codec_ok = driver_ok &&
-                audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
-            if (audio_duplex_restore_ready(driver_ok, codec_ok)) audio_manager_resume_task();
-            else Serial.println("[AUDIO] ❌ MUSIC handoff rollback could not restore duplex/codec");
+            (void)audio_install_duplex_driver();
+            audio_manager_resume_task();
             return false;
         }
         if (audio_owner_transition != AUDIO_OWNER_MUSIC ||
@@ -828,11 +795,8 @@ bool audio_request_ownership(AudioOwner requester)
         {
             audio_owner_transition = AUDIO_OWNER_NONE;
             xSemaphoreGive(audio_owner_mutex);
-            const bool driver_ok = audio_install_duplex_driver();
-            const bool codec_ok = driver_ok &&
-                audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
-            if (audio_duplex_restore_ready(driver_ok, codec_ok)) audio_manager_resume_task();
-            else Serial.println("[AUDIO] ❌ MUSIC handoff rollback could not restore duplex/codec");
+            (void)audio_install_duplex_driver();
+            audio_manager_resume_task();
             return false;
         }
         current_audio_owner = AUDIO_OWNER_MUSIC;
@@ -1239,8 +1203,7 @@ static void audio_background_task(void *pvParameters)
             const bool applied = stop_recording_for_generation(
                 controls.recording_cancel_through,
                 controls.recording_type == RECORD_CONTROL_CANCEL);
-            for (uint8_t i = 0; i < controls.recording_request_count; ++i)
-                acknowledge_recording_command(controls.recording_request_ids[i], applied);
+            acknowledge_recording_command(controls.recording_request_id, applied);
         }
         if (controls.playback_stop_pending)
             (void)stop_playback_for_generation(controls.playback_cancel_through);
@@ -1436,7 +1399,6 @@ static void audio_background_task(void *pvParameters)
                         playback_lease = {};
                         completed_session = playback_owner_session;
                         playback_owner_session = 0;
-                        active_playback_command_generation = 0;
                         playback_complete = true;
                     }
                 }
@@ -1917,11 +1879,7 @@ bool audio_stop_recording_async(uint32_t *request_id)
     if (!audio_task_handle) return false;
     uint32_t previous = 0;
     const uint32_t issued = next_command_generation(recording_command_generation, &previous);
-    if (!post_recording_control(RECORD_CONTROL_STOP, issued, issued))
-    {
-        rollback_command_generation(recording_command_generation, issued, previous);
-        return false;
-    }
+    post_recording_control(RECORD_CONTROL_STOP, issued, issued);
     if (request_id) *request_id = issued;
     return true;
 }
@@ -1931,11 +1889,7 @@ bool audio_cancel_recording_async(uint32_t *request_id)
     if (!audio_task_handle) return false;
     uint32_t previous = 0;
     const uint32_t issued = next_command_generation(recording_command_generation, &previous);
-    if (!post_recording_control(RECORD_CONTROL_CANCEL, issued, issued))
-    {
-        rollback_command_generation(recording_command_generation, issued, previous);
-        return false;
-    }
+    post_recording_control(RECORD_CONTROL_CANCEL, issued, issued);
     if (request_id) *request_id = issued;
     return true;
 }

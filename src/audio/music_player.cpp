@@ -58,7 +58,6 @@ static constexpr uint32_t MUSIC_EVENT_EOF = 1U << 0;
 static portMUX_TYPE music_control_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool music_stop_pending = false;
 static uint32_t music_stop_session = 0;
-static uint32_t last_restore_retry_ms = 0;
 static void internal_stop_audio_locked(void);
 
 static bool enqueue_music_command(const MusicCommand &cmd)
@@ -417,13 +416,8 @@ static void music_audio_task(void *pvParameters)
         {
             // A failed duplex/codec restore keeps MUSIC ownership. Retry only
             // after the decoder is fully stopped and without claiming READY.
-            const uint32_t now = millis();
-            if (music_owns_audio && !player_state.is_paused &&
-                static_cast<uint32_t>(now - last_restore_retry_ms) >= 1000U)
-            {
-                last_restore_retry_ms = now;
+            if (music_owns_audio && !player_state.is_paused)
                 (void)release_music_audio();
-            }
             vTaskDelay(pdMS_TO_TICKS(15));
         }
 

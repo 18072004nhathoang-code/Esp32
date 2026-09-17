@@ -212,19 +212,6 @@ bool sd_map_cache_write_guarded(double lat, double lon, int zoom, const char *ma
     snprintf(backup_path, sizeof(backup_path), "%s.bak", filepath);
     fs::FS &fs = storage_get_fs();
 
-    const bool final_valid_before = fs.exists(filepath) &&
-                                    valid_cached_jpeg_locked(fs, filepath);
-    const bool recoverable_temp = fs.exists(temp_path) &&
-                                  valid_cached_jpeg_locked(fs, temp_path);
-    const bool recoverable_backup = fs.exists(backup_path) &&
-                                    valid_cached_jpeg_locked(fs, backup_path);
-    if (!final_valid_before && (recoverable_temp || recoverable_backup))
-    {
-        // A previous restore rename failed. Preserve the known-good artifact
-        // rather than overwriting it with this cache transaction.
-        sd_release_bus();
-        return false;
-    }
     if (fs.exists(temp_path)) fs.remove(temp_path);
     File file = fs.open(temp_path, FILE_WRITE);
     if (!file)
