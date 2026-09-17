@@ -395,7 +395,7 @@ static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t ac
     lv_obj_set_size(btn, DOCK_ICON_BOX_SIZE, DOCK_ICON_BOX_SIZE);
     lv_obj_set_pos(btn, x_pos, 4);
     lv_obj_set_style_radius(btn, DOCK_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_DOCK_BG), LV_OPA_25), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_DOCK_BG), LV_OPA_20), 0);
     lv_obj_set_style_border_color(btn, accent, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
     lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
