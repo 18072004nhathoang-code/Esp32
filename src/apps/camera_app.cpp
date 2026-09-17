@@ -80,6 +80,7 @@ static uint32_t worker_retry_revision = 0;
 static uint8_t worker_retry_count = 0;
 static uint32_t worker_retry_after_ms = 0;
 static volatile bool worker_control_error = false;
+static volatile bool worker_wait_old_worker_exit = false;
 static volatile bool worker_decode_error = false;
 static uint32_t service_session_id = 0;
 static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -304,6 +305,24 @@ static bool worker_apply_control(const CameraWorkerControl &control)
     }
     if (static_cast<int32_t>(millis() - worker_retry_after_ms) < 0)
         return preview_active;
+    if (worker_wait_old_worker_exit)
+    {
+        // The backend remains the sole owner until its task really exits. Keep
+        // polling the latest mailbox revision; once the late exit is observed,
+        // this same pass applies a current reopen without creating a duplicate.
+        const bool backend_exited = camera_service_stop(0);
+        if (!camera_late_exit_should_apply_current(
+                true, backend_exited, control.revision, worker_ack_revision))
+        {
+            worker_control_error = true;
+            worker_retry_after_ms = millis() + 500;
+            return preview_active;
+        }
+        worker_wait_old_worker_exit = false;
+        worker_retry_count = 0;
+        worker_control_error = false;
+        service_session_id = 0;
+    }
     // A failed start/configuration waits for a new revision after the bounded
     // retries. A stop keeps polling at low rate so a late backend exit still
     // owns and completes preview cleanup.
@@ -314,7 +333,11 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         if (!camera_service_stop(2000))
         {
             if (worker_retry_count < 5) ++worker_retry_count;
-            if (worker_retry_count >= 5) worker_control_error = true;
+            if (worker_retry_count >= 5)
+            {
+                worker_control_error = true;
+                worker_wait_old_worker_exit = true;
+            }
             worker_retry_after_ms = millis() +
                 (worker_retry_count >= 5 ? 2000U : 250U * worker_retry_count);
             return preview_active;
@@ -339,7 +362,11 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         if (!camera_service_stop(2000))
         {
             if (worker_retry_count < 5) ++worker_retry_count;
-            if (worker_retry_count >= 5) worker_control_error = true;
+            if (worker_retry_count >= 5)
+            {
+                worker_control_error = true;
+                worker_wait_old_worker_exit = true;
+            }
             worker_retry_after_ms = millis() +
                 (worker_retry_count >= 5 ? 2000U : 250U * worker_retry_count);
             return preview_active;
@@ -409,13 +436,19 @@ static bool worker_apply_control(const CameraWorkerControl &control)
         const bool actionable = resulting_state == CAM_STATE_PASSWORD_REQUIRED ||
                                 resulting_state == CAM_STATE_NOT_CONFIGURED || resulting_state == CAM_STATE_ERROR;
         worker_retry_count = actionable ? 5 : static_cast<uint8_t>(worker_retry_count + 1);
-        if (worker_retry_count >= 5) worker_control_error = true;
+        if (worker_retry_count >= 5)
+        {
+            worker_control_error = true;
+            if (resulting_state == CAM_STATE_STOPPING)
+                worker_wait_old_worker_exit = true;
+        }
         worker_retry_after_ms = millis() + 250U * worker_retry_count;
         return preview_active;
     }
     worker_ack_revision = control.revision;
     worker_retry_count = 0;
     worker_control_error = false;
+    worker_wait_old_worker_exit = false;
     return preview_active;
 }
 
@@ -933,7 +966,10 @@ void camera_app_update(void)
     {
         const CameraRuntimeState state = camera_service_get_runtime_state();
         const uint32_t age = latest_preview_timestamp == 0 ? UINT32_MAX : millis() - latest_preview_timestamp;
-        if (worker_control_error)
+        if (worker_wait_old_worker_exit)
+            lv_label_set_text_fmt(lbl_cam_status, "WAIT_OLD_WORKER_EXIT • received=%u applied=%u",
+                                  worker_received_revision, worker_ack_revision);
+        else if (worker_control_error)
             lv_label_set_text_fmt(lbl_cam_status, "CONTROL ERROR • received=%u applied=%u",
                                   worker_received_revision, worker_ack_revision);
         else if (state == CAM_STATE_STARTING)

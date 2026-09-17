@@ -17,6 +17,11 @@ bool audio_session_cleanup_current(uint8_t current_owner, uint8_t requester,
                                    uint32_t current_session, uint32_t expected_session);
 ServiceAttemptResult camera_control_attempt(bool target_active, bool backend_reached_target,
                                             uint8_t attempts);
+bool camera_late_exit_should_apply_current(bool waiting_for_exit, bool backend_exited,
+                                           uint32_t requested_revision,
+                                           uint32_t acknowledged_revision);
 bool ai_cleanup_must_clear(uint32_t completed_request, uint32_t active_request);
+bool settings_revision_needs_reconcile(uint32_t completed_revision,
+                                       uint32_t applied_revision);
 bool transactional_replace_can_commit(size_t expected_bytes, size_t written_bytes,
                                       bool temp_valid, bool backup_ready);

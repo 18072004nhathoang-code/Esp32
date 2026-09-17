@@ -446,17 +446,23 @@ void ai_task(void *)
         if (wait_start && (audio_is_recording() || deadline_expired(recording_deadline)))
         {
             const bool started = audio_is_recording();
+            bool cancel_stale_start = false;
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 s_waiting_record_start = false;
                 if (!started && s_state == AI_STATE_LISTENING)
                 {
                     s_recording_started = false;
+                    cancel_stale_start = true;
                     strlcpy(s_last_error, "Microphone/I2S start failed", sizeof(s_last_error));
                     s_state = AI_STATE_ERROR;
                 }
                 xSemaphoreGive(s_mutex);
             }
+            // Invalidates the queued audio generation as well as stopping a
+            // start that raced the timeout. It cannot retain RECORDER I2S.
+            if (cancel_stale_start && !audio_cancel_recording_async())
+                Serial.println("[AI] Unable to invalidate timed-out recording start");
         }
         if (wait_commit)
         {
@@ -464,6 +470,7 @@ void ai_task(void *)
             const bool committed = generation != base_generation;
             if (committed || deadline_expired(recording_deadline))
             {
+                bool cancel_failed_commit = false;
                 if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
                 {
                     s_waiting_record_commit = false;
@@ -474,11 +481,14 @@ void ai_task(void *)
                     }
                     else if (!committed && s_state == AI_STATE_PROCESSING)
                     {
+                        cancel_failed_commit = true;
                         strlcpy(s_last_error, "Recording finalize failed", sizeof(s_last_error));
                         s_state = AI_STATE_ERROR;
                     }
                     xSemaphoreGive(s_mutex);
                 }
+                if (cancel_failed_commit && !audio_cancel_recording_async())
+                    Serial.println("[AI] Unable to cancel failed recording finalize");
             }
         }
         if (request_id != 0)
@@ -706,17 +716,24 @@ bool ai_voice_play_tts(const char *text)
     xSemaphoreGive(s_mutex);
     const bool ok = stream_tts_wav(request_id, text);
     bool cancelled = false;
-    if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
-        if (ai_cleanup_must_clear(request_id, s_active_request_id))
+        const bool own_request = ai_cleanup_must_clear(request_id, s_active_request_id);
+        if (own_request)
+        {
             s_active_request_id = 0;
+            cancelled = request_id <= s_cancelled_through;
+            if (cancelled || ok)
+                s_state = AI_STATE_IDLE;
+            else
+            {
+                strlcpy(s_last_error, "TTS HTTPS/WAV playback failed", sizeof(s_last_error));
+                s_state = AI_STATE_ERROR;
+            }
+        }
         s_completed_request_id = request_id;
-        cancelled = request_id <= s_cancelled_through;
-        if (cancelled) s_state = AI_STATE_IDLE;
-        else if (ok) s_state = AI_STATE_IDLE;
         xSemaphoreGive(s_mutex);
     }
-    if (!ok && !cancelled) set_error("TTS HTTPS/WAV playback failed");
     return ok;
 }
 

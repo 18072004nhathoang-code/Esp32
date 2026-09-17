@@ -71,8 +71,6 @@ static SemaphoreHandle_t audio_codec_mutex = nullptr;
 // Protects recorder/playback state, the shared PSRAM buffer and waveform telemetry
 // across the audio worker (core 0) and LVGL/application tasks (core 1).
 static SemaphoreHandle_t audio_state_mutex = nullptr;
-// Serializes enqueue/notify ordering for transactional start/stop commands.
-static SemaphoreHandle_t audio_command_mutex = nullptr;
 
 // Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
 static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
@@ -104,12 +102,32 @@ static constexpr uint32_t AUDIO_EVENT_STOP_RECORDING = 1U << 1;
 static constexpr uint32_t AUDIO_EVENT_CANCEL_RECORDING = 1U << 2;
 static uint32_t recording_command_generation = 0;
 static uint32_t playback_command_generation = 0;
+static portMUX_TYPE audio_command_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static uint32_t next_command_generation(uint32_t &generation)
+static uint32_t next_command_generation(uint32_t &generation, uint32_t *previous = nullptr)
 {
+    portENTER_CRITICAL(&audio_command_mux);
+    if (previous) *previous = generation;
     ++generation;
     if (generation == 0) ++generation;
-    return generation;
+    const uint32_t issued = generation;
+    portEXIT_CRITICAL(&audio_command_mux);
+    return issued;
+}
+
+static bool command_generation_current(uint32_t expected, uint32_t &generation)
+{
+    portENTER_CRITICAL(&audio_command_mux);
+    const bool current = service_generation_current(expected, generation, false);
+    portEXIT_CRITICAL(&audio_command_mux);
+    return current;
+}
+
+static void rollback_command_generation(uint32_t &generation, uint32_t issued, uint32_t previous)
+{
+    portENTER_CRITICAL(&audio_command_mux);
+    if (generation == issued) generation = previous;
+    portEXIT_CRITICAL(&audio_command_mux);
 }
 
 // Máy trạng thái đồng bộ hóa an toàn vòng đời Audio Task (Handshake/State Machine)
@@ -139,6 +157,8 @@ static uint32_t get_le32(const uint8_t *p)
 
 static void stop_playback_sync(void);
 static void play_sound_effect_sync(SoundEffect fx);
+static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expected_generation);
+static bool start_playback_transaction(uint32_t expected_generation);
 
 static void set_pa_hardware_locked(bool enabled)
 {
@@ -1012,29 +1032,13 @@ static void audio_background_task(void *pvParameters)
         {
             if (async_cmd.type == AUDIO_ASYNC_START_RECORDING)
             {
-                if (audio_command_mutex &&
-                    xSemaphoreTake(audio_command_mutex, portMAX_DELAY) == pdTRUE)
-                {
-                    if (service_generation_current(async_cmd.generation,
-                                                   recording_command_generation, false))
-                        audio_start_recording(async_cmd.value);
-                    else
-                        Serial.println("[AUDIO] stale queued recording start discarded");
-                    xSemaphoreGive(audio_command_mutex);
-                }
+                if (!start_recording_transaction(async_cmd.value, async_cmd.generation))
+                    Serial.println("[AUDIO] stale/failed queued recording start discarded");
             }
             else if (async_cmd.type == AUDIO_ASYNC_START_PLAYBACK)
             {
-                if (audio_command_mutex &&
-                    xSemaphoreTake(audio_command_mutex, portMAX_DELAY) == pdTRUE)
-                {
-                    if (service_generation_current(async_cmd.generation,
-                                                   playback_command_generation, false))
-                        audio_start_playback();
-                    else
-                        Serial.println("[AUDIO] stale queued playback start discarded");
-                    xSemaphoreGive(audio_command_mutex);
-                }
+                if (!start_playback_transaction(async_cmd.generation))
+                    Serial.println("[AUDIO] stale/failed queued playback start discarded");
             }
             else if (async_cmd.type == AUDIO_ASYNC_SOUND_EFFECT)
                 play_sound_effect_sync(static_cast<SoundEffect>(async_cmd.value));
@@ -1197,11 +1201,10 @@ bool audio_manager_init(void)
     if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
     if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
     if (audio_state_mutex == nullptr) audio_state_mutex = xSemaphoreCreateMutex();
-    if (audio_command_mutex == nullptr) audio_command_mutex = xSemaphoreCreateMutex();
     if (audio_codec_mutex == nullptr) audio_codec_mutex = xSemaphoreCreateMutex();
     if (audio_task_ack_sem == nullptr) audio_task_ack_sem = xSemaphoreCreateBinary();
     if (audio_command_queue == nullptr) audio_command_queue = xQueueCreate(8, sizeof(AudioAsyncCommand));
-    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex || !audio_command_mutex ||
+    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex ||
         !audio_codec_mutex || !audio_task_ack_sem || !audio_command_queue)
     {
         Serial.println("[AUDIO] ❌ Degraded: cannot create mutex/semaphore/command queue");
@@ -1481,11 +1484,17 @@ bool audio_play_sound_effect(SoundEffect fx)
 /* =========================================================================
  * BỘ GHI ÂM VÀ PHÁT LẠI (VOICE MEMO / PSRAM BUFFER)
  * ========================================================================= */
-bool audio_start_recording(uint32_t max_duration_sec)
+static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expected_generation)
 {
     if (!psram_record_buf || !audio_state_mutex || max_duration_sec == 0) return false;
 
     if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    if (expected_generation != 0 &&
+        !command_generation_current(expected_generation, recording_command_generation))
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return false;
+    }
     if (recording_state == RECORD_ACTIVE)
     {
         xSemaphoreGive(audio_state_mutex);
@@ -1546,22 +1555,25 @@ bool audio_start_recording(uint32_t max_duration_sec)
     return true;
 }
 
+bool audio_start_recording(uint32_t max_duration_sec)
+{
+    return start_recording_transaction(max_duration_sec, 0);
+}
+
 bool audio_start_recording_async(uint32_t max_duration_sec)
 {
     if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
         max_duration_sec == 0 || max_duration_sec > AUDIO_RECORD_MAX_SEC)
         return false;
-    if (!audio_command_mutex ||
-        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    const uint32_t previous = recording_command_generation;
+    uint32_t previous = 0;
+    const uint32_t issued = next_command_generation(recording_command_generation, &previous);
     const AudioAsyncCommand cmd = {
         AUDIO_ASYNC_START_RECORDING, static_cast<uint8_t>(max_duration_sec),
-        next_command_generation(recording_command_generation)
+        issued
     };
     const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
-    if (!queued) recording_command_generation = previous;
-    xSemaphoreGive(audio_command_mutex);
+    if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
     return queued;
 }
 
@@ -1591,25 +1603,21 @@ void audio_stop_recording(void)
 
 bool audio_stop_recording_async(void)
 {
-    if (!audio_task_handle || !audio_command_mutex ||
-        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    const uint32_t previous = recording_command_generation;
-    next_command_generation(recording_command_generation);
+    if (!audio_task_handle) return false;
+    uint32_t previous = 0;
+    const uint32_t issued = next_command_generation(recording_command_generation, &previous);
     const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_RECORDING, eSetBits) == pdPASS;
-    if (!queued) recording_command_generation = previous;
-    xSemaphoreGive(audio_command_mutex);
+    if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
     return queued;
 }
 
 bool audio_cancel_recording_async(void)
 {
-    if (!audio_task_handle || !audio_command_mutex ||
-        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    const uint32_t previous = recording_command_generation;
-    next_command_generation(recording_command_generation);
+    if (!audio_task_handle) return false;
+    uint32_t previous = 0;
+    const uint32_t issued = next_command_generation(recording_command_generation, &previous);
     const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_CANCEL_RECORDING, eSetBits) == pdPASS;
-    if (!queued) recording_command_generation = previous;
-    xSemaphoreGive(audio_command_mutex);
+    if (!queued) rollback_command_generation(recording_command_generation, issued, previous);
     return queued;
 }
 
@@ -1641,12 +1649,21 @@ bool audio_is_recording(void)
     return active;
 }
 
-bool audio_start_playback(void)
+static bool start_playback_transaction(uint32_t expected_generation)
 {
     if (!psram_record_buf || !audio_state_mutex) return false;
+    if (expected_generation != 0 &&
+        !command_generation_current(expected_generation, playback_command_generation))
+        return false;
     audio_stop_recording();
 
     if (xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    if (expected_generation != 0 &&
+        !command_generation_current(expected_generation, playback_command_generation))
+    {
+        xSemaphoreGive(audio_state_mutex);
+        return false;
+    }
     if (playback_active)
     {
         xSemaphoreGive(audio_state_mutex);
@@ -1725,20 +1742,23 @@ bool audio_start_playback(void)
     return true;
 }
 
+bool audio_start_playback(void)
+{
+    return start_playback_transaction(0);
+}
+
 bool audio_start_playback_async(void)
 {
     if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
         audio_get_recorded_sample_count() == 0) return false;
-    if (!audio_command_mutex ||
-        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    const uint32_t previous = playback_command_generation;
+    uint32_t previous = 0;
+    const uint32_t issued = next_command_generation(playback_command_generation, &previous);
     const AudioAsyncCommand cmd = {
-        AUDIO_ASYNC_START_PLAYBACK, 0, next_command_generation(playback_command_generation)
+        AUDIO_ASYNC_START_PLAYBACK, 0, issued
     };
     const bool queued = xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
-    if (!queued) playback_command_generation = previous;
-    xSemaphoreGive(audio_command_mutex);
+    if (!queued) rollback_command_generation(playback_command_generation, issued, previous);
     return queued;
 }
 
@@ -1765,13 +1785,11 @@ static void stop_playback_sync(void)
 
 bool audio_stop_playback(void)
 {
-    if (!audio_task_handle || !audio_command_mutex ||
-        xSemaphoreTake(audio_command_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    const uint32_t previous = playback_command_generation;
-    next_command_generation(playback_command_generation);
+    if (!audio_task_handle) return false;
+    uint32_t previous = 0;
+    const uint32_t issued = next_command_generation(playback_command_generation, &previous);
     const bool queued = xTaskNotify(audio_task_handle, AUDIO_EVENT_STOP_PLAYBACK, eSetBits) == pdPASS;
-    if (!queued) playback_command_generation = previous;
-    xSemaphoreGive(audio_command_mutex);
+    if (!queued) rollback_command_generation(playback_command_generation, issued, previous);
     return queued;
 }
 

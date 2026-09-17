@@ -10,8 +10,8 @@ int main()
     assert(!service_generation_current(7, 8, false));
     assert(!service_generation_current(7, 7, true));
 
-    // A stop invalidates a queued start, while a new start ordered after that
-    // stop remains current and may begin a fresh transaction.
+    // AI timeout/cancel invalidates its queued START_RECORDING generation;
+    // a new start ordered after that stop remains current.
     assert(!service_generation_current(21, 22, false));
     assert(service_generation_current(23, 23, false));
 
@@ -33,11 +33,19 @@ int main()
     assert(camera_control_attempt(false, true, 5) == ServiceAttemptResult::APPLIED);
     assert(camera_control_attempt(true, false, 5) == ServiceAttemptResult::REJECTED);
     assert(camera_control_attempt(true, false, 2) == ServiceAttemptResult::RETRY);
+    assert(!camera_late_exit_should_apply_current(true, false, 5, 3));
+    assert(camera_late_exit_should_apply_current(true, true, 5, 3));
+    assert(!camera_late_exit_should_apply_current(true, true, 5, 5));
 
     // A cancelled/old AI worker can clear only its own active request; a new
     // request remains active.
     assert(ai_cleanup_must_clear(9, 9));
     assert(!ai_cleanup_must_clear(8, 9));
+
+    // Settings A commits, B fails, and UI polls only after both completions:
+    // revision 2 still forces reconciliation from the committed snapshot A.
+    assert(settings_revision_needs_reconcile(2, 0));
+    assert(!settings_revision_needs_reconcile(2, 2));
 
     // WAV/cache replacement requires an exact complete temporary file and a
     // recoverable old-file backup. Partial writes preserve the old file.

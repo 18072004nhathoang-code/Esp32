@@ -147,14 +147,14 @@ void setup()
     power_manager_set_timeouts(saved_settings.dim_timeout_sec, saved_settings.sleep_timeout_sec);
     power_manager_set_active_brightness(saved_settings.brightness);
 
-    // 8. Khởi tạo Desktop sau khi các service nền đã có trạng thái thật.
-    Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
-    ui_init();
-
-    // 9. [CAMERA] Khởi tạo Camera Service đa nguồn (DVP / IP Camera)
+    // 8. Khởi tạo Camera Service trước UI để Desktop thấy trạng thái thật ngay.
     bool camera_ok = camera_service_init();
     (void)camera_ok;
     Serial.printf("[CAMERA] Status: %s\n", camera_service_get_status_text());
+
+    // 9. Khởi tạo Desktop sau khi các service nền đã có trạng thái thật.
+    Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
+    ui_init();
 
     // 10. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
     if (!wifi_manager_has_saved_credentials())

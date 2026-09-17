@@ -124,81 +124,6 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
     }
 }
 
-static uint32_t diagnostic_color(uint8_t red, uint8_t green, uint8_t blue)
-{
-    if (software_red_blue_swap_required())
-    {
-        uint8_t tmp = red;
-        red = blue;
-        blue = tmp;
-    }
-    return ((uint32_t)red << 16) | ((uint32_t)green << 8) | blue;
-}
-
-static void run_lovyangfx_color_test(void)
-{
-    static const uint8_t colors[][3] = {
-        {255, 0, 0}, {0, 255, 0}, {0, 0, 255},
-        {0, 0, 0}, {255, 255, 255}, {51, 51, 51},
-        {102, 102, 102}, {153, 153, 153}, {204, 204, 204}
-    };
-    const int16_t band_h = gfx.height() / 5;
-    const int16_t cell_w = gfx.width() / 3;
-    gfx.startWrite();
-    gfx.fillScreen(diagnostic_color(0, 0, 0));
-    for (size_t i = 0; i < 9; ++i)
-    {
-        const int16_t col = i % 3;
-        const int16_t row = i / 3;
-        gfx.fillRect(col * cell_w, row * band_h,
-                     col == 2 ? gfx.width() - col * cell_w : cell_w,
-                     band_h,
-                     diagnostic_color(colors[i][0], colors[i][1], colors[i][2]));
-    }
-    gfx.setTextColor(diagnostic_color(255, 255, 255), diagnostic_color(0, 0, 0));
-    gfx.setTextDatum(middle_center);
-    gfx.drawString("RGB565 TEST / ABC 123", gfx.width() / 2, band_h * 4);
-    gfx.endWrite();
-    Serial.println("[DISPLAY_TEST] LovyanGFX direct: BLACK/WHITE RGB grayscale text rendered");
-    delay(1000);
-}
-
-static void run_lvgl_color_test(lv_disp_t *display)
-{
-    static const uint32_t colors[] = {
-        0xFF0000, 0x00FF00, 0x0000FF, 0x000000, 0xFFFFFF,
-        0x333333, 0x666666, 0x999999, 0xCCCCCC
-    };
-    lv_obj_t *screen = lv_obj_create(nullptr);
-    lv_obj_set_style_pad_all(screen, 0, 0);
-    lv_obj_set_style_border_width(screen, 0, 0);
-    lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
-    const lv_coord_t cell_w = DISP_HOR_RES / 3;
-    const lv_coord_t cell_h = DISP_VER_RES / 5;
-    for (size_t i = 0; i < 9; ++i)
-    {
-        lv_obj_t *cell = lv_obj_create(screen);
-        lv_obj_set_size(cell, i % 3 == 2 ? DISP_HOR_RES - cell_w * 2 : cell_w,
-                        cell_h);
-        lv_obj_set_pos(cell, (i % 3) * cell_w, (i / 3) * cell_h);
-        lv_obj_set_style_bg_color(cell, lv_color_hex(colors[i]), 0);
-        lv_obj_set_style_border_width(cell, 0, 0);
-        lv_obj_set_style_radius(cell, 0, 0);
-    }
-    lv_obj_t *sample = lv_label_create(screen);
-    lv_obj_set_width(sample, DISP_HOR_RES);
-    lv_label_set_text(sample, "RGB565 TEST / ABC 123");
-    lv_obj_set_style_text_align(sample, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(sample, lv_color_white(), 0);
-    lv_obj_set_style_text_font(sample, UI_FONT_BODY, 0);
-    lv_obj_set_pos(sample, 0, cell_h * 4 - UI_FONT_BODY->line_height / 2);
-    lv_scr_load(screen);
-    lv_refr_now(display);
-    Serial.println("[DISPLAY_TEST] LVGL flush: BLACK/WHITE RGB grayscale text rendered");
-    delay(1000);
-    lv_obj_clean(screen);
-}
-
 /* FreeRTOS Task chuyên trách render LVGL trên Core 1 */
 static void lvgl_render_task(void *pvParameters)
 {
@@ -289,7 +214,6 @@ bool lvgl_port_init(void)
         display_prefs.end();
     }
     gfx.invertDisplay(display_diagnostic.inverted);
-    run_lovyangfx_color_test();
     log_i("Display: %dx%d, Rotation: %d, Orientation: %s", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     Serial.printf("Display: %dx%d\nRotation: %d\nOrientation: %s\n", DISP_HOR_RES, DISP_VER_RES, rot, display_orientation_name(rot));
     
@@ -350,8 +274,6 @@ bool lvgl_port_init(void)
                                                true,
                                                UI_FONT_BODY);
     lv_disp_set_theme(display, theme);
-
-    run_lvgl_color_test(display);
 
     // Cấu hình Touch Input Driver
     lv_indev_drv_init(&indev_drv);

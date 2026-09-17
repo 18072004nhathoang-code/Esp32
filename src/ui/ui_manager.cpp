@@ -25,6 +25,7 @@
 #include "../storage/storage_manager.h"
 #include "shared_i2c_bus.h"
 #include "../camera/camera_service.h"
+#include "service_state_logic.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -1185,55 +1186,43 @@ void ui_update_periodic(const SystemStats &stats)
     if (!lvgl_port_lock(200)) return;
 
     const uint32_t settings_revision = settings_service_get_completion_revision();
-    if (settings_revision != applied_settings_revision)
+    if (settings_revision_needs_reconcile(settings_revision, applied_settings_revision))
     {
         const bool committed = settings_service_last_commit_ok();
+        // Always reconcile every runtime consumer from the last committed
+        // settings snapshot. A failed command may follow a successful one
+        // before this poll, so applying only on the final PASS loses A.
+        const MiniOsSettings cfg = settings_service_get();
+        applying_settings_runtime = true;
+        theme_accent = lv_color_hex(cfg.accent_rgb);
+        apply_accent_theme();
+        power_manager_set_timeouts(cfg.dim_timeout_sec, cfg.sleep_timeout_sec);
+        power_manager_set_active_brightness(cfg.brightness);
+        wifi_manager_set_auto_reconnect(cfg.wifi_auto_reconnect);
+        if (slider_brightness) lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
+        if (lbl_brightness_val)
+            lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", cfg.brightness);
+        if (sw_wifi_reconnect)
+        {
+            if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+            else lv_obj_clear_state(sw_wifi_reconnect, LV_STATE_CHECKED);
+        }
+        if (lbl_power_timeouts)
+            lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
+                static_cast<unsigned long>(cfg.dim_timeout_sec),
+                static_cast<unsigned long>(cfg.sleep_timeout_sec));
+        applying_settings_runtime = false;
+
         if (committed)
         {
-            const MiniOsSettings cfg = settings_service_get();
-            applying_settings_runtime = true;
-            theme_accent = lv_color_hex(cfg.accent_rgb);
-            apply_accent_theme();
-            power_manager_set_timeouts(cfg.dim_timeout_sec, cfg.sleep_timeout_sec);
-            power_manager_set_active_brightness(cfg.brightness);
-            wifi_manager_set_auto_reconnect(cfg.wifi_auto_reconnect);
-            if (slider_brightness) lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
-            if (lbl_brightness_val)
-                lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", cfg.brightness);
-            if (sw_wifi_reconnect)
-            {
-                if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
-                else lv_obj_clear_state(sw_wifi_reconnect, LV_STATE_CHECKED);
-            }
-            if (lbl_power_timeouts)
-                lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
-                    static_cast<unsigned long>(cfg.dim_timeout_sec),
-                    static_cast<unsigned long>(cfg.sleep_timeout_sec));
             if (lbl_settings_status)
             {
                 lv_label_set_text(lbl_settings_status, "Đã lưu và áp dụng NVS");
                 lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
             }
-            applying_settings_runtime = false;
         }
         else
         {
-            const MiniOsSettings cfg = settings_service_get();
-            applying_settings_runtime = true;
-            if (slider_brightness) lv_slider_set_value(slider_brightness, cfg.brightness, LV_ANIM_OFF);
-            if (lbl_brightness_val)
-                lv_label_set_text_fmt(lbl_brightness_val, "Độ sáng PWM: %u%%", cfg.brightness);
-            if (sw_wifi_reconnect)
-            {
-                if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
-                else lv_obj_clear_state(sw_wifi_reconnect, LV_STATE_CHECKED);
-            }
-            if (lbl_power_timeouts)
-                lv_label_set_text_fmt(lbl_power_timeouts, "Mờ: %lus • Tắt LCD: %lus",
-                    static_cast<unsigned long>(cfg.dim_timeout_sec),
-                    static_cast<unsigned long>(cfg.sleep_timeout_sec));
-            applying_settings_runtime = false;
-
             char error[80] = {};
             settings_service_copy_last_error(error, sizeof(error));
             if (lbl_settings_status)

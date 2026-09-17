@@ -28,9 +28,22 @@ ServiceAttemptResult camera_control_attempt(bool target_active, bool backend_rea
     return ServiceAttemptResult::RETRY;
 }
 
+bool camera_late_exit_should_apply_current(bool waiting_for_exit, bool backend_exited,
+                                           uint32_t requested_revision,
+                                           uint32_t acknowledged_revision)
+{
+    return waiting_for_exit && backend_exited && requested_revision != acknowledged_revision;
+}
+
 bool ai_cleanup_must_clear(uint32_t completed_request, uint32_t active_request)
 {
     return completed_request != 0 && completed_request == active_request;
+}
+
+bool settings_revision_needs_reconcile(uint32_t completed_revision,
+                                       uint32_t applied_revision)
+{
+    return completed_revision != applied_revision;
 }
 
 bool transactional_replace_can_commit(size_t expected_bytes, size_t written_bytes,

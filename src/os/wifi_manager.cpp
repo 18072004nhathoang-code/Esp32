@@ -128,11 +128,14 @@ static bool save_credentials_for_generation(uint32_t generation, const char *ssi
     return ok;
 }
 
-static bool save_credentials_direct(const char *ssid, const char *pass)
+static bool save_credentials_direct(uint32_t generation, const char *ssid, const char *pass)
 {
-    if (!prefs_mutex || !ssid || !*ssid) return false;
+    if (!prefs_mutex || !wifi_mutex || generation == 0 || !ssid || !*ssid) return false;
     lock_prefs();
-    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
+    lock_wifi();
+    const bool current = generation == request_generation;
+    unlock_wifi();
+    bool ok = current && prefs.begin(WIFI_PREFS_NAMESPACE, false);
     if (ok)
     {
         ok = prefs.putString(WIFI_PREFS_KEY_SSID, ssid) == strlen(ssid);
@@ -270,7 +273,7 @@ static void wifi_service_task(void *pvParameters)
             }
             else if (command.type == WIFI_CMD_SAVE_ONLY)
             {
-                if (!save_credentials_direct(command.ssid, command.pass))
+                if (!save_credentials_direct(command.generation, command.ssid, command.pass))
                 {
                     lock_wifi();
                     set_error_locked("Cannot save WiFi credentials");
@@ -603,7 +606,7 @@ void wifi_manager_disconnect(void)
     pending_save_generation = 0;
     target_ssid[0] = '\0';
     target_pass[0] = '\0';
-    current_state = WIFI_STATE_DISCONNECTED;
+    current_state = WIFI_STATE_DISCONNECTING;
     unlock_wifi();
     if (!enqueue_wifi_command(cmd))
     {
@@ -676,6 +679,9 @@ bool wifi_manager_save_credentials(const char *ssid, const char *pass)
     cmd.type = WIFI_CMD_SAVE_ONLY;
     strlcpy(cmd.ssid, ssid, sizeof(cmd.ssid));
     strlcpy(cmd.pass, pass ? pass : "", sizeof(cmd.pass));
+    lock_wifi();
+    cmd.generation = request_generation;
+    unlock_wifi();
     return enqueue_wifi_command(cmd);
 }
 

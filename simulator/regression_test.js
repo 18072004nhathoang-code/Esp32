@@ -224,6 +224,7 @@ const cameraUi = source('src/apps/camera_app.cpp');
 const audioService = source('src/audio/audio_manager.cpp');
 const settingsServiceImpl = source('src/os/settings_service.cpp');
 const platformio = source('platformio.ini');
+const lvglPort = source('src/display/lvgl_port.cpp');
 
 assert.match(aiService, /https:\/\//);
 assert.match(aiService, /Content-Type", "audio\/wav/);
@@ -264,5 +265,6 @@ assert.match(musicService, /xTaskNotify\(audio_task_handle, MUSIC_EVENT_EOF, eSe
 assert.doesNotMatch(musicService.match(/void audio_eof_mp3[\s\S]*$/)[0].split('}')[0], /music_player_next/);
 assert.match(settingsServiceImpl, /SettingsWorker/);
 assert.match(settingsServiceImpl, /xQueueSend\(s_command_queue/);
+assert.doesNotMatch(lvglPort, /run_lovyangfx_color_test|run_lvgl_color_test|\[DISPLAY_TEST\]|RGB565 TEST \/ ABC 123/);
 
 console.log('Behavioral regression tests: PASS');
