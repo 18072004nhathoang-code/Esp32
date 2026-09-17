@@ -104,6 +104,13 @@ static uint32_t recording_command_generation = 0;
 static uint32_t playback_command_generation = 0;
 static portMUX_TYPE audio_command_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// The audio worker calls codec/I2C and tone code deeply. Keep DMA scratch out
+// of its task stack so startup chimes cannot exhaust the FreeRTOS stack.
+static constexpr size_t AUDIO_DMA_FRAME_COUNT = 256;
+alignas(4) static uint8_t audio_dma_bytes[AUDIO_DMA_FRAME_COUNT * 2 * sizeof(int16_t)] = {};
+alignas(4) static uint8_t audio_rx_bytes[sizeof(audio_dma_bytes) + 4] = {};
+alignas(4) static int16_t audio_tx_frames[AUDIO_DMA_FRAME_COUNT * 2] = {};
+
 static uint32_t next_command_generation(uint32_t &generation, uint32_t *previous = nullptr)
 {
     portENTER_CRITICAL(&audio_command_mux);
@@ -980,9 +987,6 @@ static bool write_stereo_frames(const int16_t *frames, size_t frame_count, uint3
  * ========================================================================= */
 static void audio_background_task(void *pvParameters)
 {
-    const size_t DMA_FRAME_COUNT = 256;
-    alignas(4) uint8_t dma_bytes[DMA_FRAME_COUNT * 2 * sizeof(int16_t)] = {};
-    alignas(4) uint8_t rx_bytes[sizeof(dma_bytes) + 4] = {};
     size_t rx_carry_bytes = 0;
     size_t bytes_read = 0;
 
@@ -1062,14 +1066,14 @@ static void audio_background_task(void *pvParameters)
 
         // 1. Đọc luồng âm thanh đầu vào từ Microphone MEMS qua I2S RX
         bytes_read = 0;
-        esp_err_t err = i2s_read(I2S_NUM_0, dma_bytes, sizeof(dma_bytes),
+        esp_err_t err = i2s_read(I2S_NUM_0, audio_dma_bytes, sizeof(audio_dma_bytes),
                                  &bytes_read, pdMS_TO_TICKS(25));
         if (err == ESP_OK && bytes_read > 0)
         {
-            memcpy(rx_bytes + rx_carry_bytes, dma_bytes, bytes_read);
+            memcpy(audio_rx_bytes + rx_carry_bytes, audio_dma_bytes, bytes_read);
             const size_t total_rx_bytes = rx_carry_bytes + bytes_read;
             const size_t stereo_frames = audio_stereo_frames_from_bytes(total_rx_bytes);
-            const int16_t *rx_buf = reinterpret_cast<const int16_t *>(rx_bytes);
+            const int16_t *rx_buf = reinterpret_cast<const int16_t *>(audio_rx_bytes);
             int64_t sum_squares = 0;
             int16_t peak = 0;
             bool recording_complete = false;
@@ -1144,18 +1148,17 @@ static void audio_background_task(void *pvParameters)
             {
                 if (playback_active && playback_lease.samples && playback_lease.sample_count > 0)
                 {
-                    int16_t tx_buf[DMA_FRAME_COUNT * 2];
                     size_t to_play = stereo_frames;
                     const size_t remaining = playback_lease.sample_count - playback_sample_idx;
                     if (to_play > remaining) to_play = remaining;
                     for (size_t i = 0; i < to_play; ++i)
                     {
                         int16_t raw_sample = playback_lease.samples[playback_sample_idx + i];
-                        tx_buf[i * 2]     = raw_sample; // codec is the single master volume
-                        tx_buf[i * 2 + 1] = raw_sample;
+                        audio_tx_frames[i * 2]     = raw_sample; // codec is the single master volume
+                        audio_tx_frames[i * 2 + 1] = raw_sample;
                     }
 
-                    const bool write_ok = write_stereo_frames(tx_buf, to_play, 40);
+                    const bool write_ok = write_stereo_frames(audio_tx_frames, to_play, 40);
                     if (write_ok) playback_sample_idx += to_play;
                     if (!write_ok || playback_sample_idx >= playback_lease.sample_count)
                     {
@@ -1180,7 +1183,7 @@ static void audio_background_task(void *pvParameters)
             const size_t consumed_rx_bytes = stereo_frames * 2U * sizeof(int16_t);
             rx_carry_bytes = audio_rx_carry_after_bytes(total_rx_bytes);
             if (rx_carry_bytes > 0)
-                memmove(rx_bytes, rx_bytes + consumed_rx_bytes, rx_carry_bytes);
+                memmove(audio_rx_bytes, audio_rx_bytes + consumed_rx_bytes, rx_carry_bytes);
         }
         else if (err != ESP_OK)
         {
@@ -1252,7 +1255,7 @@ bool audio_manager_init(void)
     BaseType_t task_ret = xTaskCreatePinnedToCore(
         audio_background_task,
         "Audio_Task",
-        4096,
+        8 * 1024, // Codec/I2C/tone call depth plus explicit safety margin
         NULL,
         3, // Priority 3: Audio Realtime
         &audio_task_handle,

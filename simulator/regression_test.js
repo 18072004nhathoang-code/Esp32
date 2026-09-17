@@ -251,6 +251,8 @@ assert.match(audioService, /void audio_cancel_recording/);
 assert.match(audioService, /audio_state_mutex = xSemaphoreCreateMutex/);
 assert.match(audioService, /xSemaphoreTake\(audio_state_mutex/);
 assert.doesNotMatch(audioService, /static SemaphoreHandle_t audio_mutex/);
+assert.match(audioService, /static uint8_t audio_dma_bytes/);
+assert.match(audioService, /"Audio_Task",\s*8 \* 1024/);
 assert.match(aiService, /audio_cancel_recording/);
 assert.match(aiService, /size_t readBytes\(char \*buffer/);
 assert.match(aiService, /AI_STATE_CANCELING/);
