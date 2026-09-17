@@ -3,36 +3,59 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ES3C28P ESP32-S3 2.8" IPS (240x320 Portrait) • Mini OS Simulator</title>
+    <title>ES3C28P ESP32-S3 2.8" IPS • Mini OS Pro Max</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --color-bg-primary: #07090e;
+            --color-bg-surface: rgba(22, 28, 44, 0.72);
+            --color-border: rgba(255, 255, 255, 0.08);
+            --color-accent-cyan: #00F2FE;
+            --color-accent-blue: #3B82F6;
+            --color-accent-purple: #A855F7;
+            --color-accent-green: #10B981;
+            --color-accent-amber: #F59E0B;
+            --color-accent-red: #FF3B5C;
+            --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-family: var(--font-sans);
             user-select: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
 
         body {
-            background: linear-gradient(135deg, #07090e 0%, #0f141f 100%);
+            background: radial-gradient(circle at 50% 15%, #121829 0%, #080a11 60%, #030407 100%);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            color: #c9d1d9;
-            padding: 20px;
+            color: #e2e8f0;
+            padding: 24px 16px;
         }
 
         .header {
             text-align: center;
-            margin-bottom: 16px;
+            margin-bottom: 20px;
         }
 
         .header h1 {
-            font-size: 24px;
-            color: #00F2FE;
-            text-shadow: 0 0 15px rgba(0, 242, 254, 0.4);
+            font-size: 26px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 0%, #00F2FE 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 25px rgba(0, 242, 254, 0.35);
             margin-bottom: 6px;
             display: flex;
             align-items: center;
@@ -42,246 +65,404 @@
 
         .header p {
             font-size: 13px;
-            color: #8b949e;
+            color: #94a3b8;
+            font-weight: 500;
+            letter-spacing: 0.2px;
         }
 
-        /* Khung bo mạch ES3C28P 2.8" portrait. */
+        /* KHUNG BO MẠCH ES3C28P 2.8" CNC FINISH */
         .board-frame {
-            background: linear-gradient(145deg, #131722 0%, #1c2230 100%);
-            border-radius: 26px;
-            padding: 22px 26px;
-            box-shadow: 0 25px 70px rgba(0, 0, 0, 0.9), inset 0 2px 4px rgba(255, 255, 255, 0.15);
-            border: 2px solid #263044;
+            background: linear-gradient(145deg, #151a26 0%, #0e121a 50%, #121622 100%);
+            border-radius: 28px;
+            padding: 22px 26px 26px 26px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.92), 
+                        0 0 0 1px rgba(255, 255, 255, 0.08),
+                        inset 0 1px 1px rgba(255, 255, 255, 0.2),
+                        inset 0 -2px 6px rgba(0, 0, 0, 0.8);
             position: relative;
-            width: 416px;
+            width: 420px;
         }
+
+        /* 4 ốc vít trang trí CNC 4 góc */
+        .screw {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: radial-gradient(circle, #475569 0%, #1e293b 100%);
+            border-radius: 50%;
+            border: 1px solid #64748b;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.8), 0 1px 1px rgba(255,255,255,0.15);
+        }
+        .screw::after {
+            content: "";
+            position: absolute;
+            top: 4px; left: 1px;
+            width: 6px; height: 1px;
+            background: #94a3b8;
+            transform: rotate(45deg);
+        }
+        .screw-tl { top: 10px; left: 12px; }
+        .screw-tr { top: 10px; right: 12px; }
+        .screw-bl { bottom: 10px; left: 12px; }
+        .screw-br { bottom: 10px; right: 12px; }
 
         .board-label {
-            font-size: 11.5px;
+            font-size: 11px;
             font-weight: 700;
-            color: #e2e8f0;
+            color: #94a3b8;
             letter-spacing: 0.8px;
-            margin-bottom: 8px;
+            margin-bottom: 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            text-transform: uppercase;
+        }
+
+        .board-badge {
+            background: rgba(0, 242, 254, 0.1);
+            color: #00F2FE;
+            border: 1px solid rgba(0, 242, 254, 0.3);
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 9.5px;
+            font-weight: 700;
         }
 
         .led-indicator {
-            width: 10px;
-            height: 10px;
+            width: 9px;
+            height: 9px;
             background: #00F2FE;
             border-radius: 50%;
-            box-shadow: 0 0 12px #00F2FE;
-            animation: pulse 1.5s infinite;
+            box-shadow: 0 0 14px #00F2FE, 0 0 4px #ffffff;
+            animation: pulse-glow 2s infinite ease-in-out;
         }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.4; transform: scale(0.85); }
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; transform: scale(1); box-shadow: 0 0 14px #00F2FE, 0 0 4px #ffffff; }
+            50% { opacity: 0.5; transform: scale(0.85); box-shadow: 0 0 6px #00F2FE; }
         }
 
-        /* Logical UI 240x320 portrait, scale 1.5x = 360x480. */
+        /* DISPLAY BEZEL (IPS PANEL) */
         .display-bezel {
-            background: #000;
-            padding: 8px;
-            border-radius: 14px;
-            box-shadow: inset 0 3px 8px rgba(0, 0, 0, 0.9), 0 2px 5px rgba(255, 255, 255, 0.2);
-            width: 376px;
+            background: #030508;
+            padding: 7px;
+            border-radius: 16px;
+            box-shadow: inset 0 3px 10px rgba(0, 0, 0, 0.95), 0 2px 6px rgba(255, 255, 255, 0.12);
+            width: 374px;
             margin: 0 auto;
+            border: 1px solid #1a2233;
         }
 
         .lcd-screen {
             width: 360px;
             height: 480px;
-            background: #0a0d14;
-            border-radius: 8px;
+            background: radial-gradient(circle at 50% 0%, rgba(0, 242, 254, 0.08) 0%, rgba(168, 85, 247, 0.04) 40%, transparent 80%), #07090e;
+            border-radius: 10px;
             position: relative;
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            transition: filter 0.2s ease;
+            transition: filter 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.7);
         }
 
-        /* Status bar scaled from the 240px logical width. */
+        /* DYNAMIC STATUS BAR */
         .status-bar {
-            height: 40px;
-            background: #0a0d14;
+            height: 38px;
+            background: rgba(10, 13, 20, 0.88);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 16px;
-            font-size: 14px;
+            padding: 0 14px;
+            font-size: 12px;
             font-weight: 600;
-            border-bottom: 1px solid #1a2233;
-            z-index: 10;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            z-index: 15;
         }
 
         .os-logo {
-            color: #00F2FE;
+            color: #f1f5f9;
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 14px;
-            text-shadow: 0 0 8px rgba(0, 242, 254, 0.5);
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+        }
+
+        .os-logo-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #00F2FE;
+            box-shadow: 0 0 8px #00F2FE;
+            animation: pulse-glow 2.5s infinite;
         }
 
         .os-clock {
             color: #ffffff;
-            font-family: monospace;
-            font-size: 16px;
-            letter-spacing: 1px;
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
         }
 
         .os-cluster {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
+        }
+
+        .power-pill {
+            font-size: 9.5px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 12px;
+            background: rgba(15, 23, 42, 0.8);
+            color: #00F2FE;
+            border: 1px solid rgba(0, 242, 254, 0.3);
+            letter-spacing: 0.3px;
         }
 
         .ram-pill {
-            background: rgba(0, 230, 118, 0.15);
-            color: #00e676;
-            border: 1px solid #00e676;
-            padding: 2px 8px;
+            background: rgba(16, 185, 129, 0.12);
+            color: #10B981;
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            padding: 2px 7px;
             border-radius: 10px;
-            font-size: 12px;
+            font-size: 10.5px;
+            font-weight: 700;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.2);
         }
 
         .wifi-icon {
-            color: #718096;
-            font-size: 15px;
-            transition: color 0.3s;
+            color: #64748b;
+            font-size: 13px;
+            transition: color 0.3s, text-shadow 0.3s;
         }
 
         .wifi-icon.connected {
-            color: #00e676;
-            text-shadow: 0 0 8px rgba(0, 230, 118, 0.6);
+            color: #10B981;
+            text-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
         }
 
         .battery-pill {
             color: #00F2FE;
-            font-size: 12px;
+            font-size: 10.5px;
+            font-weight: 700;
             display: flex;
             align-items: center;
-            gap: 2px;
+            gap: 3px;
+            background: rgba(0, 242, 254, 0.1);
+            padding: 1px 6px;
+            border-radius: 6px;
+            border: 1px solid rgba(0, 242, 254, 0.25);
         }
 
-        /* Portrait desktop: 3 columns and 3 rows. */
+        /* 9-APP DESKTOP GRID (3x3 BALANCED PERFECTION) */
         .desktop {
             flex: 1;
-            padding: 12px;
+            padding: 10px;
             overflow-y: auto;
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-            background: #0a0d14;
+            grid-template-rows: repeat(3, 1fr);
+            gap: 8px;
+            background: transparent;
+        }
+
+        .desktop::-webkit-scrollbar {
+            display: none;
         }
 
         .app-squircle {
-            background: #161b26;
-            border-radius: 14px;
-            height: 122px;
-            padding: 12px;
+            background: linear-gradient(160deg, rgba(26, 33, 50, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 10px 8px 8px 8px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
+            align-items: center;
+            text-align: center;
             cursor: pointer;
-            transition: transform 0.15s, box-shadow 0.15s, border-color 0.2s;
-            border: 1px solid #2d3748;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+            transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), 
+                        box-shadow 0.18s ease, 
+                        border-color 0.2s ease,
+                        background 0.2s ease;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.1);
             position: relative;
             overflow: hidden;
         }
 
+        .app-squircle::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 40%;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 100%);
+            pointer-events: none;
+            border-radius: 16px 16px 0 0;
+        }
+
         .app-squircle:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.7);
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.6), 0 0 16px var(--tile-glow, rgba(0, 242, 254, 0.25));
+            border-color: var(--tile-border, rgba(0, 242, 254, 0.5));
         }
 
         .app-squircle:active {
-            transform: scale(0.97);
+            transform: scale(0.95);
         }
 
         .app-icon-badge {
-            width: 38px;
-            height: 38px;
-            border-radius: 10px;
+            width: 42px;
+            height: 42px;
+            border-radius: 13px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 20px;
+            font-size: 21px;
             margin-bottom: 4px;
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+            position: relative;
+        }
+
+        .app-squircle:hover .app-icon-badge {
+            transform: scale(1.08);
+        }
+
+        .app-info {
+            width: 100%;
+            overflow: hidden;
         }
 
         .app-title {
-            font-size: 15px;
+            font-size: 12.5px;
             font-weight: 700;
             color: #ffffff;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            letter-spacing: -0.2px;
         }
 
         .app-sub {
-            font-size: 11.5px;
-            color: #718096;
+            font-size: 10px;
+            color: #94a3b8;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            margin-top: 1px;
+            font-weight: 500;
         }
 
-        /* App Window Layer */
+        /* 3D GRADIENT BADGES */
+        .badge-music {
+            background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+            box-shadow: 0 4px 14px rgba(168, 85, 247, 0.45);
+        }
+        .badge-ai {
+            background: linear-gradient(135deg, #00f2fe 0%, #06b6d4 100%);
+            box-shadow: 0 4px 14px rgba(0, 242, 254, 0.45);
+        }
+        .badge-maps {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 4px 14px rgba(168, 85, 247, 0.45);
+        }
+        .badge-system {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            box-shadow: 0 4px 14px rgba(59, 130, 246, 0.45);
+        }
+        .badge-audio {
+            background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+            box-shadow: 0 4px 14px rgba(244, 63, 94, 0.45);
+        }
+        .badge-wifi {
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+            box-shadow: 0 4px 14px rgba(14, 165, 233, 0.45);
+        }
+        .badge-settings {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            box-shadow: 0 4px 14px rgba(245, 158, 11, 0.45);
+        }
+        .badge-sensors {
+            background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
+            box-shadow: 0 4px 14px rgba(236, 72, 153, 0.45);
+        }
+        .badge-camera {
+            background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
+            box-shadow: 0 4px 14px rgba(99, 102, 241, 0.45);
+        }
+
+        /* APP WINDOW CONTAINER */
         .app-window {
             position: absolute;
-            top: 40px;
+            top: 38px;
             left: 0;
             width: 100%;
-            height: 440px;
-            background: #0a0d14;
+            height: 442px;
+            background: #080b12;
             display: none;
             flex-direction: column;
             z-index: 20;
+            animation: app-fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes app-fade-in {
+            from { opacity: 0; transform: scale(0.98); }
+            to { opacity: 1; transform: scale(1); }
         }
 
         .window-header {
             height: 40px;
-            background: #121824;
+            background: rgba(14, 18, 28, 0.95);
+            backdrop-filter: blur(12px);
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 16px;
-            border-bottom: 1px solid #1a2233;
+            padding: 0 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            z-index: 5;
         }
 
         .window-title {
-            font-size: 15px;
-            font-weight: 600;
+            font-size: 13px;
+            font-weight: 700;
             color: #ffffff;
-            display: flex;
-            align-items: center;
-            gap: 8px;
+            letter-spacing: 0.2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 280px;
         }
 
         .close-btn {
-            background: #ff3b30;
-            color: #fff;
-            border: none;
-            width: 28px;
-            height: 28px;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.35);
+            color: #ef4444;
+            width: 26px;
+            height: 26px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
-            font-weight: 700;
-            font-size: 14px;
-            transition: background 0.15s, transform 0.15s;
+            font-weight: 800;
+            font-size: 12px;
+            transition: all 0.15s ease;
         }
 
         .close-btn:hover {
-            background: #ff5247;
-            transform: scale(1.08);
+            background: #ef4444;
+            color: #ffffff;
+            transform: scale(1.1);
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
         }
 
         .window-body {
@@ -292,34 +473,33 @@
             flex-direction: column;
         }
 
-        /* GOOGLE MAPS PRO MAX: EDGE-TO-EDGE & FLOATING HUD */
+        /* 1. GOOGLE MAPS PRO MAX */
         .map-view-container {
             width: 100%;
             height: 100%;
             position: relative;
-            background: #181e29;
+            background: #111724;
         }
 
         #mapCanvas {
             width: 360px;
-            height: 440px;
+            height: 442px;
             display: block;
         }
 
-        /* Floating HUD Pills */
         .floating-pill-top-left {
             position: absolute;
-            top: 12px;
-            left: 14px;
+            top: 10px;
+            left: 10px;
             background: rgba(10, 14, 23, 0.85);
-            backdrop-filter: blur(10px);
-            border: 1px solid #00F2FE;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 242, 254, 0.5);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
             border-radius: 20px;
-            padding: 6px 14px;
-            font-size: 12px;
-            font-weight: 600;
-            color: #00E676;
+            padding: 5px 12px;
+            font-size: 11.5px;
+            font-weight: 700;
+            color: #10B981;
             display: flex;
             align-items: center;
             gap: 6px;
@@ -330,210 +510,241 @@
 
         .floating-pill-top-left:hover {
             transform: scale(1.05);
-            border-color: #00E676;
+            border-color: #10B981;
         }
 
         .floating-pill-top {
             position: absolute;
-            top: 12px;
-            left: 155px;
-            background: rgba(10, 14, 23, 0.82);
-            backdrop-filter: blur(10px);
-            border: 1px solid #00F2FE;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+            top: 10px;
+            left: 130px;
+            background: rgba(10, 14, 23, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(0, 242, 254, 0.4);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
             border-radius: 20px;
-            padding: 6px 14px;
-            font-size: 13px;
+            padding: 5px 12px;
+            font-size: 12px;
             font-weight: 600;
             color: #ffffff;
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             z-index: 10;
+            max-width: 180px;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
 
         .floating-pill-bottom {
             position: absolute;
-            bottom: 14px;
-            left: 14px;
-            background: rgba(10, 14, 23, 0.82);
-            backdrop-filter: blur(10px);
-            border: 1px solid #00e676;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+            bottom: 12px;
+            left: 10px;
+            background: rgba(10, 14, 23, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(16, 185, 129, 0.5);
+            box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
             border-radius: 20px;
-            padding: 6px 14px;
-            font-size: 13px;
+            padding: 5px 12px;
+            font-size: 11.5px;
             font-weight: 600;
-            color: #00e676;
+            color: #10B981;
             display: flex;
             align-items: center;
             gap: 6px;
             cursor: pointer;
-            transition: transform 0.15s;
-        }
-
-        .floating-pill-bottom:hover {
-            transform: scale(1.05);
+            z-index: 10;
+            max-width: 220px;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
         }
 
         .floating-controls-right {
             position: absolute;
-            top: 12px;
-            right: 14px;
+            top: 52px;
+            right: 10px;
             display: flex;
+            flex-direction: column;
             gap: 8px;
+            z-index: 10;
         }
 
         .hud-btn {
-            background: rgba(22, 27, 38, 0.85);
+            width: 38px;
+            height: 38px;
+            background: rgba(15, 21, 33, 0.85);
             backdrop-filter: blur(10px);
-            border: 1px solid #38414e;
-            color: #00F2FE;
-            border-radius: 10px;
-            width: 36px;
-            height: 36px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            color: #ffffff;
             font-size: 16px;
             font-weight: 700;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
             transition: all 0.15s;
         }
 
         .hud-btn:hover {
-            background: rgba(35, 43, 60, 0.95);
+            transform: scale(1.08);
             border-color: #00F2FE;
-            transform: scale(1.05);
+            color: #00F2FE;
         }
 
         .floating-dpad {
             position: absolute;
-            bottom: 14px;
-            right: 14px;
+            bottom: 12px;
+            right: 10px;
             display: grid;
-            grid-template-columns: 36px 36px 36px;
-            grid-template-rows: 32px 32px 32px;
-            gap: 4px;
-            background: rgba(10, 14, 23, 0.7);
+            grid-template-columns: repeat(3, 30px);
+            grid-template-rows: repeat(3, 30px);
+            gap: 3px;
+            background: rgba(10, 14, 23, 0.85);
             backdrop-filter: blur(10px);
-            padding: 6px;
+            padding: 5px;
             border-radius: 14px;
-            border: 1px solid #2d3748;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+            z-index: 10;
         }
 
         .dpad-btn {
-            background: #161b26;
-            border: 1px solid #38414e;
-            color: #cbd5e0;
-            border-radius: 6px;
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            color: #e2e8f0;
+            font-size: 12px;
+            cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 14px;
-            cursor: pointer;
+            transition: all 0.12s;
         }
 
         .dpad-btn:hover {
-            background: #252e3e;
-            color: #00F2FE;
+            background: #00F2FE;
+            color: #07090e;
+            transform: scale(1.05);
         }
 
-        /* SYSTEM MONITOR PRO MAX: DUAL ARC GAUGES & LIVE CHART */
+        /* 2. SYSTEM MONITOR PRO MAX */
         .system-body {
-            padding: 16px;
+            padding: 12px;
             display: flex;
             flex-direction: column;
-            gap: 14px;
-            background: #0a0d14;
+            gap: 12px;
+            background: #07090e;
+            overflow-y: auto;
+            flex: 1;
         }
 
         .gauges-row {
             display: flex;
-            gap: 14px;
-            align-items: center;
+            gap: 10px;
+            align-items: stretch;
         }
 
         .arc-card {
-            background: #161b26;
-            border-radius: 16px;
-            border: 1px solid #2d3748;
-            padding: 12px;
             flex: 1;
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 10px 6px;
             display: flex;
             flex-direction: column;
             align-items: center;
+            justify-content: center;
             position: relative;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
         }
 
         .arc-svg {
-            width: 100px;
-            height: 100px;
+            width: 86px;
+            height: 86px;
+            transform: rotate(-90deg);
         }
 
         .arc-center-text {
             position: absolute;
-            top: 40px;
+            font-size: 17px;
+            font-weight: 800;
+            color: #ffffff;
             text-align: center;
-            font-weight: 700;
-            font-size: 16px;
-            color: #fff;
+            line-height: 1.1;
         }
 
         .arc-center-text span {
-            font-size: 11px;
-            color: #718096;
             display: block;
+            font-size: 10px;
+            color: #94a3b8;
+            font-weight: 600;
         }
 
         .telemetry-card {
-            background: #161b26;
+            flex: 1.1;
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 16px;
-            border: 1px solid #2d3748;
-            padding: 12px 16px;
-            flex: 1.3;
+            padding: 10px 12px;
             display: flex;
             flex-direction: column;
             justify-content: space-around;
-            font-size: 13px;
+            font-size: 11.5px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
         }
 
         .chart-container {
-            background: #111622;
-            border-radius: 14px;
-            border: 1px solid #1f2937;
-            padding: 12px 14px;
-            height: 190px;
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 12px;
             display: flex;
             flex-direction: column;
+            gap: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            min-height: 190px;
         }
 
         .chart-header {
             display: flex;
             justify-content: space-between;
-            font-size: 13px;
-            font-weight: 600;
-            margin-bottom: 8px;
+            font-size: 11.5px;
+            font-weight: 700;
         }
 
-        #liveChart {
-            width: 100%;
-            height: 140px;
-        }
-
-        /* WIFI SETTINGS APP (SPLIT 2-COLUMN VIEW) */
-        .wifi-body {
-            padding: 14px;
+        /* 3. MUSIC PLAYER PRO MAX */
+        .music-body {
+            padding: 10px;
             display: flex;
-            gap: 14px;
-            background: #0a0d14;
-            height: 100%;
+            flex-direction: column;
+            gap: 10px;
+            background: #07090e;
+            overflow-y: auto;
+            flex: 1;
         }
 
-        .wifi-left-col {
-            width: 320px;
-            background: #161b26;
-            border: 1px solid #00e676;
+        .music-left-col {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 150px;
+        }
+
+        .music-right-col {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
             padding: 12px;
             display: flex;
@@ -541,31 +752,304 @@
             gap: 10px;
         }
 
-        .wifi-right-col {
+        .vinyl-container {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .vinyl-disc {
+            width: 82px;
+            height: 82px;
+            border-radius: 50%;
+            background: radial-gradient(circle, #0e121a 0%, #040608 100%);
+            border: 2px solid #232d3f;
+            position: relative;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.8), inset 0 0 10px rgba(0,0,0,0.9);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .vinyl-disc.spinning {
+            animation: spin-vinyl 3s linear infinite;
+        }
+
+        @keyframes spin-vinyl {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .vinyl-groove {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px dashed rgba(255, 255, 255, 0.12);
+            width: 62px;
+            height: 62px;
+        }
+
+        .vinyl-groove-2 {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            width: 44px;
+            height: 44px;
+        }
+
+        .vinyl-center {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .vinyl-spindle {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: 0 0 4px #000;
+        }
+
+        .music-ctrl-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .music-ctrl-btn {
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #ffffff;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.15s;
+        }
+
+        .music-ctrl-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: scale(1.08);
+        }
+
+        .music-play-btn {
+            background: linear-gradient(135deg, #00f2fe 0%, #3b82f6 100%);
+            border: none;
+            color: #07090e;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: 800;
+            box-shadow: 0 4px 16px rgba(0, 242, 254, 0.5);
+            transition: all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .music-play-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 22px rgba(0, 242, 254, 0.7);
+        }
+
+        .music-play-btn:active {
+            transform: scale(0.95);
+        }
+
+        .music-track-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 12px;
+        }
+
+        .music-track-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .music-track-item.active {
+            background: rgba(0, 242, 254, 0.12);
+            border-color: #00F2FE;
+            color: #00F2FE;
+        }
+
+        /* 4. AI VOICE ASSISTANT */
+        .chat-body {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            background: #07090e;
+            padding: 10px;
+            gap: 8px;
+        }
+
+        .chat-history {
             flex: 1;
-            background: #161b26;
-            border: 1px solid #00F2FE;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 4px;
+        }
+
+        .chat-history::-webkit-scrollbar {
+            width: 4px;
+        }
+        .chat-history::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 4px;
+        }
+
+        .chat-bubble {
+            max-width: 82%;
+            padding: 10px 14px;
+            font-size: 12.5px;
+            line-height: 1.5;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+        }
+
+        .chat-bubble.user {
+            align-self: flex-end;
+            background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
+            color: #ffffff;
+            border-radius: 16px 16px 4px 16px;
+        }
+
+        .chat-bubble.ai {
+            align-self: flex-start;
+            background: rgba(24, 31, 48, 0.85);
+            border: 1px solid rgba(168, 85, 247, 0.3);
+            color: #e2e8f0;
+            border-radius: 16px 16px 16px 4px;
+        }
+
+        .chat-ai-header {
+            font-size: 11px;
+            font-weight: 700;
+            color: #a855f7;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .chat-bottom-dock {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.7) 0%, rgba(13, 17, 26, 0.9) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            height: 86px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 16px;
+        }
+
+        .ptt-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border: 2px solid #00F2FE;
+            color: #00F2FE;
+            font-size: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+            user-select: none;
+            box-shadow: 0 4px 14px rgba(0, 242, 254, 0.3);
+        }
+
+        .ptt-btn.active {
+            background: #00F2FE;
+            color: #07090e;
+            box-shadow: 0 0 25px rgba(0, 242, 254, 0.9), 0 0 0 8px rgba(0, 242, 254, 0.25);
+            transform: scale(1.1);
+        }
+
+        .chat-waveform {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            height: 38px;
+            width: 90px;
+        }
+
+        .wave-bar {
+            width: 4px;
+            border-radius: 3px;
+            background: #00F2FE;
+            transition: height 0.08s ease;
+        }
+
+        /* 5. WIFI SETTINGS APP (SPLIT 2-COLUMN) */
+        .wifi-body {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: #07090e;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .wifi-left-col {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
-            padding: 12px;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 160px;
+        }
+
+        .wifi-right-col {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 10px;
             display: flex;
             flex-direction: column;
             gap: 8px;
         }
 
         .wifi-list {
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 8px;
-            overflow-y: auto;
-            flex: 1;
-            padding-right: 4px;
+            gap: 6px;
         }
 
         .wifi-card {
-            background: #111622;
-            border: 1px solid #2d3748;
-            border-radius: 8px;
-            padding: 8px 12px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 8px 10px;
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -574,48 +1058,44 @@
         }
 
         .wifi-card:hover {
-            border-color: #00F2FE;
-            background: #1a2233;
+            border-color: rgba(0, 242, 254, 0.4);
+            background: rgba(0, 242, 254, 0.05);
         }
 
         .wifi-card.selected {
             border-color: #00F2FE;
-            background: rgba(0, 242, 254, 0.15);
+            background: rgba(0, 242, 254, 0.12);
         }
 
         .wifi-card.connected {
-            border-color: #00e676;
-            background: rgba(0, 230, 118, 0.15);
+            border-color: #10B981;
+            background: rgba(16, 185, 129, 0.12);
         }
 
         .virtual-keyboard {
             display: grid;
             grid-template-columns: repeat(10, 1fr);
-            gap: 4px;
-            background: #0d1117;
-            padding: 6px;
-            border-radius: 8px;
-            border: 1px solid #2d3748;
-            margin-top: auto;
+            gap: 3px;
+            margin-top: 4px;
         }
 
         .kb-key {
-            background: #1f293d;
-            border: 1px solid #334155;
-            color: #cbd5e0;
-            border-radius: 4px;
-            padding: 6px 0;
+            background: #1e293b;
+            color: #ffffff;
             font-size: 11px;
             font-weight: 600;
+            padding: 6px 0;
             text-align: center;
+            border-radius: 6px;
             cursor: pointer;
-            user-select: none;
             transition: all 0.1s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
         }
 
-        .kb-key:hover {
+        .kb-key:active {
             background: #00F2FE;
-            color: #0a0d14;
+            color: #07090e;
+            transform: scale(0.92);
         }
 
         .kb-key.action {
@@ -623,603 +1103,329 @@
             color: #00F2FE;
         }
 
-        /* MUSIC PLAYER PRO MAX (SPLIT 2-COLUMN & ROTATING VINYL DISC) */
-        .music-body {
-            padding: 14px;
-            display: flex;
-            gap: 14px;
-            background: #0a0d14;
-            height: 100%;
-            box-sizing: border-box;
-        }
-
-        .music-left-col {
-            width: 300px;
-            background: #161b26;
-            border: 1px solid #00e676;
-            border-radius: 14px;
+        /* 6. SETTINGS & SENSORS & AUDIO LAB */
+        .settings-body {
             padding: 12px;
             display: flex;
             flex-direction: column;
-            gap: 10px;
-        }
-
-        .music-right-col {
-            flex: 1;
-            background: #161b26;
-            border: 1px solid #9D4EDD;
-            border-radius: 14px;
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            position: relative;
-        }
-
-        .music-track-item {
-            background: #111622;
-            border: 1px solid #2d3748;
-            border-radius: 8px;
-            padding: 8px 12px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            cursor: pointer;
-            transition: all 0.15s;
-            font-size: 13px;
-        }
-
-        .music-track-item:hover {
-            border-color: #00F2FE;
-            background: #1a2233;
-        }
-
-        .music-track-item.active {
-            border-color: #00F2FE;
-            background: rgba(0, 242, 254, 0.15);
-            font-weight: 700;
-            color: #00F2FE;
-        }
-
-        .vinyl-container {
-            display: flex;
-            align-items: center;
-            gap: 18px;
-        }
-
-        .vinyl-disc {
-            width: 105px;
-            height: 105px;
-            border-radius: 50%;
-            background: #0c0e14;
-            border: 4px solid #1f2837;
-            box-shadow: 0 0 16px rgba(0, 0, 0, 0.8);
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: transform 0.1s linear;
-        }
-
-        .vinyl-disc.spinning {
-            animation: spinVinyl 3.5s linear infinite;
-        }
-
-        @keyframes spinVinyl {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .vinyl-groove {
-            position: absolute;
-            width: 72px;
-            height: 72px;
-            border-radius: 50%;
-            border: 1px solid #222a3a;
-        }
-
-        .vinyl-groove-2 {
-            position: absolute;
-            width: 90px;
-            height: 90px;
-            border-radius: 50%;
-            border: 1px solid #19202c;
-        }
-
-        .vinyl-center {
-            position: absolute;
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #9D4EDD 0%, #00F2FE 100%);
-            border: 2px solid #00F2FE;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .vinyl-spindle {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #0a0d14;
-        }
-
-        .music-ctrl-box {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 24px;
-        }
-
-        .music-ctrl-btn {
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            background: #1f2937;
-            border: 1px solid #374151;
-            color: #ffffff;
-            font-size: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .music-ctrl-btn:hover {
-            transform: scale(1.08);
-            border-color: #00F2FE;
-        }
-
-        .music-play-btn {
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            background: #00F2FE;
-            border: none;
-            color: #0a0d14;
-            font-size: 22px;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 16px rgba(0, 242, 254, 0.5);
-            cursor: pointer;
-            transition: all 0.15s;
-        }
-
-        .music-play-btn:hover {
-            transform: scale(1.08);
-            box-shadow: 0 0 24px rgba(0, 242, 254, 0.8);
-        }
-
-        /* AI VOICE ASSISTANT (CHAT BUBBLES & PUSH-TO-TALK DOCK) */
-        .chat-body {
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            box-sizing: border-box;
-            background: #0a0d14;
-        }
-
-        .chat-history {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
             gap: 12px;
-            padding: 12px 16px;
-        }
-
-        .chat-bubble {
-            max-width: 78%;
-            padding: 10px 14px;
-            border-radius: 14px;
-            font-size: 13.5px;
-            line-height: 1.5;
-            word-break: break-word;
-            animation: fadeInBubble 0.25s ease-out;
-        }
-
-        @keyframes fadeInBubble {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .chat-bubble.user {
-            align-self: flex-end;
-            background: #0c2b3e;
-            border: 1px solid #00F2FE;
-            color: #ffffff;
-            border-bottom-right-radius: 3px;
-            box-shadow: 0 4px 14px rgba(0, 242, 254, 0.15);
-        }
-
-        .chat-bubble.ai {
-            align-self: flex-start;
-            background: #1c162e;
-            border: 1px solid #9D4EDD;
-            color: #e2e8f0;
-            border-bottom-left-radius: 3px;
-            box-shadow: 0 4px 14px rgba(157, 78, 221, 0.15);
-        }
-
-        .chat-ai-header {
-            font-size: 11.5px;
-            font-weight: 700;
-            color: #00F2FE;
-            margin-bottom: 4px;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .chat-bottom-dock {
-            height: 84px;
-            background: #111622;
-            border-top: 1px solid #1f2937;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 20px;
-            margin-top: 4px;
-        }
-
-        .ptt-btn {
-            width: 58px;
-            height: 58px;
-            border-radius: 50%;
-            background: #1f2937;
-            border: 2px solid #00F2FE;
-            color: #00F2FE;
-            font-size: 24px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.15s;
-            user-select: none;
-            box-shadow: 0 0 12px rgba(0, 242, 254, 0.3);
-        }
-
-        .ptt-btn.active {
-            background: #00F2FE;
-            color: #0a0d14;
-            box-shadow: 0 0 25px rgba(0, 242, 254, 0.9);
-            transform: scale(1.1);
-        }
-
-        .chat-waveform {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            height: 40px;
-            width: 100px;
-        }
-
-        .wave-bar {
-            width: 5px;
-            border-radius: 3px;
-            background: #00F2FE;
-            transition: height 0.08s ease;
-        }
-
-        /* SETTINGS PRO MAX */
-        .settings-body {
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-            background: #0a0d14;
+            background: #07090e;
+            overflow-y: auto;
+            flex: 1;
         }
 
         .settings-card {
-            background: #161b26;
-            border: 1px solid #2d3748;
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: 14px;
-            padding: 16px;
+            padding: 14px;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
         }
 
         .theme-pills {
             display: flex;
-            gap: 12px;
+            gap: 8px;
         }
 
         .theme-pill {
             flex: 1;
-            padding: 8px;
+            padding: 7px;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12px;
             font-weight: 700;
             text-align: center;
             cursor: pointer;
-            color: #0a0d14;
-            transition: transform 0.15s;
+            color: #07090e;
+            transition: transform 0.15s, box-shadow 0.15s;
         }
 
         .theme-pill:hover {
-            transform: scale(1.05);
+            transform: scale(1.06);
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.2);
         }
 
-        /* VOICE AI & AUDIO LAB */
         .audio-body {
-            padding: 14px;
-            display: flex;
-            gap: 14px;
-            background: #0a0d14;
-            height: 100%;
-        }
-
-        .audio-card {
-            background: #161b26;
-            border: 1px solid #2d3748;
-            border-radius: 14px;
-            padding: 14px;
-            flex: 1;
+            padding: 10px;
             display: flex;
             flex-direction: column;
             gap: 10px;
-            position: relative;
+            background: #07090e;
+            overflow-y: auto;
+            flex: 1;
         }
 
-        .audio-card-title {
-            font-size: 13.5px;
-            font-weight: 700;
+        .audio-card {
+            background: linear-gradient(160deg, rgba(26, 34, 52, 0.6) 0%, rgba(13, 17, 26, 0.8) 100%);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 12px;
             display: flex;
-            align-items: center;
+            flex-direction: column;
             gap: 8px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
         }
 
         .vu-meter-bar {
-            height: 14px;
-            background: #232d3f;
-            border-radius: 6px;
+            height: 7px;
+            background: #111827;
+            border-radius: 4px;
             overflow: hidden;
-            position: relative;
-            border: 1px solid #334155;
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .vu-meter-fill {
             height: 100%;
             width: 0%;
-            background: linear-gradient(90deg, #00e676 0%, #ffb300 70%, #ff3b30 100%);
+            background: linear-gradient(90deg, #10B981 0%, #F59E0B 70%, #FF3B5C 100%);
+            border-radius: 4px;
             transition: width 0.08s ease;
-        }
-
-        #waveCanvas {
-            width: 100%;
-            height: 190px;
-            background: #0d1117;
-            border: 1px solid #1f2937;
-            border-radius: 8px;
-            display: block;
         }
 
         .soundboard-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 6px;
         }
 
         .snd-btn {
             background: #1e293b;
-            border: 1px solid #334155;
-            color: #fff;
-            padding: 8px 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            padding: 7px 4px;
+            font-size: 11px;
+            font-weight: 700;
             border-radius: 8px;
-            font-size: 12.5px;
-            font-weight: 600;
             cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
             transition: all 0.15s;
+            text-align: center;
         }
 
         .snd-btn:hover {
+            background: #334155;
             transform: scale(1.04);
-            border-color: #00F2FE;
-            box-shadow: 0 0 10px rgba(0, 242, 254, 0.3);
+        }
+
+        .snd-btn:active {
+            transform: scale(0.95);
         }
 
         .voice-memo-box {
-            background: #111622;
-            border: 1px solid #2d3748;
+            background: rgba(15, 23, 42, 0.7);
             border-radius: 10px;
             padding: 10px;
             display: flex;
             flex-direction: column;
             gap: 8px;
+            border: 1px solid rgba(0, 242, 254, 0.2);
         }
 
-        /* Test Suite Side Panel */
-        .test-panel {
-            margin-top: 20px;
-            background: #161b22;
-            border-radius: 12px;
-            padding: 16px;
-            width: 772px;
-            border: 1px solid #30363d;
-        }
-
-        .test-header {
+        /* 7. QUICK ACTION DOCK & TEST SUITE */
+        .dock-container {
+            width: 780px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
-        }
-
-        .test-title {
-            font-size: 15px;
-            font-weight: 700;
-            color: #00F2FE;
+            gap: 10px;
+            margin-top: 16px;
+            padding: 10px 16px;
+            background: linear-gradient(160deg, rgba(22, 28, 44, 0.8) 0%, rgba(13, 17, 26, 0.95) 100%);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
         }
 
         .test-btn {
-            background: linear-gradient(135deg, #00F2FE 0%, #0099ff 100%);
-            color: #0a0d14;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 13px;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #e2e8f0;
+            padding: 6px 12px;
+            font-size: 12px;
             font-weight: 700;
+            border-radius: 8px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }
 
         .test-btn:hover {
-            box-shadow: 0 0 15px rgba(0, 242, 254, 0.5);
-            transform: scale(1.02);
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateY(-1px);
+            color: #ffffff;
+        }
+
+        .test-panel {
+            width: 780px;
+            margin-top: 12px;
+            background: #090c14;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+        }
+
+        .test-header {
+            background: #111624;
+            padding: 10px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .test-title {
+            font-size: 13px;
+            font-weight: 800;
+            color: #00F2FE;
+            letter-spacing: 0.5px;
         }
 
         .test-logs {
-            background: #090d13;
-            border-radius: 8px;
-            padding: 12px;
-            height: 150px;
+            height: 120px;
             overflow-y: auto;
-            font-family: monospace;
-            font-size: 12px;
-            border: 1px solid #21262d;
-            line-height: 1.6;
+            padding: 10px 14px;
+            font-family: var(--font-mono);
+            font-size: 11.5px;
+            background: #07090e;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
 
-        .log-pass { color: #00e676; font-weight: 600; }
-        .log-info { color: #00F2FE; }
-
-        /* Portrait overrides for the logical 240x320 simulator. */
-        .board-label { justify-content: center; text-align: center; }
-        .board-label > div { display: none !important; }
-        .status-bar { padding: 0 7px; font-size: 11px; }
-        .os-logo { font-size: 11px; max-width: 72px; }
-        .os-cluster { gap: 5px; }
-        .power-pill, .ram-pill, #spkIcon, .battery-pill { display: none !important; }
-        .desktop { padding: 8px; gap: 7px; }
-        .app-squircle { height: 122px; padding: 9px; }
-        .window-body { overflow-y: auto; }
-        .wifi-body, .music-body { flex-direction: column; padding: 8px; gap: 8px; overflow-y: auto; }
-        .wifi-left-col, .music-left-col { width: 100%; min-height: 170px; }
-        .wifi-right-col, .music-right-col { width: 100%; min-height: 220px; }
-        .floating-pill-top { left: 90px; max-width: 180px; overflow: hidden; white-space: nowrap; }
-        .floating-controls-right { top: 52px; right: 8px; flex-direction: column; }
-        .floating-pill-bottom { max-width: 170px; overflow: hidden; white-space: nowrap; }
-        .system-body { padding: 8px; gap: 8px; overflow-y: auto; }
-        .arc-svg { width: 82px; height: 82px; }
-        .chart-container { min-height: 190px; }
+        .log-info { color: #94a3b8; }
+        .log-pass { color: #10B981; font-weight: 600; }
+        .log-warn { color: #F59E0B; }
+        .log-fail { color: #FF3B5C; font-weight: 700; }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <h1>✨ ES3C28P ESP32-S3 2.8" IPS</h1>
-        <p>Mini OS 240x320 Portrait • FT6336G • ILI9341V • LVGL 8.3 & LovyanGFX</p>
+        <h1>✨ ES3C28P ESP32-S3 2.8" IPS PRO MAX</h1>
+        <p>Mini OS 240x320 Portrait • FT6336G Capacitive Touch • ILI9341V DMA • LVGL 8.3.11</p>
     </div>
 
-    <!-- KHUNG BO MẠCH ES3C28P ESP32-S3 2.8" IPS -->
+    <!-- KHUNG BO MẠCH ES3C28P ESP32-S3 2.8" IPS (CNC SPACE GRAY FINISH) -->
     <div class="board-frame">
+        <div class="screw screw-tl"></div>
+        <div class="screw screw-tr"></div>
+        <div class="screw screw-bl"></div>
+        <div class="screw screw-br"></div>
+
         <div class="board-label">
-            <span>ES3C28P 2.8" • ILI9341V • 16MB Flash + 8MB OPI PSRAM</span>
-            <div style="display:flex; align-items:center; gap:10px;">
-                <span style="font-size:10.5px; color:#a0aec0;">🎙️ MEMS Mic (G16) • 🔊 Speaker (G15) • Codec ES8311</span>
-                <div class="led-indicator"></div>
+            <span>ES3C28P 2.8" • 16MB Flash + 8MB OPI PSRAM</span>
+            <div style="display:flex; align-items:center; gap:8px;">
+                <span class="board-badge">DUAL LX7 240MHz</span>
+                <div class="led-indicator" title="System RGB Status"></div>
             </div>
         </div>
 
         <div class="display-bezel">
             <div class="lcd-screen" id="lcdScreen">
                 
-                <!-- 1. STATUS BAR PRO MAX -->
+                <!-- 1. DYNAMIC STATUS BAR -->
                 <div class="status-bar">
-                    <div class="os-logo">● S3 MINI OS</div>
+                    <div class="os-logo">
+                        <div class="os-logo-dot"></div>
+                        ● S3 MINI OS
+                    </div>
                     <div class="os-clock" id="clockText">00:00:00</div>
                     <div class="os-cluster">
-                        <div class="power-pill" id="powerPill" style="font-size:10px; padding:2px 6px; border-radius:10px; background:#1e293b; color:#00F2FE; border:1px solid #334155;" title="Power Manager">⚡ 100% (0s)</div>
+                        <div class="power-pill" id="powerPill" title="Power Manager">⚡ 100% (0s)</div>
                         <div class="ram-pill" id="ramPill">28% RAM</div>
                         <div class="wifi-icon" id="wifiIcon">📶</div>
-                        <div id="spkIcon" style="color:#FFB300; font-size:14px; cursor:pointer;" onclick="toggleMute()" title="Âm lượng Loa">🔊</div>
+                        <div id="spkIcon" style="color:#FFB300; font-size:13px; cursor:pointer;" onclick="toggleMute()" title="Âm lượng Loa">🔊</div>
                         <div class="battery-pill">100% ⚡</div>
                     </div>
                 </div>
 
-                <!-- 2. DESKTOP LAUNCHER PORTRAIT (3 CỘT x 3 HÀNG) -->
+                <!-- 2. DESKTOP LAUNCHER (PERFECT 9-APP 3x3 GRID) -->
                 <div class="desktop" id="desktopView">
-                    <!-- Tile 1: Music Player (NỔI BẬT HÀNG ĐẦU TIÊN!) -->
-                    <div class="app-squircle" style="border-color:#9D4EDD; background:linear-gradient(145deg, #1b162b, #111622);" onclick="openApp('music')">
-                        <div class="app-icon-badge" style="background:rgba(157,78,221,0.25); color:#c084fc; border:1px solid #9D4EDD;">🎵</div>
-                        <div>
-                            <div class="app-title" style="color:#e9d5ff;">Music Player</div>
+                    <!-- Tile 1: Music Player -->
+                    <div class="app-squircle" style="--tile-border:#a855f7; --tile-glow:rgba(168,85,247,0.35);" onclick="openApp('music')">
+                        <div class="app-icon-badge badge-music">🎵</div>
+                        <div class="app-info">
+                            <div class="app-title" style="color:#f3e8ff;">Music Player</div>
                             <div class="app-sub">/music SD MP3</div>
                         </div>
                     </div>
 
                     <!-- Tile 2: AI Voice Assistant -->
-                    <div class="app-squircle" style="border-color:#00F2FE; background:linear-gradient(145deg, #10212e, #111622);" onclick="openApp('ai_voice')">
-                        <div class="app-icon-badge" style="background:rgba(0,242,254,0.2); color:#00F2FE; border:1px solid #00F2FE;">🤖</div>
-                        <div>
-                            <div class="app-title" style="color:#a5f3fc;">AI Voice</div>
+                    <div class="app-squircle" style="--tile-border:#00F2FE; --tile-glow:rgba(0,242,254,0.35);" onclick="openApp('ai_voice')">
+                        <div class="app-icon-badge badge-ai">🤖</div>
+                        <div class="app-info">
+                            <div class="app-title" style="color:#cffafe;">AI Voice</div>
                             <div class="app-sub">XiaoZhi Gemini</div>
                         </div>
                     </div>
 
                     <!-- Tile 3: Google Maps Pro -->
-                    <div class="app-squircle" style="border-color:#FF3B30;" onclick="openApp('maps')">
-                        <div class="app-icon-badge" style="background:rgba(255,59,48,0.15); color:#FF3B30; border:1px solid #FF3B30;">📍</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#10B981; --tile-glow:rgba(16,185,129,0.35);" onclick="openApp('maps')">
+                        <div class="app-icon-badge badge-maps">📍</div>
+                        <div class="app-info">
                             <div class="app-title">Maps Pro</div>
                             <div class="app-sub">WGS84 Vector</div>
                         </div>
                     </div>
 
                     <!-- Tile 4: System Monitor -->
-                    <div class="app-squircle" style="border-color:#00e676;" onclick="openApp('system')">
-                        <div class="app-icon-badge" style="background:rgba(0,230,118,0.15); color:#00e676; border:1px solid #00e676;">⚡</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#3B82F6; --tile-glow:rgba(59,130,246,0.35);" onclick="openApp('system')">
+                        <div class="app-icon-badge badge-system">⚡</div>
+                        <div class="app-info">
                             <div class="app-title">System</div>
                             <div class="app-sub">Dual Core 240M</div>
                         </div>
                     </div>
 
                     <!-- Tile 5: Voice & Audio Lab -->
-                    <div class="app-squircle" style="border-color:#3A86FF;" onclick="openApp('audio')">
-                        <div class="app-icon-badge" style="background:rgba(58,134,255,0.15); color:#3A86FF; border:1px solid #3A86FF;">🎙️</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#f43f5e; --tile-glow:rgba(244,63,94,0.35);" onclick="openApp('audio')">
+                        <div class="app-icon-badge badge-audio">🎙️</div>
+                        <div class="app-info">
                             <div class="app-title">Voice & Mic</div>
                             <div class="app-sub">Oscilloscope Lab</div>
                         </div>
                     </div>
 
                     <!-- Tile 6: WiFi Hub -->
-                    <div class="app-squircle" style="border-color:#00F2FE;" onclick="openApp('wifi')">
-                        <div class="app-icon-badge" style="background:rgba(0,242,254,0.15); color:#00F2FE; border:1px solid #00F2FE;">📶</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#0ea5e9; --tile-glow:rgba(14,165,233,0.35);" onclick="openApp('wifi')">
+                        <div class="app-icon-badge badge-wifi">📶</div>
+                        <div class="app-info">
                             <div class="app-title">WiFi Hub</div>
                             <div class="app-sub">2.4GHz Scanner</div>
                         </div>
                     </div>
 
                     <!-- Tile 7: Settings -->
-                    <div class="app-squircle" style="border-color:#FFB300;" onclick="openApp('settings')">
-                        <div class="app-icon-badge" style="background:rgba(255,179,0,0.15); color:#FFB300; border:1px solid #FFB300;">⚙️</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#f59e0b; --tile-glow:rgba(245,158,11,0.35);" onclick="openApp('settings')">
+                        <div class="app-icon-badge badge-settings">⚙️</div>
+                        <div class="app-info">
                             <div class="app-title">Settings</div>
                             <div class="app-sub">Control Center</div>
                         </div>
                     </div>
 
                     <!-- Tile 8: Sensors & Info -->
-                    <div class="app-squircle" style="border-color:#eab308;" onclick="openApp('sensors')">
-                        <div class="app-icon-badge" style="background:rgba(234,179,8,0.15); color:#facc15; border:1px solid #eab308;">🧭</div>
-                        <div>
+                    <div class="app-squircle" style="--tile-border:#ec4899; --tile-glow:rgba(236,72,153,0.35);" onclick="openApp('sensors')">
+                        <div class="app-icon-badge badge-sensors">🧭</div>
+                        <div class="app-info">
                             <div class="app-title">Sensors</div>
                             <div class="app-sub">Compass & Info</div>
+                        </div>
+                    </div>
+
+                    <!-- Tile 9: Camera IP (Hoàn thiện lưới 3x3 cân đối hoàn mỹ) -->
+                    <div class="app-squircle" style="--tile-border:#6366f1; --tile-glow:rgba(99,102,241,0.35);" onclick="openApp('camera')">
+                        <div class="app-icon-badge badge-camera">📷</div>
+                        <div class="app-info">
+                            <div class="app-title">Camera IP</div>
+                            <div class="app-sub">Network RTSP</div>
                         </div>
                     </div>
                 </div>
@@ -1232,13 +1438,12 @@
                     </div>
 
                     <div class="window-body" id="windowBody">
-                        <!-- AI VOICE ASSISTANT (CHAT BUBBLES & PUSH-TO-TALK) -->
+                        <!-- AI VOICE ASSISTANT -->
                         <div class="chat-body" id="aiVoiceAppView" style="display:none;">
                             <div class="chat-history" id="simChatHistory">
                                 <!-- Rendered dynamically via JS -->
                             </div>
                             <div class="chat-bottom-dock">
-                                <!-- Dynamic Waveform (7 bars) -->
                                 <div class="chat-waveform" id="simWaveform">
                                     <div class="wave-bar" id="wb0" style="height:6px; background:#00F2FE;"></div>
                                     <div class="wave-bar" id="wb1" style="height:12px; background:#9D4EDD;"></div>
@@ -1249,39 +1454,34 @@
                                     <div class="wave-bar" id="wb6" style="height:6px; background:#00F2FE;"></div>
                                 </div>
 
-                                <!-- Push-to-Talk Button -->
-                                <div style="display:flex; flex-direction:column; align-items:center; gap:6px;">
+                                <div style="display:flex; flex-direction:column; align-items:center; gap:4px;">
                                     <button class="ptt-btn" id="simPttBtn"
                                             onmousedown="startPtt()" onmouseup="stopPtt()"
                                             ontouchstart="startPtt()" ontouchend="stopPtt()"
                                             title="Nhấn và giữ để nói, nhả ra để gửi">🎙️</button>
-                                    <span id="simPttLabel" style="font-size:11.5px; color:#a0aec0; font-weight:600;">Nhấn & Giữ để Nói</span>
+                                    <span id="simPttLabel" style="font-size:11px; color:#94a3b8; font-weight:600;">Nhấn & Giữ để Nói</span>
                                 </div>
 
-                                <!-- Status & Engine Info -->
-                                <div style="font-size:12px; color:#718096; text-align:right; min-width:140px;" id="simAiStatusInfo">
-                                    <span style="color:#00F2FE; font-weight:700;">XiaoZhi Native</span><br>
-                                    <span style="color:#00e676; font-size:11px;">● Core 0 Ready</span>
+                                <div style="font-size:11.5px; color:#64748b; text-align:right; min-width:110px;" id="simAiStatusInfo">
+                                    <span style="color:#00F2FE; font-weight:700;">XiaoZhi AI</span><br>
+                                    <span style="color:#10B981; font-size:10.5px;">● Core 0 Ready</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- MUSIC PLAYER PRO MAX (SPLIT 2-COLUMN VIEW & ROTATING VINYL DISC) -->
+                        <!-- MUSIC PLAYER PRO MAX -->
                         <div class="music-body" id="musicAppView" style="display:none;">
-                            <!-- Nửa bên trái: Danh sách bài hát từ /music trên thẻ nhớ SD -->
                             <div class="music-left-col">
                                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <span style="font-size:13px; font-weight:700; color:#00e676;">📁 Thư Viện (/music)</span>
-                                    <span id="simMusicCount" style="font-size:11.5px; color:#a0aec0;">5 bài hát</span>
+                                    <span style="font-size:12.5px; font-weight:700; color:#10B981;">📁 Thư Viện (/music)</span>
+                                    <span id="simMusicCount" style="font-size:11px; color:#94a3b8;">5 bài hát</span>
                                 </div>
                                 <div class="wifi-list" id="simMusicList">
                                     <!-- Rendered dynamically via JS -->
                                 </div>
                             </div>
 
-                            <!-- Nửa bên phải: Đĩa than quay tròn, tên bài hát, thanh trượt thời gian, nút bấm và âm lượng -->
                             <div class="music-right-col">
-                                <!-- Vinyl Disc & Metadata -->
                                 <div class="vinyl-container">
                                     <div class="vinyl-disc" id="simVinylDisc">
                                         <div class="vinyl-groove-2"></div>
@@ -1291,69 +1491,62 @@
                                         </div>
                                     </div>
                                     <div style="flex:1; overflow:hidden;">
-                                        <div id="simTrackTitle" style="font-size:16px; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chill Lofi Vibes</div>
-                                        <div id="simTrackMeta" style="font-size:12px; color:#00F2FE; margin-top:4px;">MP3 • 320kbps • 44.1kHz • SD Card</div>
-                                        <div style="font-size:11px; color:#a0aec0; margin-top:2px;">FreeRTOS Task: CORE 0 (DMA I2S)</div>
+                                        <div id="simTrackTitle" style="font-size:15px; font-weight:700; color:#ffffff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Chill Lofi Vibes</div>
+                                        <div id="simTrackMeta" style="font-size:11px; color:#00F2FE; margin-top:3px;">MP3 • 320kbps • 44.1kHz • SD Card</div>
+                                        <div style="font-size:10px; color:#94a3b8; margin-top:2px;">FreeRTOS Task: CORE 0 (DMA I2S)</div>
                                     </div>
                                 </div>
 
-                                <!-- Progress Slider & Timers -->
                                 <div style="display:flex; flex-direction:column; gap:4px;">
                                     <input type="range" min="0" max="214" value="0" id="simMusicProgress" style="width:100%; accent-color:#00F2FE; cursor:pointer;" oninput="seekMusic(this.value)">
-                                    <div style="display:flex; justify-content:space-between; font-size:11px; color:#a0aec0; font-family:monospace;">
+                                    <div style="display:flex; justify-content:space-between; font-size:10.5px; color:#94a3b8; font-family:var(--font-mono);">
                                         <span id="simCurTime">00:00</span>
                                         <span id="simTotalTime">03:34</span>
                                     </div>
                                 </div>
 
-                                <!-- Playback Controls (⏮ ▶/⏸ ⏭) -->
                                 <div class="music-ctrl-box">
-                                    <button class="music-ctrl-btn" onclick="prevMusicTrack()" title="Bài trước (Previous)">⏮</button>
-                                    <button class="music-play-btn" id="simPlayBtn" onclick="toggleMusicPlay()" title="Phát / Tạm dừng (Play/Pause)">▶</button>
-                                    <button class="music-ctrl-btn" onclick="nextMusicTrack()" title="Bài kế tiếp (Next)">⏭</button>
+                                    <button class="music-ctrl-btn" onclick="prevMusicTrack()" title="Bài trước">⏮</button>
+                                    <button class="music-play-btn" id="simPlayBtn" onclick="toggleMusicPlay()" title="Phát / Tạm dừng">▶</button>
+                                    <button class="music-ctrl-btn" onclick="nextMusicTrack()" title="Bài kế tiếp">⏭</button>
                                 </div>
 
-                                <!-- Volume Slider -->
-                                <div style="background:#121824; border-radius:8px; padding:6px 12px; display:flex; align-items:center; gap:10px;">
-                                    <span style="color:#FFB300; font-size:13px;">🔊</span>
-                                    <input type="range" min="0" max="100" value="80" id="simMusicVol" style="flex:1; accent-color:#FFB300; cursor:pointer;" oninput="changeMusicVol(this.value)">
-                                    <span id="simMusicVolVal" style="color:#FFB300; font-size:11px; font-weight:700; width:34px; text-align:right;">80%</span>
+                                <div style="background:#0f172a; border-radius:8px; padding:5px 10px; display:flex; align-items:center; gap:8px;">
+                                    <span style="color:#F59E0B; font-size:12px;">🔊</span>
+                                    <input type="range" min="0" max="100" value="80" id="simMusicVol" style="flex:1; accent-color:#F59E0B; cursor:pointer;" oninput="changeMusicVol(this.value)">
+                                    <span id="simMusicVolVal" style="color:#F59E0B; font-size:11px; font-weight:700; width:32px; text-align:right;">80%</span>
                                 </div>
                             </div>
                         </div>
+
                         <!-- GOOGLE MAPS PRO MAX -->
                         <div class="map-view-container" id="mapsAppView" style="display:none;">
                             <canvas id="mapCanvas" width="720" height="400"></canvas>
 
-                            <!-- Floating HUD Top-Left: Roadmap / Satellite Toggle -->
                             <button class="floating-pill-top-left" id="hudMapTypeBtn" onclick="toggleMapType()">
                                 <span id="hudMapTypeIcon">🛣️</span> <span id="hudMapTypeText">Đường Phố</span>
                             </button>
 
-                            <!-- Floating HUD Top Center: Vị trí & Mức Zoom -->
                             <div class="floating-pill-top" id="hudCityPill">
                                 <span style="color:#00F2FE;">●</span> <span id="hudCityText">📍 Hà Nội (Hồ Gươm) • Z15</span>
                             </div>
 
-                            <!-- Floating HUD Bottom-Left: MicroSD Cache & Google API -->
                             <div class="floating-pill-bottom" id="hudNetPill" onclick="triggerSimMapReload()">
                                 <span id="hudNetDot">💾</span> <span id="hudNetText">SD Cache Hit</span>
                             </div>
 
-                            <!-- Floating Controls Right: Zoom [+] và [-] -->
                             <div class="floating-controls-right">
-                                <button class="hud-btn" onclick="zoomMap(1)" title="Phóng to (Zoom In)">＋</button>
-                                <button class="hud-btn" onclick="zoomMap(-1)" title="Thu nhỏ (Zoom Out)">－</button>
-                                <button class="hud-btn" style="color:#FA8231; width:48px;" onclick="nextCity()" title="Đổi thành phố">📍</button>
+                                <button class="hud-btn" onclick="zoomMap(1)" title="Phóng to">＋</button>
+                                <button class="hud-btn" onclick="zoomMap(-1)" title="Thu nhỏ">－</button>
+                                <button class="hud-btn" style="color:#F59E0B;" onclick="nextCity()" title="Đổi thành phố">📍</button>
                             </div>
 
-                            <!-- Floating D-Pad Bottom-Right: 4 nút điều hướng Pan -->
                             <div class="floating-dpad">
                                 <div></div>
                                 <button class="dpad-btn" onclick="panMap(0, 1)" title="Lên Bắc">▲</button>
                                 <div></div>
                                 <button class="dpad-btn" onclick="panMap(-1, 0)" title="Sang Tây">◀</button>
-                                <button class="dpad-btn" style="font-size:10px; color:#718096;" onclick="renderMap()">•</button>
+                                <button class="dpad-btn" style="font-size:10px; color:#64748b;" onclick="renderMap()">•</button>
                                 <button class="dpad-btn" onclick="panMap(1, 0)" title="Sang Đông">▶</button>
                                 <div></div>
                                 <button class="dpad-btn" onclick="panMap(0, -1)" title="Xuống Nam">▼</button>
@@ -1363,43 +1556,40 @@
 
                         <!-- VOICE AI & AUDIO LAB PRO MAX -->
                         <div class="audio-body" id="audioAppView" style="display:none;">
-                            <!-- Cột Trái: Microphone MEMS Live Waveform & VU Meter -->
-                            <div class="audio-card" style="border-color:#00F2FE;">
-                                <div class="audio-card-title" style="color:#00F2FE;">
+                            <div class="audio-card">
+                                <div style="font-weight:700; color:#00F2FE; font-size:12.5px;">
                                     <span>🎙️ Microphone MEMS (Live Telemetry)</span>
                                 </div>
                                 <div class="vu-meter-bar">
                                     <div class="vu-meter-fill" id="simVuMeterFill"></div>
                                 </div>
-                                <div style="display:flex; justify-content:space-between; font-size:11.5px; color:#a0aec0;">
+                                <div style="display:flex; justify-content:space-between; font-size:11px; color:#94a3b8;">
                                     <span id="simMicLevel">Cường độ: 0%</span>
                                     <span id="simMicDb">-60.0 dB (Im lặng)</span>
                                 </div>
-                                <canvas id="waveCanvas" width="320" height="180"></canvas>
-                                <div style="font-size:11px; color:#718096; margin-top:auto;">
+                                <canvas id="waveCanvas" width="320" height="150" style="border-radius:8px;"></canvas>
+                                <div style="font-size:10.5px; color:#64748b;">
                                     I2S DIN: GPIO 16 • WS: 21 • BCK: 18 • 16kHz 16-Bit
                                 </div>
                             </div>
 
-                            <!-- Cột Phải: Speaker Control, Soundboard & PSRAM Voice Memo -->
-                            <div class="audio-card" style="border-color:#FFB300;">
+                            <div class="audio-card">
                                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <span class="audio-card-title" style="color:#FFB300;">🔊 Loa Ngoài FM8002E</span>
-                                    <span id="simVolLabel" style="font-size:12px; font-weight:700; color:#FFB300;">80%</span>
+                                    <span style="font-weight:700; color:#F59E0B; font-size:12.5px;">🔊 Loa Ngoài FM8002E</span>
+                                    <span id="simVolLabel" style="font-size:11px; font-weight:700; color:#F59E0B;">80%</span>
                                 </div>
-                                <input type="range" min="0" max="100" value="80" style="width:100%; accent-color:#FFB300;" oninput="setSimVolume(this.value)">
+                                <input type="range" min="0" max="100" value="80" style="width:100%; accent-color:#F59E0B;" oninput="setSimVolume(this.value)">
 
-                                <div style="font-size:11.5px; font-weight:600; color:#cbd5e0; margin-top:4px;">
-                                    🔔 Thử Loa Ngoài (Web Audio API Real Sound):
+                                <div style="font-size:11px; font-weight:600; color:#cbd5e1; margin-top:2px;">
+                                    🔔 Thử Loa Ngoài (Web Audio API Synthesizer):
                                 </div>
                                 <div class="soundboard-grid">
                                     <button class="snd-btn" onclick="playSoundEffect('chime')">🔔 Chime</button>
                                     <button class="snd-btn" onclick="playSoundEffect('beep')">⚡ Beep</button>
                                     <button class="snd-btn" onclick="playSoundEffect('melody')">🎵 Melody</button>
-                                    <button class="snd-btn" style="border-color:#9D4EDD;" onclick="playSoundEffect('xiaozhi')">🤖 XiaoZhi</button>
+                                    <button class="snd-btn" style="border-color:#a855f7;" onclick="playSoundEffect('xiaozhi')">🤖 XiaoZhi</button>
                                 </div>
 
-                                <!-- PSRAM Voice Memo Box -->
                                 <div class="voice-memo-box">
                                     <div style="font-size:11.5px; font-weight:700; color:#00F2FE;">
                                         🎙️ Ghi Âm & Phát Lại (8MB Octal PSRAM)
@@ -1408,11 +1598,11 @@
                                         <button class="snd-btn" id="simRecBtn" style="background:#dc2626; border-color:#ef4444; flex:1;" onclick="toggleSimRecord()">🔴 Thu Âm</button>
                                         <button class="snd-btn" id="simPlayBtn" style="background:#16a34a; border-color:#22c55e; flex:1;" onclick="toggleSimPlayback()">🟢 Phát Lại</button>
                                     </div>
-                                    <div style="font-size:11px; color:#a0aec0; display:flex; justify-content:space-between;" id="simMemoStatus">
+                                    <div style="font-size:10.5px; color:#94a3b8; display:flex; justify-content:space-between;" id="simMemoStatus">
                                         <span>Sẵn sàng ghi âm</span>
                                         <span>0.0s / 10s</span>
                                     </div>
-                                    <div class="vu-meter-bar" style="height:6px;">
+                                    <div class="vu-meter-bar" style="height:5px;">
                                         <div class="vu-meter-fill" id="simMemoProgress" style="background:#00F2FE; width:0%;"></div>
                                     </div>
                                 </div>
@@ -1422,85 +1612,76 @@
                         <!-- SYSTEM MONITOR PRO MAX -->
                         <div class="system-body" id="systemAppView" style="display:none;">
                             <div class="gauges-row">
-                                <!-- Dual Arc 1: CPU -->
                                 <div class="arc-card">
                                     <svg class="arc-svg" viewBox="0 0 100 100">
-                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#1f2937" stroke-width="8" stroke-dasharray="190" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(135 50 50)"/>
-                                        <circle id="arcCpuPath" cx="50" cy="50" r="40" fill="none" stroke="#00F2FE" stroke-width="8" stroke-dasharray="190" stroke-dashoffset="120" stroke-linecap="round" transform="rotate(135 50 50)"/>
+                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" stroke-width="7" stroke-dasharray="190" stroke-dashoffset="0" stroke-linecap="round"/>
+                                        <circle id="arcCpuPath" cx="50" cy="50" r="40" fill="none" stroke="#00F2FE" stroke-width="7" stroke-dasharray="190" stroke-dashoffset="120" stroke-linecap="round"/>
                                     </svg>
                                     <div class="arc-center-text" id="arcCpuVal">35%<span>CPU</span></div>
                                 </div>
 
-                                <!-- Dual Arc 2: RAM -->
                                 <div class="arc-card">
                                     <svg class="arc-svg" viewBox="0 0 100 100">
-                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#1f2937" stroke-width="8" stroke-dasharray="190" stroke-dashoffset="0" stroke-linecap="round" transform="rotate(135 50 50)"/>
-                                        <circle id="arcRamPath" cx="50" cy="50" r="40" fill="none" stroke="#00e676" stroke-width="8" stroke-dasharray="190" stroke-dashoffset="135" stroke-linecap="round" transform="rotate(135 50 50)"/>
+                                        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" stroke-width="7" stroke-dasharray="190" stroke-dashoffset="0" stroke-linecap="round"/>
+                                        <circle id="arcRamPath" cx="50" cy="50" r="40" fill="none" stroke="#10B981" stroke-width="7" stroke-dasharray="190" stroke-dashoffset="135" stroke-linecap="round"/>
                                     </svg>
                                     <div class="arc-center-text" id="arcRamVal">28%<span>RAM</span></div>
                                 </div>
 
-                                <!-- Telemetry Card -->
                                 <div class="telemetry-card">
-                                    <div style="color:#00e676; font-weight:600;" id="chipTemp">🔥 Temp: 41.8 °C</div>
-                                    <div style="color:#00F2FE; font-weight:600;">💾 PSRAM: 1.1 / 8.0 MB</div>
-                                    <div style="color:#a0aec0;" id="uptimeStats">⏱ Up: 00:01:25</div>
+                                    <div style="color:#10B981; font-weight:700;" id="chipTemp">🔥 Temp: 41.8 °C</div>
+                                    <div style="color:#00F2FE; font-weight:700;">💾 PSRAM: 1.1 / 8.0 MB</div>
+                                    <div style="color:#94a3b8;" id="uptimeStats">⏱ Up: 00:01:25</div>
                                 </div>
                             </div>
 
-                            <!-- Live Line Chart -->
                             <div class="chart-container">
                                 <div class="chart-header">
                                     <span style="color:#00F2FE;">⚡ CPU (Cyan) vs RAM (Green) History</span>
-                                    <span style="color:#718096;">24-Second Realtime Feed</span>
+                                    <span style="color:#64748b;">24-Second Realtime Feed</span>
                                 </div>
-                                <svg id="liveChart" viewBox="0 0 600 120">
-                                    <!-- Grid lines -->
+                                <svg id="liveChart" viewBox="0 0 600 120" style="width:100%; height:110px;">
                                     <line x1="0" y1="30" x2="600" y2="30" stroke="#1a2233" stroke-dasharray="4"/>
                                     <line x1="0" y1="60" x2="600" y2="60" stroke="#1a2233" stroke-dasharray="4"/>
                                     <line x1="0" y1="90" x2="600" y2="90" stroke="#1a2233" stroke-dasharray="4"/>
-                                    <!-- Polyline for CPU & RAM -->
-                                    <polyline id="chartCpuLine" fill="none" stroke="#00F2FE" stroke-width="2" points=""/>
-                                    <polyline id="chartRamLine" fill="none" stroke="#00e676" stroke-width="2" points=""/>
+                                    <polyline id="chartCpuLine" fill="none" stroke="#00F2FE" stroke-width="2.2" points=""/>
+                                    <polyline id="chartRamLine" fill="none" stroke="#10B981" stroke-width="2.2" points=""/>
                                 </svg>
                             </div>
                         </div>
 
-                        <!-- WIFI SETTINGS APP (SPLIT 2-COLUMN VIEW) -->
+                        <!-- WIFI SETTINGS APP -->
                         <div class="wifi-body" id="wifiAppView" style="display:none;">
-                            <!-- Nửa bên trái: Danh sách mạng quét được + nút Refresh -->
                             <div class="wifi-left-col">
                                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <button class="test-btn" style="padding:5px 12px; font-size:12px;" onclick="simScanWifi()">🔄 Quét Lại</button>
-                                    <span id="simScanCount" style="font-size:11.5px; color:#00e676;">4 mạng tìm thấy</span>
+                                    <button class="test-btn" style="padding:4px 10px; font-size:11.5px;" onclick="simScanWifi()">🔄 Quét Lại</button>
+                                    <span id="simScanCount" style="font-size:11px; color:#10B981;">4 mạng tìm thấy</span>
                                 </div>
                                 <div class="wifi-list" id="wifiNetworkList">
                                     <!-- Items rendered via JS -->
                                 </div>
                             </div>
 
-                            <!-- Nửa bên phải: Hộp nhập mật khẩu, bàn phím ảo, nhãn trạng thái -->
                             <div class="wifi-right-col">
                                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <span id="simTargetSsid" style="font-size:13px; font-weight:700; color:#00F2FE;">Mạng: Chưa chọn</span>
+                                    <span id="simTargetSsid" style="font-size:12.5px; font-weight:700; color:#00F2FE;">Mạng: Chưa chọn</span>
                                 </div>
 
                                 <div style="display:flex; gap:6px;">
                                     <input type="password" id="simWifiPass" placeholder="Nhập mật khẩu WiFi..." 
-                                           style="flex:1; background:#0d1117; border:1px solid #334155; border-radius:6px; color:#fff; padding:6px 10px; font-size:12px; outline:none;" />
-                                    <button onclick="toggleSimPassEye()" style="background:#2d3748; border:1px solid #4a5568; color:#fff; border-radius:6px; padding:0 10px; cursor:pointer;" id="simEyeBtn">👁</button>
+                                           style="flex:1; background:#0b0f17; border:1px solid #334155; border-radius:6px; color:#fff; padding:6px 10px; font-size:12px; outline:none;" />
+                                    <button onclick="toggleSimPassEye()" style="background:#1e293b; border:1px solid #475569; color:#fff; border-radius:6px; padding:0 8px; cursor:pointer;" id="simEyeBtn">👁</button>
                                 </div>
 
                                 <div style="display:flex; gap:8px;">
-                                    <button class="snd-btn" id="simConnectBtn" style="background:#00e676; border-color:#00e676; color:#0a0d14; flex:1; font-weight:700;" onclick="simConnectCurrentWifi()">⚡ Kết Nối</button>
+                                    <button class="snd-btn" id="simConnectBtn" style="background:#10B981; border-color:#10B981; color:#07090e; flex:1; font-weight:800;" onclick="simConnectCurrentWifi()">⚡ Kết Nối</button>
                                     <button class="snd-btn" id="simForgetBtn" style="background:#7c2d12; border-color:#dc2626; flex:1;" onclick="simForgetWifi()">🗑 Quên NVS</button>
                                 </div>
 
-                                <div id="simWifiStatus" style="font-size:11.5px; color:#a0aec0; min-height:16px;">
+                                <div id="simWifiStatus" style="font-size:11px; color:#94a3b8; min-height:16px;">
                                     ⚪ Vui lòng chọn một mạng bên trái
                                 </div>
 
-                                <!-- Bàn phím ảo cảm ứng LVGL Keyboard Mockup -->
                                 <div class="virtual-keyboard" id="simVirtualKeyboard">
                                     <!-- Keys rendered via JS -->
                                 </div>
@@ -1510,46 +1691,66 @@
                         <!-- SETTINGS PRO MAX -->
                         <div class="settings-body" id="settingsAppView" style="display:none;">
                             <div class="settings-card">
-                                <div style="display:flex; justify-content:space-between; font-weight:700; color:#FFB300;">
+                                <div style="display:flex; justify-content:space-between; font-weight:700; color:#F59E0B; font-size:13px;">
                                     <span>☀️ Độ Sáng Màn Hình LCD (PWM):</span>
                                     <span id="brightVal">85%</span>
                                 </div>
-                                <input type="range" min="10" max="100" value="85" style="width:100%; accent-color:#FFB300;" oninput="changeBrightness(this.value)">
+                                <input type="range" min="10" max="100" value="85" style="width:100%; accent-color:#F59E0B;" oninput="changeBrightness(this.value)">
                             </div>
 
                             <div class="settings-card">
-                                <div style="font-weight:700; color:#fff;">🎨 Màu Chủ Đề Accent Pro Max:</div>
+                                <div style="font-weight:700; color:#fff; font-size:13px;">🎨 Màu Chủ Đề Accent Pro Max:</div>
                                 <div class="theme-pills">
                                     <div class="theme-pill" style="background:#00F2FE;" onclick="setTheme('#00F2FE')">Cyan</div>
-                                    <div class="theme-pill" style="background:#00E676;" onclick="setTheme('#00E676')">Emerald</div>
-                                    <div class="theme-pill" style="background:#FF3B30;" onclick="setTheme('#FF3B30')">Red</div>
-                                    <div class="theme-pill" style="background:#9D4EDD;" onclick="setTheme('#9D4EDD')">Purple</div>
+                                    <div class="theme-pill" style="background:#10B981;" onclick="setTheme('#10B981')">Emerald</div>
+                                    <div class="theme-pill" style="background:#FF3B5C;" onclick="setTheme('#FF3B5C')">Red</div>
+                                    <div class="theme-pill" style="background:#A855F7;" onclick="setTheme('#A855F7')">Purple</div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- SENSORS PRO MAX -->
                         <div class="settings-body" id="sensorsAppView" style="display:none;">
-                            <div class="settings-card" style="align-items:center; text-align:center; padding:30px 20px;">
-                                <div style="font-size:48px; margin-bottom:10px;">🧭</div>
-                                <div style="font-size:18px; font-weight:700; color:#3A86FF;">La Bàn Kỹ Thuật Số & Cảm Biến IMU</div>
-                                <div style="font-size:14px; color:#fff; margin-top:10px;">Hướng: 180° Nam (South) • Độ lệch: +1.2°</div>
-                                <div style="font-size:13px; color:#718096; margin-top:6px;">Góc nghiêng (Pitch / Roll): 0.2° | -0.5° • 1013.25 hPa</div>
+                            <div class="settings-card" style="align-items:center; text-align:center; padding:24px 16px;">
+                                <div style="font-size:44px; margin-bottom:8px; filter:drop-shadow(0 4px 12px rgba(59,130,246,0.5));">🧭</div>
+                                <div style="font-size:16px; font-weight:800; color:#3B82F6;">La Bàn Kỹ Thuật Số & Cảm Biến IMU</div>
+                                <div style="font-size:13px; color:#fff; margin-top:8px;">Hướng: 180° Nam (South) • Độ lệch: +1.2°</div>
+                                <div style="font-size:11.5px; color:#94a3b8; margin-top:4px;">Góc nghiêng (Pitch / Roll): 0.2° | -0.5° • 1013.25 hPa</div>
+                            </div>
+                        </div>
+
+                        <!-- CAMERA IP APP (ỨNG DỤNG THỨ 9) -->
+                        <div class="settings-body" id="cameraAppView" style="display:none;">
+                            <div class="settings-card" style="padding:10px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; color:#6366f1; font-weight:700;">
+                                    <span>📷 Network IP Camera Stream</span>
+                                    <span style="color:#10B981;">● 30 FPS • 240x320</span>
+                                </div>
+                                <div style="width:100%; height:200px; background:#000; border-radius:10px; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.1);">
+                                    <div style="position:absolute; top:8px; left:8px; font-size:10px; color:#10B981; font-family:var(--font-mono); background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px;">LIVE • HTTP JPEG SNAPSHOT</div>
+                                    <div style="font-size:48px; opacity:0.3;">📹</div>
+                                    <div style="position:absolute; width:40px; height:40px; border:1px dashed rgba(0,242,254,0.5); border-radius:4px;"></div>
+                                    <div style="position:absolute; bottom:8px; right:8px; font-size:10px; color:#94a3b8; font-family:var(--font-mono); background:rgba(0,0,0,0.6); padding:2px 6px; border-radius:4px;">192.168.1.120:8080</div>
+                                </div>
+                                <div style="display:flex; gap:8px; margin-top:4px;">
+                                    <button class="snd-btn" style="flex:1; background:#4338ca; border-color:#6366f1;" onclick="playSoundEffect('beep')">📸 Chụp Snapshot</button>
+                                    <button class="snd-btn" style="flex:1; background:#1e293b;" onclick="playSoundEffect('chime')">🔄 Làm Mới Luồng</button>
+                                </div>
                             </div>
                         </div>
 
                         <!-- ABOUT OS PRO MAX -->
                         <div class="settings-body" id="aboutAppView" style="display:none;">
-                            <div class="settings-card" style="border-color:#9D4EDD; padding:24px;">
-                                <div style="font-size:18px; font-weight:700; color:#9D4EDD; margin-bottom:10px;">✨ ES3C28P 2.8" Mini OS</div>
-                                <div style="font-size:13px; color:#cbd5e0; line-height:1.8;">
+                            <div class="settings-card" style="border-color:#A855F7; padding:18px;">
+                                <div style="font-size:16px; font-weight:800; color:#A855F7; margin-bottom:8px;">✨ ES3C28P 2.8" Mini OS</div>
+                                <div style="font-size:12px; color:#cbd5e1; line-height:1.7;">
                                     • <b>Hệ điều hành:</b> Mini OS Pro Max v2.5 (Build 2026)<br>
                                     • <b>Phần cứng:</b> ES3C28P ESP32-S3 N16R8<br>
-                                    • <b>Màn hình:</b> 2.8 inch IPS 240x320 Portrait Flipped (ILI9341V SPI 40MHz DMA)<br>
-                                    • <b>Cảm ứng:</b> Điện dung đa điểm I2C (Capacitive Touch FT6336U/GT911)<br>
-                                    • <b>Vi xử lý:</b> ESP32-S3 Dual-Core LX7 @ 240MHz (Core 0/1 Isolation)<br>
-                                    • <b>Bộ nhớ:</b> 16MB Flash • 8MB Octal OPI PSRAM • 512KB SRAM<br>
-                                    • <b>Bản đồ:</b> Google Maps Dual-Engine + TJpgDec Downloader
+                                    • <b>Màn hình:</b> 2.8" IPS 240x320 Portrait Flipped (ILI9341V DMA)<br>
+                                    • <b>Cảm ứng:</b> Điện dung đa điểm I2C (FT6336U/GT911)<br>
+                                    • <b>Vi xử lý:</b> ESP32-S3 Dual-Core LX7 @ 240MHz<br>
+                                    • <b>Bộ nhớ:</b> 16MB Flash • 8MB Octal OPI PSRAM<br>
+                                    • <b>Bản đồ & AI:</b> Google Maps Dual-Engine + XiaoZhi Gemini
                                 </div>
                             </div>
                         </div>
@@ -1558,26 +1759,26 @@
                 </div>
 
                 <!-- 4. TOUCH TO WAKE & SLEEP OVERLAY -->
-                <div id="sleepOverlay" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.98); z-index:9999; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; color:#718096; font-size:12px;" onclick="onSleepOverlayClick(event)">
+                <div id="sleepOverlay" style="display:none; position:absolute; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.98); z-index:9999; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; color:#94a3b8; font-size:12px;" onclick="onSleepOverlayClick(event)">
                     <span style="font-size:36px; margin-bottom:8px;">💤</span>
-                    <span style="font-weight:600; color:#cbd5e0; font-size:13px;">Màn Hình Đang Ngủ (0% PWM • Tạm Dừng Render LVGL)</span>
-                    <span style="font-size:11.5px; margin-top:6px; color:#00F2FE;">👆 Chạm bất kỳ đâu để Đánh thức tức thì (Không chạm nhầm nút)</span>
+                    <span style="font-weight:700; color:#f1f5f9; font-size:13px;">Màn Hình Đang Ngủ (0% PWM • Tạm Dừng Render)</span>
+                    <span style="font-size:11px; margin-top:6px; color:#00F2FE;">👆 Chạm bất kỳ đâu để Đánh thức tức thì</span>
                 </div>
 
             </div>
         </div>
     </div>
 
-    <!-- QUICK APP NAVIGATION DOCK (PHÍM TẮT MỞ APP TRỰC TIẾP) -->
-    <div style="width:772px; display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:14px; padding:10px 14px; background:#161b22; border-radius:12px; border:1px solid #30363d; box-shadow:0 4px 14px rgba(0,0,0,0.4);">
-        <span style="color:#00F2FE; font-size:13px; font-weight:700; display:flex; align-items:center; gap:6px;">🚀 Phím Tắt Mở App Nhanh:</span>
+    <!-- QUICK APP NAVIGATION DOCK -->
+    <div class="dock-container">
+        <span style="color:#00F2FE; font-size:12.5px; font-weight:800; display:flex; align-items:center; gap:6px;">🚀 Phím Tắt Mở App Nhanh:</span>
         <div style="display:flex; gap:8px; flex-wrap:wrap;">
-            <button class="test-btn" style="background:linear-gradient(135deg, #9D4EDD 0%, #7928ca 100%); color:#ffffff; font-weight:700; border:1px solid #c084fc; box-shadow:0 0 10px rgba(157,78,221,0.4);" onclick="openApp('music')" title="Mở trực tiếp ứng dụng Music Player">🎵 Mở Music Player</button>
-            <button class="test-btn" style="background:linear-gradient(135deg, #00F2FE 0%, #0099ff 100%); color:#0a0d14; font-weight:700; border:1px solid #00F2FE;" onclick="openApp('ai_voice')">🤖 AI Voice</button>
-            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('maps')">📍 Google Maps</button>
-            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('wifi')">📶 WiFi Hub</button>
-            <button class="test-btn" style="background:#1e293b; color:#fff; border:1px solid #334155;" onclick="openApp('system')">⚡ System</button>
-            <button class="test-btn" style="background:#334155; color:#cbd5e0; border:1px solid #475569;" onclick="closeApp()">🏠 Desktop</button>
+            <button class="test-btn" style="background:linear-gradient(135deg, #a855f7 0%, #7928ca 100%); color:#ffffff; border-color:#c084fc; box-shadow:0 0 10px rgba(168,85,247,0.4);" onclick="openApp('music')" title="Mở Music Player">🎵 Mở Music Player</button>
+            <button class="test-btn" style="background:linear-gradient(135deg, #00F2FE 0%, #0099ff 100%); color:#07090e; border-color:#00F2FE; font-weight:800;" onclick="openApp('ai_voice')">🤖 AI Voice</button>
+            <button class="test-btn" onclick="openApp('maps')">📍 Google Maps</button>
+            <button class="test-btn" onclick="openApp('wifi')">📶 WiFi Hub</button>
+            <button class="test-btn" onclick="openApp('system')">⚡ System</button>
+            <button class="test-btn" style="background:#334155;" onclick="closeApp()">🏠 Desktop</button>
         </div>
     </div>
 
@@ -1589,7 +1790,7 @@
                 <button class="test-btn" style="background:#475569;" onclick="simAdvanceInactivity(60)">⏩ 60s (Dim 20%)</button>
                 <button class="test-btn" style="background:#334155;" onclick="simAdvanceInactivity(120)">⏩ 120s (Sleep 0%)</button>
                 <button class="test-btn" style="background:#059669;" onclick="wakePowerManager()">👆 Chạm Đánh Thức</button>
-                <button class="test-btn" id="runTestBtn" onclick="runAllTests()">▶ Chạy Kiểm Thử Tự Động</button>
+                <button class="test-btn" id="runTestBtn" style="background:#0284c7; color:#fff;" onclick="runAllTests()">▶ Chạy Kiểm Thử Tự Động</button>
             </div>
         </div>
         <div class="test-logs" id="testLogs">
@@ -1636,8 +1837,8 @@
                     if (overlay) overlay.style.display = "flex";
                 }
                 pill.innerText = `💤 SLEEP (0%, ${inactivitySec}s)`;
-                pill.style.color = "#a0aec0";
-                pill.style.borderColor = "#718096";
+                pill.style.color = "#94a3b8";
+                pill.style.borderColor = "#64748b";
             } else if (inactivitySec >= 60) {
                 if (powerState !== 'DIMMED') {
                     powerState = 'DIMMED';
@@ -1680,7 +1881,6 @@
             updatePowerState();
         }
 
-        // Bắt sự kiện chạm tại LCD Screen (Capturing phase) để chặn click nhầm khi đang Dimmed hoặc Sleep
         window.addEventListener('DOMContentLoaded', () => {
             const screen = document.getElementById('lcdScreen');
             if (screen) {
@@ -1696,7 +1896,6 @@
                 }, true);
             }
 
-            // Tự động mở App theo tham số URL (ví dụ: ?app=music)
             const urlParams = new URLSearchParams(window.location.search);
             const targetApp = urlParams.get('app');
             if (targetApp) {
@@ -1713,7 +1912,6 @@
             cpuPoints.shift();
             cpuPoints.push(nextCpu);
 
-            // Cập nhật arc CPU
             let arcCpuPath = document.getElementById('arcCpuPath');
             let arcCpuVal = document.getElementById('arcCpuVal');
             if (arcCpuPath && arcCpuVal) {
@@ -1722,7 +1920,6 @@
                 arcCpuVal.innerHTML = `${nextCpu}%<span>CPU</span>`;
             }
 
-            // Vẽ Polyline SVG
             let cpuPoly = document.getElementById('chartCpuLine');
             let ramPoly = document.getElementById('chartRamLine');
             if (cpuPoly && ramPoly) {
@@ -1735,7 +1932,6 @@
         }
         updateLiveChart();
 
-        // Danh sách thành phố WGS84
         const cities = [
             { name: "Hà Nội (Hồ Gươm)", lat: 21.0285, lon: 105.8542, z: 15 },
             { name: "TP.HCM (Bến Thành)", lat: 10.7725, lon: 106.6980, z: 15 },
@@ -1748,19 +1944,17 @@
         let curLat = cities[0].lat;
         let curLon = cities[0].lon;
         let curZoom = cities[0].z;
-        let mapType = 'roadmap'; // 'roadmap' hoặc 'satellite'
+        let mapType = 'roadmap';
         let isOnline = true;
         let radarStep = 0;
 
-        // Bộ nhớ đệm MicroSD giả lập (Set các key /maps/{lat}_{lon}_z{zoom}_{type}.jpg)
         const mockSdCache = new Set(["21.0285_105.8542_z15_roadmap"]);
 
-        // Quản lý mở/đóng App
         function openApp(appId) {
             document.getElementById('desktopView').style.display = 'none';
             document.getElementById('appWindow').style.display = 'flex';
 
-            const views = ['mapsAppView', 'audioAppView', 'systemAppView', 'wifiAppView', 'settingsAppView', 'sensorsAppView', 'aboutAppView', 'musicAppView', 'aiVoiceAppView'];
+            const views = ['mapsAppView', 'audioAppView', 'systemAppView', 'wifiAppView', 'settingsAppView', 'sensorsAppView', 'aboutAppView', 'musicAppView', 'aiVoiceAppView', 'cameraAppView'];
             views.forEach(v => {
                 let el = document.getElementById(v);
                 if (el) el.style.display = 'none';
@@ -1775,7 +1969,8 @@
                 'sensors': '🧭 Sensors & Telemetry Pro Max',
                 'about': 'ℹ️ About Mini OS Pro Max',
                 'music': '🎵 Music Player • /music SD Card',
-                'ai_voice': '🤖 XiaoZhi AI Voice • Gemini Assistant'
+                'ai_voice': '🤖 XiaoZhi AI Voice • Gemini Assistant',
+                'camera': '📷 Network IP Camera Streamer'
             };
             document.getElementById('windowTitle').innerText = titles[appId] || 'App';
 
@@ -1806,6 +2001,8 @@
             } else if (appId === 'ai_voice') {
                 document.getElementById('aiVoiceAppView').style.display = 'flex';
                 initAiVoiceSimulator();
+            } else if (appId === 'camera') {
+                document.getElementById('cameraAppView').style.display = 'flex';
             }
         }
 
@@ -1828,8 +2025,8 @@
                 mapType = 'roadmap';
                 document.getElementById('hudMapTypeIcon').innerText = "🛣️";
                 document.getElementById('hudMapTypeText').innerText = "Đường Phố";
-                document.getElementById('hudMapTypeBtn').style.color = "#00E676";
-                document.getElementById('hudMapTypeBtn').style.borderColor = "#00E676";
+                document.getElementById('hudMapTypeBtn').style.color = "#10B981";
+                document.getElementById('hudMapTypeBtn').style.borderColor = "#10B981";
             }
             triggerSimMapReload();
         }
@@ -1844,9 +2041,9 @@
                 if (dot) dot.innerText = "💾";
                 if (txt) {
                     txt.innerText = "SD Cache Hit (/maps/" + cacheKey + ".jpg)";
-                    txt.style.color = "#00e676";
+                    txt.style.color = "#10B981";
                 }
-                if (pill) pill.style.borderColor = "#00e676";
+                if (pill) pill.style.borderColor = "#10B981";
             } else {
                 if (dot) dot.innerText = "🌐";
                 if (txt) {
@@ -1854,12 +2051,11 @@
                     txt.style.color = "#00F2FE";
                 }
                 if (pill) pill.style.borderColor = "#00F2FE";
-                mockSdCache.add(cacheKey); // Tự động lưu cache sau lần tải đầu tiên
+                mockSdCache.add(cacheKey);
             }
             renderMap();
         }
 
-        // ĐỘNG CƠ BẢN ĐỒ VECTOR PRO MAX VÀ SATELLITE TỔNG HỢP
         function renderMap() {
             const canvas = document.getElementById('mapCanvas');
             if (!canvas) return;
@@ -1867,7 +2063,6 @@
 
             let isSat = (mapType === 'satellite');
 
-            // 1. Nền bản đồ (Obsidian Dark cho Roadmap, Deep Forest Dark cho Satellite)
             ctx.fillStyle = isSat ? "#0b1612" : "#181e29";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -1878,7 +2073,6 @@
             if (offsetY < 0) offsetY += 90;
 
             if (isSat) {
-                // Hiệu ứng ảnh vệ tinh (Satellite Terrain Patterns)
                 ctx.fillStyle = "#14251c";
                 for (let sx = 0; sx < canvas.width; sx += 80) {
                     for (let sy = 0; sy < canvas.height; sy += 70) {
@@ -1886,7 +2080,6 @@
                     }
                 }
 
-                // Địa hình rừng cây / Công viên vệ tinh
                 ctx.fillStyle = "#0e3422";
                 ctx.beginPath();
                 ctx.arc((offsetX + 120) % canvas.width, 140, 95, 0, Math.PI * 2);
@@ -1894,7 +2087,6 @@
                 ctx.arc((offsetX + 420) % canvas.width, 240, 110, 0, Math.PI * 2);
                 ctx.fill();
 
-                // Lưới địa hình và vân đồi núi
                 ctx.strokeStyle = "rgba(0, 242, 254, 0.12)";
                 ctx.lineWidth = 1;
                 ctx.beginPath();
@@ -1904,7 +2096,6 @@
                 }
                 ctx.stroke();
             } else {
-                // 2. Khối nhà đô thị (Urban blocks)
                 ctx.fillStyle = "#222b38";
                 for (let bx = offsetX + 20; bx < canvas.width - 40; bx += 110) {
                     for (let by = offsetY + 20; by < canvas.height - 40; by += 90) {
@@ -1913,13 +2104,11 @@
                     }
                 }
 
-                // 3. Công viên cây xanh
                 ctx.fillStyle = "#1a362b";
                 ctx.fillRect((offsetX + 30) % canvas.width, 24, 150, 110);
                 ctx.fillRect((offsetX + 300) % canvas.width, 180, 180, 90);
             }
 
-            // 4. Sông hồ mặt nước với viền phản chiếu ánh nước
             for (let y = 0; y < canvas.height; y += 8) {
                 let riverX = Math.sin((y + offsetY * 2) * 0.025) * 44 + (canvas.width / 2) + offsetX - 70;
                 ctx.fillStyle = isSat ? "#0077b6" : "#00a8ff";
@@ -1930,7 +2119,6 @@
                 ctx.fillRect(riverX + 44, y, 2, 8);
             }
 
-            // 5. Mạng lưới đường thứ cấp
             ctx.strokeStyle = isSat ? "rgba(255, 255, 255, 0.15)" : "#2d3748";
             ctx.lineWidth = isSat ? 2.5 : 4;
             ctx.beginPath();
@@ -1942,7 +2130,6 @@
             }
             ctx.stroke();
 
-            // 6. Đại lộ / Cao tốc huyết mạch dạ quang
             let hwyY = (canvas.height / 2) + (offsetY % 70) - 36;
             ctx.strokeStyle = isSat ? "#f59e0b" : "#ea8e18";
             ctx.lineWidth = 7;
@@ -1956,16 +2143,13 @@
             ctx.moveTo(0, hwyY); ctx.lineTo(canvas.width, hwyY + 48);
             ctx.stroke();
 
-            // 7. Tâm ghim vị trí PRO MAX: Vòng sóng Radar xung quanh + Ghim đỏ Google
             let cx = canvas.width / 2;
             let cy = canvas.height / 2;
 
-            // Nhãn bản đồ
             ctx.fillStyle = "#ffffff";
             ctx.font = "bold 13px sans-serif";
             ctx.fillText(cities[cityIdx].name + " • " + (isSat ? "Satellite" : "Roadmap"), cx - 60, cy - 36);
 
-            // Sóng Radar phát xung
             radarStep = (radarStep + 1) % 4;
             ctx.fillStyle = isSat ? "rgba(0, 242, 254, 0.25)" : "rgba(255, 59, 48, 0.18)";
             ctx.beginPath();
@@ -1977,32 +2161,27 @@
             ctx.arc(cx, cy, 24 + radarStep * 4, 0, Math.PI * 2);
             ctx.fill();
 
-            // Bóng đổ ghim
             ctx.fillStyle = "#0a0d14";
             ctx.beginPath();
             ctx.ellipse(cx, cy + 8, 12, 6, 0, 0, Math.PI * 2);
             ctx.fill();
 
-            // Đầu ghim đỏ Google (#FF3B30)
             ctx.fillStyle = "#ff3b30";
             ctx.beginPath();
             ctx.arc(cx, cy - 14, 18, 0, Math.PI * 2);
             ctx.fill();
 
-            // Đỉnh nhọn ghim
             ctx.beginPath();
             ctx.moveTo(cx - 11, cy - 8);
             ctx.lineTo(cx, cy);
             ctx.lineTo(cx + 11, cy - 8);
             ctx.fill();
 
-            // Điểm trắng trung tâm
             ctx.fillStyle = "#ffffff";
             ctx.beginPath();
             ctx.arc(cx, cy - 14, 6, 0, Math.PI * 2);
             ctx.fill();
 
-            // 8. Cập nhật Floating HUD
             document.getElementById('hudCityText').innerText = `📍 ${cities[cityIdx].name} • Z${curZoom}`;
         }
 
@@ -2027,7 +2206,7 @@
         }
 
         // -------------------------------------------------------------
-        // WIFI SETTINGS APP LOGIC (SPLIT 2-COLUMN WITH TOUCH KEYBOARD)
+        // WIFI SETTINGS APP LOGIC
         // -------------------------------------------------------------
         const scannedNetworks = [
             { ssid: "WiFi_NhaToi_2.4G", rssi: -45, enc: true },
@@ -2075,21 +2254,20 @@
         function simScanWifi() {
             const list = document.getElementById('wifiNetworkList');
             const countLbl = document.getElementById('simScanCount');
-            const status = document.getElementById('simWifiStatus');
 
             if (countLbl) {
                 countLbl.innerText = "Đang quét...";
                 countLbl.style.color = "#00F2FE";
             }
             if (list) {
-                list.innerHTML = `<div style="text-align:center; color:#00F2FE; padding:30px 10px; font-size:12px;">Đang quét các kênh tần số 2.4GHz...</div>`;
+                list.innerHTML = `<div style="text-align:center; color:#00F2FE; padding:24px 10px; font-size:12px;">Đang quét các kênh tần số 2.4GHz...</div>`;
             }
 
             setTimeout(() => {
                 renderWifiList();
                 if (countLbl) {
                     countLbl.innerText = `${scannedNetworks.length} mạng tìm thấy`;
-                    countLbl.style.color = "#00e676";
+                    countLbl.style.color = "#10B981";
                 }
             }, 500);
         }
@@ -2106,9 +2284,9 @@
                 item.className = "wifi-card" + (isConn ? " connected" : (isSel ? " selected" : ""));
                 item.innerHTML = `
                     <div style="font-weight:600; color:#fff; display:flex; align-items:center; gap:8px; font-size:12px;">
-                        <span style="color:#00e676;">${isConn ? '🟢' : '📶'}</span> ${net.ssid}
+                        <span style="color:#10B981;">${isConn ? '🟢' : '📶'}</span> ${net.ssid}
                     </div>
-                    <div style="font-size:11px; color:#718096; display:flex; align-items:center; gap:6px;">
+                    <div style="font-size:11px; color:#94a3b8; display:flex; align-items:center; gap:6px;">
                         <span>${net.rssi} dBm</span>
                         <span>${net.enc ? '🔒' : '🌐'}</span>
                     </div>
@@ -2127,7 +2305,7 @@
             } else {
                 input.value = "";
             }
-            document.getElementById('simWifiStatus').innerHTML = `<span style="color:#cbd5e0;">⚪ Nhập mật khẩu cho mạng ${ssid}</span>`;
+            document.getElementById('simWifiStatus').innerHTML = `<span style="color:#cbd5e1;">⚪ Nhập mật khẩu cho mạng ${ssid}</span>`;
             renderWifiList();
         }
 
@@ -2148,27 +2326,24 @@
             const pwd = document.getElementById('simWifiPass').value;
 
             if (!selectedWifiSsid) {
-                status.innerHTML = `<span style="color:#ffb300;">⚠️ Vui lòng chọn một mạng bên trái!</span>`;
+                status.innerHTML = `<span style="color:#F59E0B;">⚠️ Vui lòng chọn một mạng bên trái!</span>`;
                 return;
             }
 
-            status.innerHTML = `<span style="color:#ffb300;">🟡 Đang kết nối tới ${selectedWifiSsid}...</span>`;
+            status.innerHTML = `<span style="color:#F59E0B;">🟡 Đang kết nối tới ${selectedWifiSsid}...</span>`;
 
             setTimeout(() => {
-                // Giả lập kiểm tra mật khẩu: Nếu mạng không mật khẩu hoặc mật khẩu >= 6 ký tự
                 if (pwd.length === 0 && selectedWifiSsid.includes('NhaToi')) {
-                    status.innerHTML = `<span style="color:#ff3b30;">🔴 Sai mật khẩu hoặc kết nối lỗi!</span>`;
+                    status.innerHTML = `<span style="color:#FF3B5C;">🔴 Sai mật khẩu hoặc kết nối lỗi!</span>`;
                     playSoundEffect('beep');
                 } else {
                     connectedWifiSsid = selectedWifiSsid;
                     savedNvsSsid = selectedWifiSsid;
                     savedNvsPass = pwd;
-                    status.innerHTML = `<span style="color:#00e676;">🟢 Thành công! (IP: 192.168.1.116)</span>`;
+                    status.innerHTML = `<span style="color:#10B981;">🟢 Thành công! (IP: 192.168.1.116)</span>`;
                     playSoundEffect('chime');
                     const icon = document.getElementById('wifiIcon');
-                    if (icon) {
-                        icon.style.color = "#00e676";
-                    }
+                    if (icon) icon.style.color = "#10B981";
                     renderWifiList();
                 }
             }, 600);
@@ -2179,13 +2354,12 @@
             savedNvsSsid = "";
             savedNvsPass = "";
             document.getElementById('simWifiPass').value = "";
-            document.getElementById('simWifiStatus').innerHTML = `<span style="color:#ff3b30;">🗑 Đã xóa mạng khỏi Flash NVS</span>`;
+            document.getElementById('simWifiStatus').innerHTML = `<span style="color:#FF3B5C;">🗑 Đã xóa mạng khỏi Flash NVS</span>`;
             const icon = document.getElementById('wifiIcon');
-            if (icon) icon.style.color = "#718096";
+            if (icon) icon.style.color = "#64748b";
             renderWifiList();
         }
 
-        // SETTINGS PRO MAX
         function changeBrightness(val) {
             activeBrightness = Number(val);
             document.getElementById('brightVal').innerText = val + "%";
@@ -2196,13 +2370,9 @@
         }
 
         function setTheme(colorHex) {
-            // Apply accent glow to header
             document.querySelector('.header h1').style.color = colorHex;
         }
 
-        // -------------------------------------------------------------
-        // AUDIO ENGINE: WEB AUDIO API SYNTHESIZER & REAL SOUND
-        // -------------------------------------------------------------
         let audioCtx = null;
         let masterVolume = 80;
         let isMuted = false;
@@ -2266,10 +2436,10 @@
             if (spk) {
                 if (masterVolume === 0) {
                     spk.innerText = "🔇";
-                    spk.style.color = "#718096";
+                    spk.style.color = "#64748b";
                 } else {
                     spk.innerText = "🔊";
-                    spk.style.color = "#FFB300";
+                    spk.style.color = "#F59E0B";
                 }
             }
         }
@@ -2279,17 +2449,14 @@
             let spk = document.getElementById('spkIcon');
             if (isMuted) {
                 spk.innerText = "🔇";
-                spk.style.color = "#718096";
+                spk.style.color = "#64748b";
             } else {
                 spk.innerText = "🔊";
-                spk.style.color = "#FFB300";
+                spk.style.color = "#F59E0B";
                 playTone(880, 60);
             }
         }
 
-        // -------------------------------------------------------------
-        // MICROPHONE LIVE WAVEFORM OSCILLOSCOPE SIMULATOR
-        // -------------------------------------------------------------
         let waveTimer = null;
         let wavePhase = 0;
         let isRecording = false;
@@ -2318,11 +2485,10 @@
             const w = canvas.width;
             const h = canvas.height;
 
-            ctx.fillStyle = "#0d1117";
+            ctx.fillStyle = "#0b0f17";
             ctx.fillRect(0, 0, w, h);
 
-            // Grid lines
-            ctx.strokeStyle = "#1a2233";
+            ctx.strokeStyle = "#1e293b";
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2);
@@ -2330,7 +2496,6 @@
             ctx.moveTo(0, (h * 3) / 4); ctx.lineTo(w, (h * 3) / 4);
             ctx.stroke();
 
-            // Microphone Level Simulation
             let baseLevel = isRecording ? 65 : (25 + Math.sin(wavePhase * 0.4) * 20);
             if (baseLevel < 5) baseLevel = 5;
             let levelPercent = Math.min(100, Math.max(0, Math.floor(baseLevel)));
@@ -2343,11 +2508,10 @@
             let db = document.getElementById('simMicDb');
             if (db) db.innerText = `${dbVal} dB (${levelPercent > 40 ? 'Đang nói...' : 'Môi trường'})`;
 
-            // Draw Neon Waveform
-            ctx.strokeStyle = isRecording ? "#ff3b30" : "#00F2FE";
+            ctx.strokeStyle = isRecording ? "#FF3B5C" : "#00F2FE";
             ctx.lineWidth = 2.2;
             ctx.shadowBlur = 8;
-            ctx.shadowColor = isRecording ? "#ff3b30" : "#00F2FE";
+            ctx.shadowColor = isRecording ? "#FF3B5C" : "#00F2FE";
             ctx.beginPath();
 
             wavePhase += 0.25;
@@ -2364,9 +2528,6 @@
             ctx.shadowBlur = 0;
         }
 
-        // -------------------------------------------------------------
-        // VOICE RECORDER & PLAYBACK SIMULATOR
-        // -------------------------------------------------------------
         function toggleSimRecord() {
             const btn = document.getElementById('simRecBtn');
             const status = document.getElementById('simMemoStatus');
@@ -2397,7 +2558,7 @@
                         toggleSimRecord();
                         return;
                     }
-                    if (status) status.innerHTML = `<span style="color:#ff3b30;">🔴 Đang thu âm từ MEMS Mic...</span><span>${recordedDuration.toFixed(1)}s / 10s</span>`;
+                    if (status) status.innerHTML = `<span style="color:#FF3B5C;">🔴 Đang thu âm từ MEMS Mic...</span><span>${recordedDuration.toFixed(1)}s / 10s</span>`;
                     if (prog) prog.style.width = (recordedDuration * 10) + "%";
                 }, 100);
             }
@@ -2418,7 +2579,7 @@
                 if (status) status.innerHTML = `<span>⏹ Đã dừng phát</span><span>${recordedDuration.toFixed(1)}s</span>`;
             } else {
                 if (recordedDuration <= 0) {
-                    if (status) status.innerHTML = `<span style="color:#ffb300;">⚠️ Chưa có đoạn ghi âm!</span><span>0.0s</span>`;
+                    if (status) status.innerHTML = `<span style="color:#F59E0B;">⚠️ Chưa có đoạn ghi âm!</span><span>0.0s</span>`;
                     return;
                 }
                 if (isRecording) toggleSimRecord();
@@ -2439,14 +2600,11 @@
                     }
                     let pct = Math.min(100, Math.floor((curProg / recordedDuration) * 100));
                     if (prog) prog.style.width = pct + "%";
-                    if (status) status.innerHTML = `<span style="color:#00e676;">🟢 Đang phát lại qua Loa FM8002E...</span><span>${curProg.toFixed(1)}s / ${recordedDuration.toFixed(1)}s</span>`;
+                    if (status) status.innerHTML = `<span style="color:#10B981;">🟢 Đang phát lại qua Loa FM8002E...</span><span>${curProg.toFixed(1)}s / ${recordedDuration.toFixed(1)}s</span>`;
                 }, 100);
             }
         }
 
-        // =============================================================
-        // MUSIC PLAYER SIMULATOR (ESP32-audioI2S & FreeRTOS Core 0)
-        // =============================================================
         const musicTracks = [
             { file: "01_chill_lofi_vibes.mp3", title: "Chill Lofi Vibes (Coffee Beats)", dur: 214 },
             { file: "02_acoustic_sunset.mp3", title: "Acoustic Sunset Melody", dur: 185 },
@@ -2481,10 +2639,10 @@
                 item.className = 'music-track-item' + (idx === currentMusicTrackIdx ? ' active' : '');
                 item.onclick = () => selectMusicTrack(idx);
                 item.innerHTML = `
-                    <span style="font-size:15px; color:${idx === currentMusicTrackIdx ? '#00F2FE' : '#9D4EDD'};">🎵</span>
+                    <span style="font-size:14px; color:${idx === currentMusicTrackIdx ? '#00F2FE' : '#A855F7'};">🎵</span>
                     <div style="flex:1; overflow:hidden;">
                         <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:${idx === currentMusicTrackIdx ? '700' : '500'};">${t.title}</div>
-                        <div style="font-size:11px; color:#718096;">${t.file} • ${formatMusicTime(t.dur)}</div>
+                        <div style="font-size:10px; color:#64748b;">${t.file} • ${formatMusicTime(t.dur)}</div>
                     </div>
                 `;
                 list.appendChild(item);
@@ -2623,9 +2781,6 @@
             }
         }
 
-        // =============================================================
-        // AI VOICE ASSISTANT SIMULATOR (STT -> Gemini AI -> TTS Loa ngoài)
-        // =============================================================
         const simChatHistory = [
             { isUser: false, text: "Xin chào! Tôi là XiaoZhi AI Voice Assistant trên ESP32-S3. Hãy nhấn giữ nút Micro bên dưới để trò chuyện cùng tôi nhé!" }
         ];
@@ -2641,7 +2796,7 @@
 
         function initAiVoiceSimulator() {
             renderChatHistory();
-            updateAiStatus("Nhấn & Giữ để Nói", "#a0aec0");
+            updateAiStatus("Nhấn & Giữ để Nói", "#94a3b8");
         }
 
         function renderChatHistory() {
@@ -2664,7 +2819,7 @@
             container.scrollTop = container.scrollHeight;
         }
 
-        function updateAiStatus(text, color = "#a0aec0") {
+        function updateAiStatus(text, color = "#94a3b8") {
             const lbl = document.getElementById('simPttLabel');
             if (lbl) {
                 lbl.innerText = text;
@@ -2717,28 +2872,23 @@
             const queryPair = aiQueries[aiQueryStep % aiQueries.length];
             aiQueryStep++;
 
-            // 1. Thêm tin nhắn của User
             simChatHistory.push({ isUser: true, text: queryPair.user });
             renderChatHistory();
 
-            // 2. Chuyển sang trạng thái xử lý
-            updateAiStatus("Đang suy nghĩ (Gemini AI)...", "#f59e0b");
+            updateAiStatus("Đang suy nghĩ (Gemini AI)...", "#F59E0B");
 
             await sleep(900);
 
-            // 3. Nhận phản hồi từ AI
             simChatHistory.push({ isUser: false, text: queryPair.ai });
             renderChatHistory();
 
-            // 4. Phát giọng nói phản hồi TTS
-            updateAiStatus("Đang trả lời qua Loa ngoài...", "#00e676");
+            updateAiStatus("Đang trả lời qua Loa ngoài...", "#10B981");
             playSoundEffect('melody');
 
             await sleep(1500);
-            updateAiStatus("Nhấn & Giữ để Nói", "#a0aec0");
+            updateAiStatus("Nhấn & Giữ để Nói", "#94a3b8");
         }
 
-        // BỘ TEST TỰ ĐỘNG PRO MAX (E2E TEST SUITE)
         function logMessage(type, text) {
             const logs = document.getElementById('testLogs');
             const line = document.createElement('div');
@@ -2761,24 +2911,20 @@
             logMessage('info', 'Khởi động bộ kiểm thử tự động UI/UX Pro Max...');
             await sleep(400);
 
-            // Test 1: Top Bar
             logMessage('pass', 'Top Dynamic Status Bar: Logo ● S3 MINI OS, Uptime, Speaker Icon, WiFi hoạt động chuẩn xác');
             await sleep(300);
 
-            // Test 2: Mở Google Maps Pro Max
             logMessage('info', 'Kiểm tra mở Ứng dụng Google Maps Pro Max...');
             openApp('maps');
             await sleep(500);
             logMessage('pass', 'Google Maps: logical canvas 240x268 và Floating HUD hiển thị đúng portrait');
 
-            // Test 3: Test Zoom & Pan
             zoomMap(1);
             await sleep(300);
             panMap(1, 0);
             await sleep(300);
             logMessage('pass', `Google Maps: Zoom Z${curZoom} & D-Pad Pan phản hồi tức thì`);
 
-            // Test 4: Đổi kiểu bản đồ Vệ Tinh (Satellite) và Đường Phố (Roadmap)
             toggleMapType();
             await sleep(350);
             logMessage('pass', `Google Maps: Chuyển đổi chế độ Ảnh Vệ Tinh (Satellite) thành công`);
@@ -2786,12 +2932,10 @@
             await sleep(300);
             logMessage('pass', `Google Maps: Chuyển về chế độ Bản Đồ Đường Phố (Roadmap) thành công`);
 
-            // Test 5: Bộ nhớ đệm MicroSD FAT32 Cache
             logMessage('pass', 'Google Maps: Kiểm tra bộ nhớ đệm MicroSD FAT32 (SD Cache Hit) không tốn quota & không cần mạng');
             closeApp();
             await sleep(300);
 
-            // Test 5b: MỞ VOICE AI & AUDIO LAB PRO MAX
             logMessage('info', 'Kiểm tra Ứng dụng Voice AI & Audio Lab (Microphone & Loa FM8002E)...');
             openApp('audio');
             await sleep(500);
@@ -2812,7 +2956,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 5c: MỞ MUSIC PLAYER PRO MAX (ESP32-audioI2S & FreeRTOS Core 0)
             logMessage('info', 'Kiểm tra Ứng dụng Music Player (ESP32-audioI2S & Thư mục /music SD)...');
             openApp('music');
             await sleep(500);
@@ -2832,7 +2975,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 5d: MỞ AI VOICE ASSISTANT (XIAOZHI & GEMINI AI)
             logMessage('info', 'Kiểm tra Ứng dụng AI Voice Assistant (XiaoZhi & Gemini AI)...');
             openApp('ai_voice');
             await sleep(500);
@@ -2846,7 +2988,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 6: System Monitor Pro Max
             logMessage('info', 'Kiểm tra Ứng dụng System Monitor Pro Max...');
             openApp('system');
             await sleep(500);
@@ -2854,7 +2995,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 7: WiFi Settings App (Split 2-Column with Touch Keyboard)
             logMessage('info', 'Kiểm tra Ứng dụng WiFi Settings App (Bố cục 2 nửa & Bàn phím ảo)...');
             openApp('wifi');
             await sleep(600);
@@ -2867,7 +3007,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 8: Settings Control Center
             openApp('settings');
             await sleep(400);
             changeBrightness(50);
@@ -2878,7 +3017,6 @@
             closeApp();
             await sleep(300);
 
-            // Test 9: Sensors & About
             openApp('sensors');
             await sleep(400);
             closeApp();
@@ -2889,7 +3027,6 @@
             await sleep(300);
             logMessage('pass', 'Sensors & About: Hiển thị đầy đủ thông số ES3C28P 2.8" portrait');
 
-            // Test 10: Power Manager (Inactivity Timer & Touch to Wake)
             logMessage('info', 'Kiểm tra Module Quản lý Nguồn (Power Manager)...');
             simAdvanceInactivity(60);
             await sleep(350);

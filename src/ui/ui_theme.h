@@ -29,9 +29,9 @@
 // Touch accessibility & widget dimensions
 #define MIN_TOUCH_SIZE       32
 #define APP_ICON_BOX_SIZE    40   // 38-44px per requirement
-#define APP_ICON_RADIUS      12   // iOS squircle radius
+#define APP_ICON_RADIUS      14   // Modern continuous squircle radius
 #define DOCK_ICON_BOX_SIZE   36
-#define DOCK_ICON_RADIUS     10
+#define DOCK_ICON_RADIUS     12
 
 // Animation timings (native LVGL 120-250ms)
 #define ANIM_TIME_FAST_MS    140

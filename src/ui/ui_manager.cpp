@@ -283,7 +283,9 @@ static void create_status_bar(void)
     lv_obj_set_size(status_bar, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
     lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(status_bar, 0, 0);
-    lv_obj_set_style_border_width(status_bar, 0, 0);
+    lv_obj_set_style_border_width(status_bar, 1, 0);
+    lv_obj_set_style_border_side(status_bar, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_color(status_bar, lv_color_hex(COLOR_CARD_BORDER), 0);
     lv_obj_set_style_bg_color(status_bar, lv_color_hex(COLOR_OS_BG), 0);
     lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_hor(status_bar, 6, 0);
@@ -358,17 +360,17 @@ static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const cha
     lv_obj_set_style_pad_all(container, 0, 0);
     lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Nút squircle icon (40x40)
     lv_obj_t *btn = lv_btn_create(container);
     lv_obj_set_size(btn, APP_ICON_BOX_SIZE, APP_ICON_BOX_SIZE);
     lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_radius(btn, APP_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_CARD_BG), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_CARD_BG), LV_OPA_20), 0);
     lv_obj_set_style_border_color(btn, accent, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_shadow_width(btn, 6, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_40, 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
+    lv_obj_set_style_shadow_width(btn, 8, 0);
+    lv_obj_set_style_shadow_color(btn, accent, 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
     lv_obj_add_event_cb(btn, app_icon_event_cb, LV_EVENT_CLICKED, (void *)app_id);
 
     lv_obj_t *lbl_sym = lv_label_create(btn);
@@ -377,7 +379,6 @@ static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const cha
     lv_obj_set_style_text_font(lbl_sym, UI_FONT_14, 0);
     lv_obj_center(lbl_sym);
 
-    // Tên ứng dụng bên dưới icon (Font 12 rõ ràng, sắc nét)
     lv_obj_t *lbl_title = lv_label_create(container);
     lv_label_set_text(lbl_title, title);
     lv_obj_set_style_text_color(lbl_title, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
@@ -386,7 +387,7 @@ static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const cha
 }
 
 /* =========================================================================
- * 3. TẠO ICON CHO FLOATING BOTTOM DOCK
+ * 3. TẠO ICON CHO FLOATING DOCK
  * ========================================================================= */
 static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t accent, uintptr_t app_id, int x_pos)
 {
@@ -394,11 +395,13 @@ static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t ac
     lv_obj_set_size(btn, DOCK_ICON_BOX_SIZE, DOCK_ICON_BOX_SIZE);
     lv_obj_set_pos(btn, x_pos, 4);
     lv_obj_set_style_radius(btn, DOCK_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(COLOR_CARD_BG), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_DOCK_BG), LV_OPA_25), 0);
     lv_obj_set_style_border_color(btn, accent, 0);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_shadow_width(btn, 4, 0);
-    lv_obj_set_style_shadow_color(btn, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
+    lv_obj_set_style_shadow_width(btn, 6, 0);
+    lv_obj_set_style_shadow_color(btn, accent, 0);
+    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
     lv_obj_add_event_cb(btn, app_icon_event_cb, LV_EVENT_CLICKED, (void *)app_id);
 
     lv_obj_t *lbl = lv_label_create(btn);
