@@ -95,7 +95,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | `lvgl/lvgl` | **8.3.11** | Nhân giao diện đồ họa chính |
 | `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V SPI và touch controller |
 | `madhephaestus/ESP32Encoder` | **0.11.7** | Đọc rotary encoder nếu có ngoại vi |
-| `ESP32-audioI2S` | commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`** (manifest `2.0.0`, source header `3.0.12e`) | Giải mã MP3 từ thẻ nhớ SD qua I2S |
+| `ESP32-audioI2S` | vendored từ commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`**, local patch `2.0.0-mini-os.1` | Giải mã MP3; `PeriodicTask` shutdown bằng ACK trước khi giải phóng object |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
 | `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
 
@@ -110,7 +110,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | Tên Luồng / Task | Nhân Core | Priority | Cơ chế vận hành & Vai trò |
 | :--- | :--- | :--- | :--- |
 | **LVGL_Task** | **Core 1** | **4** | Chu kỳ 10ms, cập nhật UI, xử lý chạm cảm ứng qua `lvgl_port_lock()`. |
-| **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, đồng bộ `audio_mutex` và `storage_lock` theo thứ tự cố định. |
+| **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, theo dõi generation và chỉ xóa decoder sau shutdown ACK; timeout giữ tài nguyên ở `RECOVERY_REQUIRED`. |
 | **Audio_Task (AudioManager)** | **Core 0** | **3** | Đọc DMA theo số stereo frame thực nhận, ghi bù partial I2S không lặp frame, lệnh start/stop/cancel theo generation + ACK, snapshot bản thu bất biến và commit WAV `.tmp`/`.bak` có recovery. |
 | **WiFi_Manager** | **Core 0** | **2** | Một worker sở hữu radio/NVS; Disconnect/Forget dùng control mailbox độc lập queue thường, có REQUESTED/APPLIED/FAILED và chặn save cũ khôi phục credential đã quên. |
 | **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. |
@@ -172,7 +172,7 @@ pio device monitor -b 115200
 9. **Typography & Vietnamese Localization**: UI dùng **Be Vietnam Pro SemiBold** (SIL OFL 1.1) với body/button 14px, secondary 12px và title 16px; glyph hệ thống dùng `LV_SYMBOL_*` và fallback LVGL. Font 10px cũ không được dùng cho nội dung chính.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, theo đúng một contact ID tới lúc phát release, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. Với profile hiện tại, invert X/Y của sensor rồi rotation 2 triệt tiêu nhau nên mapping cuối là `screen_x=raw_x`, `screen_y=raw_y` trong miền 240x320. LVGL luôn nhận tọa độ toàn màn hình; Touch Diagnostic đổi screen→local theo origin của overlay nội dung, chạy thụ động 40Hz, không calibration/NVS và không chặn boot.
 
-Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, audio Cancel A→Start B, pause timeout/ACK muộn, lỗi uninstall/restore I2S, WAV/cache partial-write/rename/restore, WiFi Forget barrier, Camera Dừng→Lưu & Kết nối, AI request cancel/stale response, giới hạn body và WAV lỗi/cắt.
+Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, decoder lifecycle create/play/stop/delete lặp lại và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, audio Cancel A→Start B, pause timeout/ACK muộn, shutdown timeout không destroy, stale EOF/session, lỗi uninstall/restore I2S, WAV/cache partial-write/rename/restore, WiFi Forget barrier, Camera Dừng→Lưu & Kết nối, AI request cancel/stale response, giới hạn body và WAV lỗi/cắt.
 
 Thông tin attribution, phiên bản và nghĩa vụ phân phối dependency nằm trong `THIRD_PARTY_NOTICES.md`. Bản phân phối binary có ESP32-audioI2S GPL-3.0 phải đi kèm Corresponding Source và thông tin build của đúng commit đã dùng.
 

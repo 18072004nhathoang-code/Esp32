@@ -5,6 +5,7 @@
  */
 
 #include <Arduino.h>
+#include <esp_system.h>
 #include "board_config.h"
 #include "shared_i2c_bus.h"
 #include "display/lvgl_port.h"
@@ -24,6 +25,73 @@
 #define FW_GIT_SHA "unknown"
 #endif
 
+static const char *reset_reason_name(esp_reset_reason_t reason)
+{
+    switch (reason)
+    {
+        case ESP_RST_POWERON: return "POWERON";
+        case ESP_RST_EXT: return "EXTERNAL";
+        case ESP_RST_SW: return "SOFTWARE";
+        case ESP_RST_PANIC: return "PANIC";
+        case ESP_RST_INT_WDT: return "INT_WDT";
+        case ESP_RST_TASK_WDT: return "TASK_WDT";
+        case ESP_RST_WDT: return "OTHER_WDT";
+        case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+        case ESP_RST_BROWNOUT: return "BROWNOUT";
+        case ESP_RST_SDIO: return "SDIO";
+        case ESP_RST_UNKNOWN:
+        default: return "UNKNOWN";
+    }
+}
+
+#ifdef MINI_OS_MUSIC_STRESS_TEST
+static void music_stress_task(void *)
+{
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    const int track_count = music_player_get_track_count();
+    const uint32_t baseline_heap = ESP.getFreeHeap();
+    const UBaseType_t baseline_tasks = uxTaskGetNumberOfTasks();
+    Serial.printf("[HW_STRESS] BEGIN duration=600s tracks=%d heap=%u tasks=%u\n",
+                  track_count, static_cast<unsigned>(baseline_heap),
+                  static_cast<unsigned>(baseline_tasks));
+    if (track_count <= 0 || !music_player_play_index(0))
+    {
+        Serial.println("[HW_STRESS] FAIL no playable SD track");
+        vTaskDelete(nullptr);
+    }
+
+    for (uint32_t second = 1; second <= 600; ++second)
+    {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        const uint32_t phase = second % 100U;
+        if (phase == 20U) (void)music_player_next();
+        else if (phase == 40U) (void)music_player_pause();
+        else if (phase == 45U) (void)music_player_resume();
+        else if (phase == 60U) (void)music_player_prev();
+        else if (phase == 80U) (void)music_player_stop();
+        else if (phase == 85U)
+            (void)music_player_play_index(static_cast<int>((second / 100U) % track_count));
+
+        if (second % 30U == 0)
+        {
+            Serial.printf("[HW_STRESS] t=%us playing=%s heap=%u tasks=%u\n",
+                          static_cast<unsigned>(second),
+                          music_player_is_playing() ? "YES" : "NO",
+                          static_cast<unsigned>(ESP.getFreeHeap()),
+                          static_cast<unsigned>(uxTaskGetNumberOfTasks()));
+        }
+    }
+    (void)music_player_stop();
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    Serial.printf("[HW_STRESS] COMPLETE heap=%u delta=%d tasks=%u delta=%d\n",
+                  static_cast<unsigned>(ESP.getFreeHeap()),
+                  static_cast<int32_t>(ESP.getFreeHeap() - baseline_heap),
+                  static_cast<unsigned>(uxTaskGetNumberOfTasks()),
+                  static_cast<int>(uxTaskGetNumberOfTasks()) - static_cast<int>(baseline_tasks));
+    vTaskDelete(nullptr);
+}
+#endif
+
 void setup()
 {
     // 1. Khởi tạo Serial tốc độ cao (hỗ trợ USB CDC trên ESP32-S3)
@@ -34,6 +102,9 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
+    const esp_reset_reason_t reset_reason = esp_reset_reason();
+    Serial.printf("[BOOT] Reset reason: %s (%d)\n",
+                  reset_reason_name(reset_reason), static_cast<int>(reset_reason));
 #if defined(CONFIG_MBEDTLS_HAVE_TIME_DATE) && CONFIG_MBEDTLS_HAVE_TIME_DATE
     Serial.println("[SECURITY] TLS certificate chain/hostname/date validation: ENABLED");
 #else
@@ -164,6 +235,12 @@ void setup()
     }
 
     Serial.println("[SYSTEM] Mini OS Pro Max đã sẵn sàng hoạt động!");
+#ifdef MINI_OS_MUSIC_STRESS_TEST
+    TaskHandle_t stress_handle = nullptr;
+    if (xTaskCreatePinnedToCore(music_stress_task, "MusicStress", 4096, nullptr, 1,
+                                &stress_handle, 1) != pdPASS)
+        Serial.println("[HW_STRESS] FAIL task allocation");
+#endif
 }
 
 void loop()

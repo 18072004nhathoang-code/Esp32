@@ -9,15 +9,17 @@ by `platformio.ini`; it is attribution information, not legal advice.
 | LVGL | 8.3.11 | MIT | https://github.com/lvgl/lvgl |
 | LovyanGFX | 1.1.16 | FreeBSD/BSD-2-Clause, with retained upstream notices | https://github.com/lovyan03/LovyanGFX |
 | ESP32Encoder | 0.11.7 | BSD-style license with Universidad de Palermo acknowledgement | https://github.com/madhephaestus/ESP32Encoder |
-| ESP32-audioI2S | `928c420d49fce2a09fa91f490b9fcabed6447c67`; package manifest 2.0.0, source header 3.0.12e | GPL-3.0 | https://github.com/schreibfaul1/ESP32-audioI2S |
+| ESP32-audioI2S | vendored from `928c420d49fce2a09fa91f490b9fcabed6447c67`; local shutdown patch 2.0.0-mini-os.1 | GPL-3.0 | https://github.com/schreibfaul1/ESP32-audioI2S |
 | TJpg_Decoder | 1.1.0 | FreeBSD/BSD-2-Clause; bundled Tiny JPEG Decompressor notice by ChaN | https://github.com/Bodmer/TJpg_Decoder |
 | ArduinoJson | 6.21.5 | MIT | https://github.com/bblanchon/ArduinoJson |
 | Arduino-ESP32 | 2.0.17 (via PlatformIO Espressif32 6.8.1) | LGPL-2.1-or-later for Arduino core plus Apache-2.0 and component-specific licenses | https://github.com/espressif/arduino-esp32 |
 | Be Vietnam Pro SemiBold | SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71` | SIL Open Font License 1.1 | https://github.com/bettergui/Be-Vietnam-Pro |
 | lv_font_conv | 1.5.3 | MIT | https://github.com/lvgl/lv_font_conv |
 
-The complete dependency license texts are retained in each resolved PlatformIO
-package. The Be Vietnam Pro OFL text is distributed in `LICENSES/OFL-1.1.txt`.
+Dependency license texts are retained in each resolved PlatformIO package; the
+vendored ESP32-audioI2S license and provenance are in
+`lib/ESP32-audioI2S-patched/`. The Be Vietnam Pro OFL text is distributed in
+`LICENSES/OFL-1.1.txt`.
 
 ## Binary release obligations
 

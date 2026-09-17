@@ -10,7 +10,9 @@
 #include "../storage/storage_manager.h"
 #include <Audio.h>
 #include <FS.h>
+#include <new>
 #include "service_state_logic.h"
+#include "music_decoder_lifecycle.h"
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
@@ -54,11 +56,14 @@ static QueueHandle_t music_cmd_queue = nullptr;
 static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
 static uint32_t codec_sample_rate = 0;
+static MusicDecoderLifecycle decoder_lifecycle;
+static uint32_t eof_generation = 0;
 static constexpr uint32_t MUSIC_EVENT_EOF = 1U << 0;
 static portMUX_TYPE music_control_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool music_stop_pending = false;
 static uint32_t music_stop_session = 0;
-static void internal_stop_audio_locked(void);
+static uint32_t music_stop_generation = 0;
+static bool internal_stop_audio_locked(void);
 
 static bool enqueue_music_command(const MusicCommand &cmd)
 {
@@ -98,30 +103,31 @@ static bool release_music_audio(void)
     return true;
 }
 
-static bool take_music_stop(uint32_t *session)
+static bool take_music_stop(uint32_t *session, uint32_t *generation)
 {
     portENTER_CRITICAL(&music_control_mux);
     const bool pending = music_stop_pending;
     if (pending)
     {
         if (session) *session = music_stop_session;
+        if (generation) *generation = music_stop_generation;
         music_stop_pending = false;
     }
     portEXIT_CRITICAL(&music_control_mux);
     return pending;
 }
 
-static void apply_music_stop(uint32_t target_session)
+static void apply_music_stop(uint32_t target_session, uint32_t target_generation)
 {
     const uint32_t current_session = music_owner_session;
     if (target_session != 0 && current_session != target_session) return;
+    if (target_generation != 0 && decoder_lifecycle.generation() != target_generation) return;
     bool stopped = false;
     if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (target_session == 0 || music_owner_session == target_session)
         {
-            internal_stop_audio_locked();
-            stopped = true;
+            stopped = internal_stop_audio_locked();
         }
         xSemaphoreGive(audio_mutex);
     }
@@ -129,37 +135,61 @@ static void apply_music_stop(uint32_t target_session)
 }
 
 /* Hàm hỗ trợ dừng và dọn dẹp Audio engine nội bộ trên Core 0 */
-static void internal_stop_audio_locked(void)
+static bool internal_stop_audio_locked(void)
 {
+    const uint32_t generation = decoder_lifecycle.generation();
+    if (!decoder_lifecycle.begin_stop(generation)) return false;
+    player_state.is_playing = false;
+    player_state.is_paused = false;
     if (music_owns_audio)
         audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
     if (audio)
     {
-        if (storage_lock(200))
+        if (!storage_lock(200))
         {
-            audio->stopSong();
-            storage_unlock();
+            (void)decoder_lifecycle.finish_stop(generation, false);
+            Serial.println("[MUSIC_AUDIO] Stop deferred: storage lock unavailable");
+            return false;
         }
+        const bool shutdown_ack = audio->shutdown(1000);
+        storage_unlock();
+        if (!shutdown_ack)
+        {
+            (void)decoder_lifecycle.finish_stop(generation, false);
+            Serial.println("[MUSIC_AUDIO] Stop timeout: decoder retained for safe recovery");
+            return false;
+        }
+        (void)decoder_lifecycle.finish_stop(generation, true);
         audio_drain_tx(300);
         delete audio;
         audio = nullptr;
+    }
+    else
+    {
+        (void)decoder_lifecycle.finish_stop(generation, true);
     }
     codec_sample_rate = 0;
     player_state.is_playing = false;
     player_state.is_paused = false;
     player_state.current_time_sec = 0;
+    return true;
 }
 
 static void handle_eof_event(void)
 {
     int next_idx = -1;
+    uint32_t event_generation = 0;
+    portENTER_CRITICAL(&music_control_mux);
+    event_generation = eof_generation;
+    portEXIT_CRITICAL(&music_control_mux);
     if (audio_mutex && xSemaphoreTake(audio_mutex, portMAX_DELAY) == pdTRUE)
     {
-        next_idx = music_eof_next_index(player_state.is_playing,
-                                        player_state.current_track_idx, total_tracks_found);
+        if (decoder_lifecycle.accepts_event(event_generation))
+            next_idx = music_eof_next_index(player_state.is_playing,
+                                            player_state.current_track_idx, total_tracks_found);
         if (next_idx >= 0)
         {
-            internal_stop_audio_locked();
+            if (!internal_stop_audio_locked()) next_idx = -1;
         }
         xSemaphoreGive(audio_mutex);
     }
@@ -175,10 +205,23 @@ static void music_audio_task(void *pvParameters)
     Serial.printf("[MUSIC_AUDIO] 🎵 Audio Task đã ghim vào CORE %d (Priority %d)\n", 
                   xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
+    uint32_t last_stack_report_ms = 0;
     while (true)
     {
+        const uint32_t now_ms = millis();
+        if (now_ms - last_stack_report_ms >= 30000U)
+        {
+            last_stack_report_ms = now_ms;
+            Serial.printf("[MUSIC_AUDIO][STACK] MusicAudioTask high-water=%u bytes\n",
+                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+            if (audio)
+                Serial.printf("[MUSIC_AUDIO][STACK] PeriodicTask high-water=%u bytes\n",
+                              static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark()));
+        }
         uint32_t stop_session = 0;
-        if (take_music_stop(&stop_session)) apply_music_stop(stop_session);
+        uint32_t stop_generation = 0;
+        if (take_music_stop(&stop_session, &stop_generation))
+            apply_music_stop(stop_session, stop_generation);
         // 1. Nhận và xử lý các lệnh từ FreeRTOS Queue theo thứ tự (không bao giờ bị race condition)
         MusicCommand cmd;
         while (music_cmd_queue && xQueueReceive(music_cmd_queue, &cmd, 0) == pdTRUE)
@@ -204,8 +247,7 @@ static void music_audio_task(void *pvParameters)
                         bool stopped = false;
                         if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                         {
-                            internal_stop_audio_locked();
-                            stopped = true;
+                            stopped = internal_stop_audio_locked();
                             xSemaphoreGive(audio_mutex);
                         }
                         if (stopped) release_music_audio();
@@ -217,11 +259,28 @@ static void music_audio_task(void *pvParameters)
                         {
                             if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
                             {
-                                internal_stop_audio_locked();
-
-                                audio = new Audio();
-                                if (audio)
+                                const bool prior_stopped = internal_stop_audio_locked();
+                                if (!prior_stopped)
                                 {
+                                    Serial.println("[MUSIC_AUDIO] Play FAILED: decoder recovery required");
+                                    xSemaphoreGive(audio_mutex);
+                                    break;
+                                }
+
+                                portENTER_CRITICAL(&music_control_mux);
+                                const uint32_t starting_generation = decoder_lifecycle.begin_start();
+                                portEXIT_CRITICAL(&music_control_mux);
+                                if (starting_generation == 0)
+                                {
+                                    Serial.println("[MUSIC_AUDIO] Play FAILED: lifecycle busy");
+                                    xSemaphoreGive(audio_mutex);
+                                    break;
+                                }
+                                audio = new(std::nothrow) Audio();
+                                if (audio && audio->isInitialized())
+                                {
+                                    Serial.printf("[MUSIC_AUDIO][STACK] PeriodicTask high-water=%u bytes\n",
+                                                  static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark()));
                                     const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                          AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
                                     audio->setVolume(21); // unity in decoder; ES8311 owns user volume
@@ -244,18 +303,25 @@ static void music_audio_task(void *pvParameters)
                                         player_state.is_playing = true;
                                         player_state.is_paused = false;
                                         codec_sample_rate = 44100;
+                                        (void)decoder_lifecycle.finish_start(starting_generation, true);
                                         audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                                         Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", cmd.filepath);
                                     }
                                     else
                                     {
                                         Serial.printf("[MUSIC_AUDIO] ❌ connecttoFS() thất bại cho tệp %s\n", cmd.filepath);
-                                        internal_stop_audio_locked();
-                                        release_music_audio();
+                                        if (internal_stop_audio_locked()) release_music_audio();
                                     }
                                 }
                                 else
                                 {
+                                    Serial.println("[MUSIC_AUDIO] Play FAILED: Audio allocation/init");
+                                    if (audio)
+                                    {
+                                        delete audio;
+                                        audio = nullptr;
+                                    }
+                                    (void)decoder_lifecycle.finish_start(starting_generation, false);
                                     release_music_audio();
                                 }
                                 xSemaphoreGive(audio_mutex);
@@ -386,8 +452,7 @@ static void music_audio_task(void *pvParameters)
                             else
                             {
                                 Serial.printf("[MUSIC_AUDIO] ❌ Codec clock rejected Fs=%u\n", decoded_rate);
-                                internal_stop_audio_locked();
-                                release_after_loop = true;
+                                release_after_loop = internal_stop_audio_locked();
                             }
                         }
 
@@ -414,11 +479,22 @@ static void music_audio_task(void *pvParameters)
         }
         else
         {
-            // A failed duplex/codec restore keeps MUSIC ownership. Retry only
-            // after the decoder is fully stopped and without claiming READY.
-            if (music_owns_audio && !player_state.is_paused)
+            static uint32_t last_recovery_ms = 0;
+            bool decoder_stopped = decoder_lifecycle.can_destroy();
+            if (decoder_lifecycle.phase() == MusicDecoderPhase::RECOVERY_REQUIRED &&
+                millis() - last_recovery_ms >= 1000)
+            {
+                last_recovery_ms = millis();
+                if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
+                {
+                    decoder_stopped = internal_stop_audio_locked();
+                    xSemaphoreGive(audio_mutex);
+                }
+            }
+            // Ownership is released only after decoder ACK and destruction.
+            if (decoder_stopped && music_owns_audio && !player_state.is_paused)
                 (void)release_music_audio();
-            vTaskDelay(pdMS_TO_TICKS(15));
+            vTaskDelay(pdMS_TO_TICKS(20));
         }
 
         uint32_t events = 0;
@@ -664,6 +740,7 @@ bool music_player_stop(void)
     const uint32_t session = audio_get_owner_session(AUDIO_OWNER_MUSIC);
     portENTER_CRITICAL(&music_control_mux);
     music_stop_session = session;
+    music_stop_generation = decoder_lifecycle.generation();
     music_stop_pending = true;
     portEXIT_CRITICAL(&music_control_mux);
     xTaskNotify(audio_task_handle, 0, eNoAction);
@@ -754,6 +831,9 @@ void audio_id3data(const char *info)
 void audio_eof_mp3(const char *info)
 {
     Serial.printf("[audio_eof] Bài hát kết thúc: %s; queue EOF event\n", info);
+    portENTER_CRITICAL(&music_control_mux);
+    eof_generation = decoder_lifecycle.generation();
+    portEXIT_CRITICAL(&music_control_mux);
     if (audio_task_handle)
         xTaskNotify(audio_task_handle, MUSIC_EVENT_EOF, eSetBits);
 }

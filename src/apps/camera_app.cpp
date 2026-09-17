@@ -153,6 +153,17 @@ static CameraConfigStatus get_camera_config_status()
     return result;
 }
 
+static bool camera_config_command_current(const CameraUiCommand &command)
+{
+    portENTER_CRITICAL(&camera_control_mux);
+    const bool current = command.request_id != 0 &&
+        command.request_id == camera_config_status.requested_id &&
+        command.session_id == ui_session_id &&
+        camera_control.active && camera_control.session_id == command.session_id;
+    portEXIT_CRITICAL(&camera_control_mux);
+    return current;
+}
+
 /* Callback của thư viện TJpgDec đưa dữ liệu RGB565 vào bộ đệm Canvas */
 static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
@@ -601,9 +612,8 @@ static void camera_ui_worker(void *)
         CameraUiCommand command = {};
         if (camera_command_queue && xQueueReceive(camera_command_queue, &command, pdMS_TO_TICKS(10)) == pdTRUE)
         {
+            const bool latest = camera_config_command_current(command);
             portENTER_CRITICAL(&camera_control_mux);
-            const bool latest = command.request_id != 0 &&
-                                command.request_id == camera_config_status.requested_id;
             if (latest) camera_config_status.received_id = command.request_id;
             portEXIT_CRITICAL(&camera_control_mux);
 
@@ -614,10 +624,11 @@ static void camera_ui_worker(void *)
                 camera_session_accepts(command.session_id, worker_session_id, preview_active))
             {
                 configure_ok = camera_service_configure_network(command.profile);
-                if (configure_ok)
+                if (configure_ok && camera_config_command_current(command))
                 {
                     save_ok = camera_service_save_network_profile();
-                    if (save_ok && command.run_service)
+                    if (save_ok && command.run_service &&
+                        camera_config_command_current(command))
                     {
                         // The new desired state owns Start and its ACK. Do not
                         // start directly here or report an enqueue as applied.
@@ -627,7 +638,7 @@ static void camera_ui_worker(void *)
                     }
                 }
             }
-            if (latest)
+            if (latest && camera_config_command_current(command))
             {
                 portENTER_CRITICAL(&camera_control_mux);
                 if (camera_config_status.requested_id == command.request_id)

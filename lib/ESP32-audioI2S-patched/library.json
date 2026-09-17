@@ -1,0 +1,20 @@
+{
+  "name": "ESP32-audioI2S",
+  "version": "2.0.0-mini-os.1",
+  "description": "Vendored ESP32-audioI2S 928c420d49fce2a09fa91f490b9fcabed6447c67 with acknowledged task shutdown",
+  "keywords": "audio, i2s, esp32",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/schreibfaul1/ESP32-audioI2S.git"
+  },
+  "authors": [
+    {
+      "name": "schreibfaul1"
+    }
+  ],
+  "license": "GPL-3.0",
+  "homepage": "https://github.com/schreibfaul1/ESP32-audioI2S",
+  "dependencies": {},
+  "frameworks": ["arduino", "espidf"],
+  "platforms": "espressif32"
+}
