@@ -6,6 +6,7 @@
 #include "network_camera_service.h"
 #include "../os/wifi_manager.h"
 #include <HTTPClient.h>
+#include "firmware_contracts.h"
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
@@ -1083,8 +1084,9 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
             BoundedBufferStream sink(out_buf, current_cap, NET_CAM_MAX_SAFETY_LIMIT, &_running);
             const int written = http.writeToStream(&sink);
             const size_t total = sink.size();
-            const bool complete_length = expected_len <= 0 || total == static_cast<size_t>(expected_len);
-            if (written >= 0 && !sink.failed() && _running && complete_length && total >= 4 &&
+            const bool complete_body = http_dechunked_body_complete(
+                expected_len, total, written, sink.failed());
+            if (complete_body && _running && total >= 4 &&
                 out_buf[0] == 0xFF && out_buf[1] == 0xD8 &&
                 out_buf[total - 2] == 0xFF && out_buf[total - 1] == 0xD9)
             {

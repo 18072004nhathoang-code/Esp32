@@ -9,6 +9,7 @@
 #include "../ui/ui_theme.h"
 #include <TJpg_Decoder.h>
 #include "../display/tjpg_guard.h"
+#include "firmware_contracts.h"
 #include <esp_heap_caps.h>
 #include <stdlib.h>
 
@@ -56,7 +57,8 @@ static int16_t draw_offset_y = 0;
 static uint16_t *decode_target = nullptr;
 static uint16_t *preview_front = nullptr;
 static uint16_t *preview_back = nullptr;
-static size_t preview_capacity_pixels = 0;
+static size_t preview_front_capacity_pixels = 0;
+static size_t preview_back_capacity_pixels = 0;
 static SemaphoreHandle_t preview_mutex = nullptr;
 static QueueHandle_t camera_command_queue = nullptr;
 static TaskHandle_t camera_worker_handle = nullptr;
@@ -66,13 +68,54 @@ static uint32_t preview_timestamp_ms = 0;
 static uint32_t preview_jpeg_bytes = 0;
 static uint16_t preview_source_w = 0;
 static uint16_t preview_source_h = 0;
+static uint16_t worker_canvas_w = 0;
+static uint16_t worker_canvas_h = 0;
+static uint32_t preview_session_id = 0;
+static uint32_t ui_session_id = 0;
+static uint32_t worker_session_id = 0;
+static volatile uint32_t worker_ack_revision = 0;
+static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
 
-enum CameraUiCommandType : uint8_t { CAM_UI_START, CAM_UI_STOP, CAM_UI_CONFIGURE, CAM_UI_RELEASE };
+struct CameraWorkerControl
+{
+    uint32_t revision;
+    uint32_t session_id;
+    uint16_t width;
+    uint16_t height;
+    bool active;
+    bool run_service;
+};
+static CameraWorkerControl camera_control = {};
+
+enum CameraUiCommandType : uint8_t { CAM_UI_CONFIGURE };
 struct CameraUiCommand
 {
     CameraUiCommandType type;
+    uint32_t session_id;
     NetworkCameraProfile profile;
 };
+
+static CameraWorkerControl get_camera_control()
+{
+    portENTER_CRITICAL(&camera_control_mux);
+    const CameraWorkerControl result = camera_control;
+    portEXIT_CRITICAL(&camera_control_mux);
+    return result;
+}
+
+static void set_camera_control(uint32_t session_id, bool active, bool run_service,
+                               uint16_t width, uint16_t height)
+{
+    portENTER_CRITICAL(&camera_control_mux);
+    camera_control.session_id = session_id;
+    camera_control.active = active;
+    camera_control.run_service = run_service;
+    camera_control.width = width;
+    camera_control.height = height;
+    ++camera_control.revision;
+    portEXIT_CRITICAL(&camera_control_mux);
+    if (camera_worker_handle) xTaskNotifyGive(camera_worker_handle);
+}
 
 /* Callback của thư viện TJpgDec đưa dữ liệu RGB565 vào bộ đệm Canvas */
 static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
@@ -82,13 +125,13 @@ static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, 
     {
         int16_t dy = y + row + draw_offset_y;
         if (dy < 0) continue;
-        if (dy >= canvas_h) break;
+        if (dy >= worker_canvas_h) break;
         for (int16_t col = 0; col < w; col++)
         {
             int16_t dx = x + col + draw_offset_x;
             if (dx < 0) continue;
-            if (dx >= canvas_w) break;
-            decode_target[dy * canvas_w + dx] = bitmap[row * w + col];
+            if (dx >= worker_canvas_w) break;
+            decode_target[dy * worker_canvas_w + dx] = bitmap[row * w + col];
         }
     }
     return true;
@@ -143,6 +186,7 @@ static bool queue_ui_configuration(void)
 
     CameraUiCommand command = {};
     command.type = CAM_UI_CONFIGURE;
+    command.session_id = ui_session_id;
     command.profile = prof;
     if (!enqueue_camera_command(command))
     {
@@ -156,10 +200,7 @@ static bool queue_ui_configuration(void)
 static void btn_snap_cb(lv_event_t *e)
 {
     (void)e;
-    CameraUiCommand command = {};
-    command.type = CAM_UI_START;
-    if (!enqueue_camera_command(command) && lbl_cam_status)
-        lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
+    set_camera_control(ui_session_id, true, true, canvas_w, canvas_h);
 }
 
 // Bấm nút Mở / Đóng Cấu hình
@@ -181,10 +222,8 @@ static void btn_cfg_cb(lv_event_t *e)
 // Bấm nút Ngắt kết nối
 static void btn_disconnect_cb(lv_event_t *e)
 {
-    CameraUiCommand command = {};
-    command.type = CAM_UI_STOP;
-    if (!enqueue_camera_command(command) && lbl_cam_status)
-        lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
+    (void)e;
+    set_camera_control(ui_session_id, true, false, canvas_w, canvas_h);
 }
 
 // Bấm Lưu & Kết nối trong Modal Cấu hình
@@ -221,12 +260,96 @@ static void kb_event_cb(lv_event_t *e)
     }
 }
 
-static void decode_latest_frame(void)
+static void free_worker_preview_buffers()
 {
-    if (!preview_active || !preview_back || !preview_front) return;
+    if (preview_front) free(preview_front);
+    if (preview_back) free(preview_back);
+    preview_front = nullptr;
+    preview_back = nullptr;
+    preview_front_capacity_pixels = 0;
+    preview_back_capacity_pixels = 0;
+    preview_frame_id = 0;
+    preview_timestamp_ms = 0;
+    preview_jpeg_bytes = 0;
+    preview_source_w = 0;
+    preview_source_h = 0;
+}
+
+static uint16_t *allocate_preview_buffer(size_t pixels)
+{
+    uint16_t *buffer = static_cast<uint16_t *>(heap_caps_malloc(
+        pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!buffer) buffer = static_cast<uint16_t *>(malloc(pixels * sizeof(uint16_t)));
+    return buffer;
+}
+
+static bool worker_apply_control(const CameraWorkerControl &control)
+{
+    if (!camera_control_needs_apply(control.revision, worker_ack_revision)) return preview_active;
+    if (!control.active)
+    {
+        (void)camera_service_stop(2000);
+        if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            preview_active = false;
+            free_worker_preview_buffers();
+            preview_session_id = 0;
+            worker_session_id = control.session_id;
+            worker_ack_revision = control.revision;
+            xSemaphoreGive(preview_mutex);
+        }
+        return false;
+    }
+
+    const bool new_session = control.session_id != worker_session_id ||
+                             control.width != worker_canvas_w || control.height != worker_canvas_h;
+    if (new_session)
+    {
+        (void)camera_service_stop(2000);
+        const size_t pixels = static_cast<size_t>(control.width) * control.height;
+        uint16_t *new_front = allocate_preview_buffer(pixels);
+        uint16_t *new_back = allocate_preview_buffer(pixels);
+        if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            preview_active = false;
+            free_worker_preview_buffers();
+            if (new_front && new_back)
+            {
+                preview_front = new_front;
+                preview_back = new_back;
+                preview_front_capacity_pixels = pixels;
+                preview_back_capacity_pixels = pixels;
+                worker_canvas_w = control.width;
+                worker_canvas_h = control.height;
+                worker_session_id = control.session_id;
+                preview_session_id = control.session_id;
+                memset(preview_front, 0, pixels * sizeof(uint16_t));
+                memset(preview_back, 0, pixels * sizeof(uint16_t));
+                preview_active = true;
+            }
+            else
+            {
+                if (new_front) free(new_front);
+                if (new_back) free(new_back);
+                worker_session_id = control.session_id;
+                preview_session_id = 0;
+            }
+            xSemaphoreGive(preview_mutex);
+        }
+    }
+    if (control.run_service && preview_active) (void)camera_service_start();
+    else (void)camera_service_stop(2000);
+    worker_ack_revision = control.revision;
+    return preview_active;
+}
+
+static void decode_latest_frame(uint32_t session_id)
+{
+    if (!camera_session_accepts(session_id, preview_session_id, preview_active) ||
+        !preview_back || !preview_front) return;
     CameraFrame *frame = camera_service_get_frame(10);
     if (!frame) return;
-    if (!frame->buf || frame->len == 0)
+    if (!frame->buf || frame->len == 0 || frame->len > 512U * 1024U)
     {
         camera_service_return_frame(frame);
         return;
@@ -237,7 +360,12 @@ static void decode_latest_frame(void)
         return;
     }
 
-    memset(preview_back, 0, canvas_w * canvas_h * sizeof(uint16_t));
+    if (preview_back_capacity_pixels < static_cast<size_t>(worker_canvas_w) * worker_canvas_h)
+    {
+        camera_service_return_frame(frame);
+        return;
+    }
+    memset(preview_back, 0, static_cast<size_t>(worker_canvas_w) * worker_canvas_h * sizeof(uint16_t));
     uint16_t orig_w = 0;
     uint16_t orig_h = 0;
     uint8_t scale = 1;
@@ -250,11 +378,11 @@ static void decode_latest_frame(void)
         if (TJpgDec.getJpgSize(&orig_w, &orig_h, frame->buf, frame->len) == JDR_OK &&
             orig_w > 0 && orig_h > 0)
         {
-            while (scale < 8 && ((orig_w / scale) > canvas_w || (orig_h / scale) > canvas_h))
+            while (scale < 8 && ((orig_w / scale) > worker_canvas_w || (orig_h / scale) > worker_canvas_h))
                 scale *= 2;
             TJpgDec.setJpgScale(scale);
-            draw_offset_x = (static_cast<int16_t>(canvas_w) - static_cast<int16_t>(orig_w / scale)) / 2;
-            draw_offset_y = (static_cast<int16_t>(canvas_h) - static_cast<int16_t>(orig_h / scale)) / 2;
+            draw_offset_x = (static_cast<int16_t>(worker_canvas_w) - static_cast<int16_t>(orig_w / scale)) / 2;
+            draw_offset_y = (static_cast<int16_t>(worker_canvas_h) - static_cast<int16_t>(orig_h / scale)) / 2;
             decoded = TJpgDec.drawJpg(0, 0, frame->buf, frame->len) == JDR_OK;
         }
         decode_target = nullptr;
@@ -264,14 +392,20 @@ static void decode_latest_frame(void)
 
     if (decoded && preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
     {
-        uint16_t *old_front = preview_front;
-        preview_front = preview_back;
-        preview_back = old_front;
-        preview_frame_id = frame->frame_id;
-        preview_timestamp_ms = frame->timestamp_ms;
-        preview_jpeg_bytes = frame->len;
-        preview_source_w = orig_w;
-        preview_source_h = orig_h;
+        if (camera_session_accepts(session_id, preview_session_id, preview_active))
+        {
+            uint16_t *old_front = preview_front;
+            preview_front = preview_back;
+            preview_back = old_front;
+            const size_t old_capacity = preview_front_capacity_pixels;
+            preview_front_capacity_pixels = preview_back_capacity_pixels;
+            preview_back_capacity_pixels = old_capacity;
+            preview_frame_id = frame->frame_id;
+            preview_timestamp_ms = frame->timestamp_ms;
+            preview_jpeg_bytes = frame->len;
+            preview_source_w = orig_w;
+            preview_source_h = orig_h;
+        }
         xSemaphoreGive(preview_mutex);
     }
     camera_service_return_frame(frame);
@@ -281,45 +415,27 @@ static void camera_ui_worker(void *)
 {
     for (;;)
     {
+        const CameraWorkerControl control = get_camera_control();
+        worker_apply_control(control);
         CameraUiCommand command = {};
-        if (camera_command_queue && xQueueReceive(camera_command_queue, &command, pdMS_TO_TICKS(20)) == pdTRUE)
+        if (camera_command_queue && xQueueReceive(camera_command_queue, &command, pdMS_TO_TICKS(10)) == pdTRUE)
         {
-            if (command.type == CAM_UI_STOP)
-            {
-                (void)camera_service_stop(2000);
-            }
-            else if (command.type == CAM_UI_RELEASE)
-            {
-                (void)camera_service_stop(2000);
-                if (preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(500)) == pdTRUE)
-                {
-                    // Nếu app đã được mở lại trước khi command chạy thì buffer đang được dùng lại.
-                    if (!preview_active)
-                    {
-                        if (preview_front) free(preview_front);
-                        if (preview_back) free(preview_back);
-                        preview_front = nullptr;
-                        preview_back = nullptr;
-                        preview_capacity_pixels = 0;
-                        preview_frame_id = 0;
-                    }
-                    xSemaphoreGive(preview_mutex);
-                }
-            }
-            else if (command.type == CAM_UI_START)
-            {
-                (void)camera_service_start();
-            }
-            else if (command.type == CAM_UI_CONFIGURE)
+            if (command.type == CAM_UI_CONFIGURE &&
+                camera_session_accepts(command.session_id, worker_session_id, preview_active))
             {
                 if (camera_service_configure_network(command.profile))
                 {
                     (void)camera_service_save_network_profile();
-                    (void)camera_service_start();
+                    const CameraWorkerControl latest = get_camera_control();
+                    if (latest.session_id == command.session_id && latest.active && latest.run_service)
+                        (void)camera_service_start();
                 }
             }
         }
-        decode_latest_frame();
+        const CameraWorkerControl latest = get_camera_control();
+        if (latest.active && latest.run_service && latest.session_id == worker_session_id)
+            decode_latest_frame(latest.session_id);
+        ulTaskNotifyTake(pdTRUE, 0);
     }
 }
 
@@ -361,27 +477,10 @@ void camera_app_open(lv_obj_t *parent)
     uint16_t toolbar_w = portrait ? (SCREEN_WIDTH - 4) : 96;
     canvas_w = portrait ? (SCREEN_WIDTH - 4) : (SCREEN_WIDTH - toolbar_w - 12);
     canvas_h = portrait ? 148 : (APP_CONTENT_HEIGHT - 6);
-    const size_t required_pixels = static_cast<size_t>(canvas_w) * canvas_h;
     const bool worker_ready = ensure_camera_worker();
-
-    if (preview_capacity_pixels < required_pixels)
-    {
-        uint16_t *new_front = static_cast<uint16_t *>(heap_caps_malloc(required_pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        uint16_t *new_back = static_cast<uint16_t *>(heap_caps_malloc(required_pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (!new_front) new_front = static_cast<uint16_t *>(malloc(required_pixels * sizeof(uint16_t)));
-        if (!new_back) new_back = static_cast<uint16_t *>(malloc(required_pixels * sizeof(uint16_t)));
-        if (new_front && new_back)
-        {
-            preview_front = new_front;
-            preview_back = new_back;
-            preview_capacity_pixels = required_pixels;
-        }
-        else
-        {
-            if (new_front) free(new_front);
-            if (new_back) free(new_back);
-        }
-    }
+    ++ui_session_id;
+    if (ui_session_id == 0) ++ui_session_id;
+    if (worker_ready) set_camera_control(ui_session_id, true, true, canvas_w, canvas_h);
 
     // CẤP PHÁT BỘ ĐỆM CANVAS TRONG PSRAM
     if (!cam_canvas_buf)
@@ -399,14 +498,6 @@ void camera_app_open(lv_obj_t *parent)
         {
             cam_canvas_buf[i] = lv_color_hex(0x0A0D14);
         }
-    }
-    if (preview_mutex && xSemaphoreTake(preview_mutex, portMAX_DELAY) == pdTRUE)
-    {
-        if (preview_front) memset(preview_front, 0, required_pixels * sizeof(uint16_t));
-        if (preview_back) memset(preview_back, 0, required_pixels * sizeof(uint16_t));
-        preview_frame_id = 0;
-        preview_active = worker_ready && preview_front && preview_back;
-        xSemaphoreGive(preview_mutex);
     }
 
     // 2. Preview full-width phía trên.
@@ -651,13 +742,11 @@ void camera_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(cam_keyboard, kb_event_cb, LV_EVENT_ALL, nullptr);
     lv_obj_add_flag(cam_keyboard, LV_OBJ_FLAG_HIDDEN);
 
-    CameraUiCommand start_command = {};
-    start_command.type = CAM_UI_START;
     if (cur_prof.protocol != CAM_PROTO_HTTP_SNAPSHOT)
     {
         if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "Protocol đã lưu không được hỗ trợ");
     }
-    else if ((!preview_active || !enqueue_camera_command(start_command)) && lbl_cam_status)
+    else if (!worker_ready && lbl_cam_status)
     {
         lv_label_set_text(lbl_cam_status, "CAMERA/PREVIEW DEGRADED");
     }
@@ -666,15 +755,8 @@ void camera_app_open(lv_obj_t *parent)
 /* Đóng và dọn dẹp */
 void camera_app_close(void)
 {
-    if (preview_mutex && xSemaphoreTake(preview_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
-    {
-        preview_active = false;
-        xSemaphoreGive(preview_mutex);
-    }
-    CameraUiCommand stop_command = {};
-    stop_command.type = CAM_UI_RELEASE;
-    if (!enqueue_camera_command(stop_command))
-        Serial.println("[CAMERA_UI] Không thể gửi lệnh stop; service giữ trạng thái hiện tại");
+    const uint32_t closing_session = ui_session_id;
+    set_camera_control(closing_session, false, false, canvas_w, canvas_h);
     if (cam_canvas) lv_obj_del(cam_canvas);
     if (cam_canvas_buf)
     {
@@ -716,9 +798,12 @@ void camera_app_update(void)
     if (preview_mutex && xSemaphoreTake(preview_mutex, 0) == pdTRUE)
     {
         ready_frame_id = preview_frame_id;
-        if (ready_frame_id != last_rendered_frame_id && preview_front)
+        const size_t copy_pixels = static_cast<size_t>(canvas_w) * canvas_h;
+        if (camera_session_accepts(preview_session_id, ui_session_id, preview_active) &&
+            ready_frame_id != last_rendered_frame_id && preview_front &&
+            preview_front_capacity_pixels >= copy_pixels)
         {
-            memcpy(cam_canvas_buf, preview_front, static_cast<size_t>(canvas_w) * canvas_h * sizeof(lv_color_t));
+            memcpy(cam_canvas_buf, preview_front, copy_pixels * sizeof(lv_color_t));
             ready_timestamp_ms = preview_timestamp_ms;
             ready_jpeg_bytes = preview_jpeg_bytes;
             ready_width = preview_source_w;

@@ -2,8 +2,10 @@
 #include "ui_theme.h"
 #include "fonts/ui_fonts.h"
 #include "shared_i2c_bus.h"
+#include "firmware_contracts.h"
 
 static lv_obj_t *s_parent = nullptr;
+static lv_obj_t *s_overlay = nullptr;
 static lv_obj_t *s_info = nullptr;
 static lv_obj_t *s_cross_h = nullptr;
 static lv_obj_t *s_cross_v = nullptr;
@@ -38,12 +40,19 @@ static void update_debug(lv_timer_t *)
         lv_obj_add_flag(s_cross_v, LV_OBJ_FLAG_HIDDEN);
         return;
     }
+    if (!s_overlay) return;
     lv_area_t area;
-    lv_obj_get_coords(s_parent, &area);
-    const lv_coord_t local_x = static_cast<lv_coord_t>(snap.mapped_x) - area.x1;
-    const lv_coord_t local_y = static_cast<lv_coord_t>(snap.mapped_y) - area.y1;
-    if (local_x < 0 || local_y < 0 || local_x >= lv_obj_get_width(s_parent) || local_y >= lv_obj_get_height(s_parent))
+    lv_obj_get_coords(s_overlay, &area);
+    int16_t local_x = 0;
+    int16_t local_y = 0;
+    if (!ui_screen_to_local(snap.mapped_x, snap.mapped_y, area.x1, area.y1,
+                            lv_obj_get_width(s_overlay), lv_obj_get_height(s_overlay),
+                            &local_x, &local_y))
+    {
+        lv_obj_add_flag(s_cross_h, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_cross_v, LV_OBJ_FLAG_HIDDEN);
         return;
+    }
     lv_obj_set_pos(s_cross_h, local_x - 8, local_y);
     lv_obj_set_pos(s_cross_v, local_x, local_y - 8);
     lv_obj_clear_flag(s_cross_h, LV_OBJ_FLAG_HIDDEN);
@@ -56,6 +65,20 @@ void ui_touch_debug_open(lv_obj_t *parent)
     s_parent = parent;
     lv_obj_set_style_bg_color(parent, lv_color_hex(COLOR_OS_BG), 0);
     lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_scroll_to(parent, 0, 0, LV_ANIM_OFF);
+    lv_obj_set_style_pad_all(parent, 0, 0);
+    lv_obj_set_style_border_width(parent, 0, 0);
+
+    // Dedicated zero-style overlay makes screen->local conversion independent
+    // from content padding, borders and any scroll state left by another app.
+    s_overlay = lv_obj_create(parent);
+    lv_obj_set_size(s_overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_pos(s_overlay, 0, 0);
+    lv_obj_set_style_pad_all(s_overlay, 0, 0);
+    lv_obj_set_style_border_width(s_overlay, 0, 0);
+    lv_obj_set_style_radius(s_overlay, 0, 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_TRANSP, 0);
+    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
 
     s_info = lv_label_create(parent);
     lv_obj_set_width(s_info, lv_obj_get_width(parent) - 16);
@@ -72,8 +95,8 @@ void ui_touch_debug_open(lv_obj_t *parent)
     lv_obj_set_style_text_color(note, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
     lv_label_set_long_mode(note, LV_LABEL_LONG_WRAP);
 
-    s_cross_h = lv_obj_create(parent);
-    s_cross_v = lv_obj_create(parent);
+    s_cross_h = lv_obj_create(s_overlay);
+    s_cross_v = lv_obj_create(s_overlay);
     for (lv_obj_t *line : {s_cross_h, s_cross_v})
     {
         lv_obj_set_style_bg_color(line, lv_color_hex(COLOR_ACCENT_CYAN), 0);
@@ -97,6 +120,7 @@ void ui_touch_debug_close(void)
         s_timer = nullptr;
     }
     s_parent = nullptr;
+    s_overlay = nullptr;
     s_info = nullptr;
     s_cross_h = nullptr;
     s_cross_v = nullptr;

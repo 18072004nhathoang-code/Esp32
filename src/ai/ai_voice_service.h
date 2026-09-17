@@ -17,6 +17,7 @@ enum AIVoiceState
     AI_STATE_LISTENING,        // Đang thu âm từ Micro MEMS
     AI_STATE_PROCESSING,       // Đang gửi dữ liệu và đợi Gemini AI suy nghĩ
     AI_STATE_SPEAKING,         // Đang phát giọng nói phản hồi ra Loa ngoài
+    AI_STATE_CANCELING,        // Đang chờ worker hủy request và nhả tài nguyên
     AI_STATE_ERROR             // Tài nguyên hệ thống không sẵn sàng
 };
 

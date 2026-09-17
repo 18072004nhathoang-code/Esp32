@@ -149,6 +149,67 @@ const headerHeight = 30, titleLineHeight = 25;
 assert.ok((headerHeight - titleLineHeight) / 2 >= 2);
 assert.strictEqual(320 - 22 - headerHeight, 268);
 
+function screenToLocal(x, y, originX, originY, width, height) {
+    const lx = x - originX, ly = y - originY;
+    return lx >= 0 && ly >= 0 && lx < width && ly < height ? [lx, ly] : null;
+}
+assert.deepStrictEqual(screenToLocal(120, 160, 0, 30, 240, 290), [120, 130]);
+assert.strictEqual(screenToLocal(10, 29, 0, 30, 240, 290), null);
+
+function selectContact(activeId, contacts) {
+    if (activeId !== 0xff) {
+        const index = contacts.findIndex(p => p.id === activeId && p.event <= 2);
+        return index >= 0 ? { index, release: false } : { index: -1, release: true };
+    }
+    const index = contacts.findIndex(p => p.event <= 2);
+    return { index, release: false };
+}
+assert.deepStrictEqual(selectContact(7, [{ id: 4, event: 2 }, { id: 7, event: 2 }]), { index: 1, release: false });
+assert.deepStrictEqual(selectContact(7, [{ id: 4, event: 2 }]), { index: -1, release: true });
+
+class AtomicStarter {
+    constructor() { this.state = 'IDLE'; this.acquires = 0; }
+    begin() { if (this.state !== 'IDLE') return false; this.state = 'STARTING'; this.acquires++; return true; }
+    finish(ok) { if (this.state !== 'STARTING') return false; this.state = ok ? 'ACTIVE' : 'IDLE'; return ok; }
+    cancel() { this.state = 'IDLE'; }
+}
+const starter = new AtomicStarter();
+assert.strictEqual(starter.begin(), true);
+assert.strictEqual(starter.begin(), false);
+assert.strictEqual(starter.acquires, 1);
+starter.cancel();
+assert.strictEqual(starter.finish(true), false);
+assert.strictEqual(Math.floor(1024 / 4), 256);
+assert.strictEqual(Math.floor(1023 / 4), 255);
+
+class CameraMailbox {
+    constructor() { this.revision = 0; this.ack = 0; this.session = 0; this.active = false; }
+    set(session, active) { this.session = session; this.active = active; this.revision++; }
+    pending() { return this.revision !== this.ack; }
+    apply() { this.ack = this.revision; return { session: this.session, active: this.active }; }
+}
+const mailbox = new CameraMailbox();
+mailbox.set(1, false); // close cannot be lost even if the ordinary queue is full
+mailbox.set(2, true);  // immediate reopen supersedes the stale release safely
+assert.strictEqual(mailbox.pending(), true);
+assert.deepStrictEqual(mailbox.apply(), { session: 2, active: true });
+assert.strictEqual(mailbox.pending(), false);
+
+class RequestGate {
+    constructor() { this.next = 0; this.active = 0; this.cancelledThrough = 0; }
+    start() { if (this.active) return 0; return this.active = ++this.next; }
+    cancel() { this.cancelledThrough = Math.max(this.cancelledThrough, this.active); }
+    finish(id) { if (this.active === id) this.active = 0; }
+    accepts(id) { return id !== 0 && id === this.active && id > this.cancelledThrough; }
+}
+const requests = new RequestGate();
+const oldRequest = requests.start();
+requests.cancel();
+assert.strictEqual(requests.accepts(oldRequest), false);
+assert.strictEqual(requests.start(), 0);
+requests.finish(oldRequest);
+assert.ok(requests.start() > oldRequest);
+
 // Firmware regressions: các app phải dùng service thật hoặc fail rõ ràng.
 const repoRoot = path.resolve(__dirname, '..');
 const source = relative => fs.readFileSync(path.join(repoRoot, relative), 'utf8');
@@ -177,13 +238,19 @@ assert.match(wifiService, /WIFI_SCAN_FAILED/);
 assert.match(wifiService, /xQueue|xTaskCreatePinnedToCore/);
 assert.doesNotMatch(cameraUi, /MJPEG \(Chưa\)|RTSP\/H\.264 \(Chưa\)/);
 assert.match(cameraUi, /HTTP\(S\) Snapshot/);
-assert.match(cameraUi, /CAM_UI_RELEASE/);
-assert.match(cameraUi, /if \(!preview_active\)/);
+assert.match(cameraUi, /CameraWorkerControl/);
+assert.match(cameraUi, /session_id/);
+assert.match(cameraUi, /preview_front_capacity_pixels/);
+assert.match(cameraUi, /preview_back_capacity_pixels/);
 assert.match(audioService, /void audio_cancel_recording/);
 assert.match(audioService, /audio_state_mutex = xSemaphoreCreateMutex/);
 assert.match(audioService, /xSemaphoreTake\(audio_state_mutex/);
 assert.doesNotMatch(audioService, /static SemaphoreHandle_t audio_mutex/);
 assert.match(aiService, /audio_cancel_recording/);
 assert.match(aiService, /size_t readBytes\(char \*buffer/);
+assert.match(aiService, /AI_STATE_CANCELING/);
+assert.match(aiService, /writeToStream/);
+assert.match(aiService, /kJsonBodyLimit/);
+assert.match(aiService, /kTtsBodyLimit/);
 
 console.log('Behavioral regression tests: PASS');

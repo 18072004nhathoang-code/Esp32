@@ -70,6 +70,15 @@ enum AudioRecordingFileState
     AUDIO_FILE_ERROR
 };
 
+/** Immutable reference to one completed recording. Treat fields as read-only. */
+struct AudioRecordingLease
+{
+    const int16_t *samples;
+    size_t sample_count;
+    uint32_t generation;
+    void *token;
+};
+
 /**
  * @brief Yêu cầu quyền sở hữu phần cứng I2S
  * @param requester Phân hệ yêu cầu
@@ -172,6 +181,10 @@ uint32_t audio_get_recorded_duration_ms(void);
 uint32_t audio_get_playback_progress_ms(void);
 size_t audio_get_recorded_sample_count(void);
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples);
+bool audio_acquire_recording_lease(AudioRecordingLease *lease);
+size_t audio_copy_recording_lease(const AudioRecordingLease *lease, size_t offset,
+                                  int16_t *dest, size_t max_samples);
+void audio_release_recording_lease(AudioRecordingLease *lease);
 AudioRecordingFileState audio_get_recording_file_state(void);
 const char *audio_get_recording_file_path(void);
 

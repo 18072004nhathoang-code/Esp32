@@ -18,6 +18,7 @@
 #include "camera/camera_service.h"
 #include "os/power_manager.h"
 #include "os/settings_service.h"
+#include "firmware_regression.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -33,6 +34,8 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
+    Serial.printf("[SELF_TEST] Firmware C++ contracts: %s\n",
+                  firmware_regression_run() ? "PASS" : "FAIL");
 
     system_info_init();
     bool settings_ok = settings_service_init();
@@ -72,7 +75,7 @@ void setup()
                   lvgl_port_get_color_config_source(),
                   display_state.bgr_order ? "BGR" : "RGB",
                   display_state.inverted ? "ON" : "OFF");
-    Serial.println("[BOOT] Touch mapping: BOARD_PROFILE (saved touch_cal ignored)");
+    Serial.println("[BOOT] Touch mapping: raw -> invert X/Y -> rotation 2 -> full-screen identity; no calibration/NVS");
 
     // 3. [TOUCH] Thông tin cảm ứng & Trạng thái Probe thật
     Serial.printf("[TOUCH] Controller: FT6336 Capacitive | I2C Addr: 0x%02X (Configured: SDA:%d, SCL:%d)\n",

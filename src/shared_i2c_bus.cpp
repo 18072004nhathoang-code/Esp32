@@ -4,6 +4,7 @@
  */
 
 #include "shared_i2c_bus.h"
+#include "touch_contact_tracker.h"
 #include "touch_transform.h"
 #include <Wire.h>
 
@@ -235,26 +236,33 @@ bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
         return false;
     }
 
-    int selected = -1;
+    uint8_t ids[FT6336_MAX_POINTS] = {};
+    uint8_t events[FT6336_MAX_POINTS] = {};
     for (uint8_t index = 0; index < snapshot.point_count; ++index)
     {
         const size_t base = 1 + index * FT6336_POINT_BYTES;
-        const uint8_t event = (buf[base] >> 6) & 0x03U;
-        const uint8_t id = (buf[base + 2] >> 4) & 0x0FU;
-        if (event <= SHARED_TOUCH_EVENT_CONTACT &&
-            (selected < 0 || id == s_active_touch_id))
-        {
-            selected = index;
-            if (id == s_active_touch_id) break;
-        }
+        events[index] = (buf[base] >> 6) & 0x03U;
+        ids[index] = (buf[base + 2] >> 4) & 0x0FU;
     }
-    if (selected < 0)
+    const TouchContactDecision decision = touch_contact_select(
+        s_active_touch_id, ids, events, snapshot.point_count);
+    if (decision.release_before_switch)
+    {
+        snapshot.sample_valid = true;
+        snapshot.event = SHARED_TOUCH_EVENT_UP;
+        snapshot.touch_id = s_active_touch_id;
+        publish_touch_snapshot(snapshot);
+        s_active_touch_id = 0xFF;
+        return false;
+    }
+    if (decision.index < 0)
     {
         publish_touch_snapshot(snapshot);
         s_active_touch_id = 0xFF;
         return false;
     }
 
+    const int selected = decision.index;
     const size_t base = 1 + selected * FT6336_POINT_BYTES;
     snapshot.event = (buf[base] >> 6) & 0x03U;
     snapshot.touch_id = (buf[base + 2] >> 4) & 0x0FU;

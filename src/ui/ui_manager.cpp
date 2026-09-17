@@ -514,11 +514,28 @@ static void invalidate_active_app_widgets(void)
     active_app = APP_NONE;
 }
 
+static void reset_app_content_container(void)
+{
+    if (!app_content_container) return;
+    lv_obj_scroll_to(app_content_container, 0, 0, LV_ANIM_OFF);
+    lv_obj_clear_flag(app_content_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(app_content_container, LV_DIR_ALL);
+    lv_obj_set_layout(app_content_container, 0);
+    lv_obj_set_style_pad_all(app_content_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_row(app_content_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_column(app_content_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(app_content_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(app_content_container, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(app_content_container, lv_color_hex(COLOR_OS_BG),
+                              LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
 static void prepare_app_window(const char *title, AppID app_id)
 {
     ensure_app_window();
     invalidate_active_app_widgets();
     lv_obj_clean(app_content_container);
+    reset_app_content_container();
     lv_label_set_text(app_title_lbl, title);
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
@@ -528,7 +545,11 @@ static void prepare_app_window(const char *title, AppID app_id)
 static void close_current_app(void)
 {
     invalidate_active_app_widgets();
-    if (app_content_container) lv_obj_clean(app_content_container);
+    if (app_content_container)
+    {
+        lv_obj_clean(app_content_container);
+        reset_app_content_container();
+    }
     if (app_window) lv_obj_add_flag(app_window, LV_OBJ_FLAG_HIDDEN);
     if (desktop_view) lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
 }

@@ -1,0 +1,61 @@
+#include "firmware_regression.h"
+#include "board_config.h"
+#include "firmware_contracts.h"
+#include "touch_contact_tracker.h"
+#include "touch_transform.h"
+
+static_assert(audio_stereo_frames_from_bytes(1024) == 256, "16 kHz DMA frame accounting");
+static_assert(audio_stereo_frames_from_bytes(1023) == 255, "partial DMA reads must not overrun");
+static_assert(bounded_body_append_allowed(16380, 4, 16384), "exact JSON limit accepted");
+static_assert(!bounded_body_append_allowed(16380, 5, 16384), "oversize JSON rejected");
+static_assert(http_dechunked_body_complete(-1, 128, 128, false), "chunked body accepted after dechunk");
+static_assert(!http_dechunked_body_complete(128, 127, 127, false), "truncated body rejected");
+static_assert(camera_session_accepts(7, 7, true), "current camera session accepted");
+static_assert(!camera_session_accepts(6, 7, true), "stale camera session rejected");
+static_assert(camera_control_needs_apply(9, 8), "critical camera control retries until ACK");
+static_assert(!camera_control_needs_apply(9, 9), "camera control ACK terminates retry");
+static_assert(request_response_is_current(3, 3, 2), "current AI response accepted");
+static_assert(!request_response_is_current(3, 4, 2), "stale AI response rejected");
+static_assert(!request_response_is_current(3, 3, 3), "cancelled AI response rejected");
+static_assert(exclusive_start_can_claim(0, 0), "idle audio start may claim");
+static_assert(!exclusive_start_can_claim(1, 0), "concurrent audio start rejected");
+
+bool firmware_regression_run()
+{
+    bool ok = true;
+
+    const TouchTransformConfig transform = {
+        BOARD_LCD_PANEL_WIDTH, BOARD_LCD_PANEL_HEIGHT,
+        BOARD_LCD_WIDTH, BOARD_LCD_HEIGHT, BOARD_LCD_ROTATION,
+        BOARD_TOUCH_SWAP_XY != 0, BOARD_TOUCH_INVERT_X != 0, BOARD_TOUCH_INVERT_Y != 0
+    };
+    uint16_t sx = 0, sy = 0;
+    ok = ok && touch_transform_point(transform, 0, 0, &sx, &sy) && sx == 0 && sy == 0;
+    ok = ok && touch_transform_point(transform, 239, 319, &sx, &sy) && sx == 239 && sy == 319;
+
+    const uint8_t ids_same[] = {4, 7};
+    const uint8_t events_same[] = {2, 2};
+    TouchContactDecision decision = touch_contact_select(7, ids_same, events_same, 2);
+    ok = ok && decision.index == 1 && !decision.release_before_switch;
+    const uint8_t ids_changed[] = {4};
+    decision = touch_contact_select(7, ids_changed, events_same, 1);
+    ok = ok && decision.index < 0 && decision.release_before_switch;
+
+    int16_t lx = 0, ly = 0;
+    ok = ok && ui_screen_to_local(120, 160, 0, 30, 240, 290, &lx, &ly) &&
+         lx == 120 && ly == 130;
+    ok = ok && !ui_screen_to_local(10, 29, 0, 30, 240, 290, &lx, &ly);
+
+    uint8_t wav[48] = {};
+    memcpy(wav, "RIFF", 4); wav[4] = 40;
+    memcpy(wav + 8, "WAVEfmt ", 8); wav[16] = 16;
+    wav[20] = 1; wav[22] = 1; wav[24] = 0x80; wav[25] = 0x3E;
+    wav[28] = 0x00; wav[29] = 0x7D; wav[32] = 2; wav[34] = 16;
+    memcpy(wav + 36, "data", 4); wav[40] = 4;
+    PcmWavView view = {};
+    ok = ok && parse_pcm16_mono_16k_wav(wav, sizeof(wav), &view) && view.sample_count == 2;
+    ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav) - 1, &view);
+    wav[24] = 0x44;
+    ok = ok && !parse_pcm16_mono_16k_wav(wav, sizeof(wav), &view);
+    return ok;
+}

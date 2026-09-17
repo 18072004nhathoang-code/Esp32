@@ -52,5 +52,10 @@ jobs:
       - name: Run behavioral regression tests
         run: node simulator/regression_test.js
 
+      - name: Run native C++ firmware contract tests
+        run: |
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/native_contract_test.cpp -o /tmp/native_contract_test
+          /tmp/native_contract_test
+
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p
