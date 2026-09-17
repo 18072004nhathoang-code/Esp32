@@ -84,20 +84,13 @@ static volatile bool worker_wait_old_worker_exit = false;
 static volatile bool worker_decode_error = false;
 static uint32_t service_session_id = 0;
 static uint32_t camera_config_next_request_id = 0;
+static volatile uint32_t camera_config_requested_id = 0;
+static volatile uint32_t camera_config_received_id = 0;
+static volatile uint32_t camera_config_applied_id = 0;
+static volatile bool camera_configure_ok = false;
+static volatile bool camera_save_ok = false;
+static volatile bool camera_start_ok = false;
 static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
-
-struct CameraConfigStatus
-{
-    uint32_t requested_id;
-    uint32_t received_id;
-    uint32_t applied_id;
-    uint32_t control_revision;
-    bool configure_ok;
-    bool save_ok;
-    bool start_ok;
-    bool run_service;
-};
-static CameraConfigStatus camera_config_status = {};
 
 struct CameraWorkerControl
 {
@@ -128,8 +121,8 @@ static CameraWorkerControl get_camera_control()
     return result;
 }
 
-static uint32_t set_camera_control(uint32_t session_id, bool active, bool run_service,
-                                   uint16_t width, uint16_t height)
+static void set_camera_control(uint32_t session_id, bool active, bool run_service,
+                               uint16_t width, uint16_t height)
 {
     portENTER_CRITICAL(&camera_control_mux);
     camera_control.session_id = session_id;
@@ -138,19 +131,8 @@ static uint32_t set_camera_control(uint32_t session_id, bool active, bool run_se
     camera_control.width = width;
     camera_control.height = height;
     ++camera_control.revision;
-    if (camera_control.revision == 0) ++camera_control.revision;
-    const uint32_t revision = camera_control.revision;
     portEXIT_CRITICAL(&camera_control_mux);
     if (camera_worker_handle) xTaskNotifyGive(camera_worker_handle);
-    return revision;
-}
-
-static CameraConfigStatus get_camera_config_status()
-{
-    portENTER_CRITICAL(&camera_control_mux);
-    const CameraConfigStatus result = camera_config_status;
-    portEXIT_CRITICAL(&camera_control_mux);
-    return result;
 }
 
 /* Callback của thư viện TJpgDec đưa dữ liệu RGB565 vào bộ đệm Canvas */
@@ -227,23 +209,15 @@ static bool queue_ui_configuration(void)
     command.session_id = ui_session_id;
     command.run_service = true;
     command.profile = prof;
-    portENTER_CRITICAL(&camera_control_mux);
-    camera_config_status = {};
-    camera_config_status.requested_id = command.request_id;
-    camera_config_status.run_service = command.run_service;
-    portEXIT_CRITICAL(&camera_control_mux);
     if (!enqueue_camera_command(command))
     {
-        portENTER_CRITICAL(&camera_control_mux);
-        if (camera_config_status.requested_id == command.request_id)
-            camera_config_status.applied_id = command.request_id;
-        portEXIT_CRITICAL(&camera_control_mux);
         if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "COMMAND QUEUE FULL");
         return false;
     }
     // Saving and connecting is one desired-state transaction. This explicitly
     // supersedes a prior Stop, while the worker still reports configure/save/
     // start completion separately from queue acceptance.
+    camera_config_requested_id = command.request_id;
     if (lbl_cam_status) lv_label_set_text(lbl_cam_status, "CONFIG REQUESTED");
     return true;
 }
@@ -573,77 +547,39 @@ static void decode_latest_frame(uint32_t session_id)
     camera_service_return_frame(frame);
 }
 
-static void complete_camera_config_control()
-{
-    portENTER_CRITICAL(&camera_control_mux);
-    const bool waiting = camera_config_status.received_id != 0 &&
-                         camera_config_status.applied_id == 0 &&
-                         camera_config_status.control_revision != 0;
-    const bool applied = waiting &&
-                         worker_ack_revision == camera_config_status.control_revision;
-    const bool failed = waiting && worker_control_error &&
-                        worker_received_revision == camera_config_status.control_revision;
-    if (applied || failed)
-    {
-        camera_config_status.start_ok = applied;
-        camera_config_status.applied_id = camera_config_status.received_id;
-    }
-    portEXIT_CRITICAL(&camera_control_mux);
-}
-
 static void camera_ui_worker(void *)
 {
     for (;;)
     {
         const CameraWorkerControl control = get_camera_control();
         worker_apply_control(control);
-        complete_camera_config_control();
         CameraUiCommand command = {};
         if (camera_command_queue && xQueueReceive(camera_command_queue, &command, pdMS_TO_TICKS(10)) == pdTRUE)
         {
-            portENTER_CRITICAL(&camera_control_mux);
-            const bool latest = command.request_id != 0 &&
-                                command.request_id == camera_config_status.requested_id;
-            if (latest) camera_config_status.received_id = command.request_id;
-            portEXIT_CRITICAL(&camera_control_mux);
-
-            bool configure_ok = false;
-            bool save_ok = false;
-            uint32_t control_revision = 0;
-            if (latest && command.type == CAM_UI_CONFIGURE &&
+            camera_config_received_id = command.request_id;
+            camera_configure_ok = false;
+            camera_save_ok = false;
+            camera_start_ok = false;
+            if (command.type == CAM_UI_CONFIGURE &&
                 camera_session_accepts(command.session_id, worker_session_id, preview_active))
             {
-                configure_ok = camera_service_configure_network(command.profile);
-                if (configure_ok)
+                camera_configure_ok = camera_service_configure_network(command.profile);
+                if (camera_configure_ok)
                 {
-                    save_ok = camera_service_save_network_profile();
-                    if (save_ok && command.run_service)
+                    camera_save_ok = camera_service_save_network_profile();
+                    if (camera_save_ok && command.run_service)
                     {
-                        // The new desired state owns Start and its ACK. Do not
-                        // start directly here or report an enqueue as applied.
-                        control_revision = set_camera_control(
-                            command.session_id, true, true,
-                            worker_canvas_w, worker_canvas_h);
+                        set_camera_control(command.session_id, true, true,
+                                           worker_canvas_w, worker_canvas_h);
+                        camera_start_ok = camera_service_start();
+                        if (camera_start_ok)
+                            service_session_id = camera_service_get_session_id();
                     }
+                    else if (camera_save_ok)
+                        camera_start_ok = true;
                 }
             }
-            if (latest)
-            {
-                portENTER_CRITICAL(&camera_control_mux);
-                if (camera_config_status.requested_id == command.request_id)
-                {
-                    camera_config_status.configure_ok = configure_ok;
-                    camera_config_status.save_ok = save_ok;
-                    camera_config_status.control_revision = control_revision;
-                    if (!configure_ok || !save_ok || !command.run_service)
-                    {
-                        camera_config_status.start_ok = !command.run_service &&
-                                                        configure_ok && save_ok;
-                        camera_config_status.applied_id = command.request_id;
-                    }
-                }
-                portEXIT_CRITICAL(&camera_control_mux);
-            }
+            camera_config_applied_id = command.request_id;
         }
         const CameraWorkerControl latest = get_camera_control();
         if (latest.active && latest.run_service && latest.session_id == worker_session_id)
@@ -1056,17 +992,16 @@ void camera_app_update(void)
 
     if (lbl_cam_status)
     {
-        const CameraConfigStatus config = get_camera_config_status();
         const CameraRuntimeState state = camera_service_get_runtime_state();
         const uint32_t age = latest_preview_timestamp == 0 ? UINT32_MAX : millis() - latest_preview_timestamp;
-        if (config.requested_id != config.applied_id)
+        if (camera_config_requested_id != camera_config_applied_id)
             lv_label_set_text(lbl_cam_status, "CONFIG/SAVE/START REQUESTED");
-        else if (config.applied_id != 0 &&
-                 !camera_config_transaction_complete(config.configure_ok, config.save_ok,
-                                                     config.run_service, config.start_ok))
+        else if (camera_config_applied_id != 0 &&
+                 !camera_config_transaction_complete(camera_configure_ok, camera_save_ok,
+                                                     true, camera_start_ok))
         {
-            if (!config.configure_ok) lv_label_set_text(lbl_cam_status, "CONFIGURE FAILED");
-            else if (!config.save_ok) lv_label_set_text(lbl_cam_status, "SAVE FAILED");
+            if (!camera_configure_ok) lv_label_set_text(lbl_cam_status, "CONFIGURE FAILED");
+            else if (!camera_save_ok) lv_label_set_text(lbl_cam_status, "SAVE FAILED");
             else lv_label_set_text(lbl_cam_status, "START FAILED");
         }
         else if (worker_wait_old_worker_exit)
