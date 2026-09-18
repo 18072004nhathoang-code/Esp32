@@ -23,6 +23,8 @@ desktop.ini
 
 # Secrets & Credentials
 include/secrets.h
+backend/.env
+backend/node_modules/
 
 # Backup files
 *.bak
