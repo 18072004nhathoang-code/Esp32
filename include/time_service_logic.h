@@ -40,7 +40,16 @@ struct TimeSyncLogic
 
 inline void utc7_hhmm(time_t epoch, char out[6])
 {
-    const uint32_t seconds = static_cast<uint32_t>((epoch + 7 * 3600) % 86400);
-    snprintf(out, 6, "%02u:%02u", seconds / 3600, (seconds % 3600) / 60);
+    if (!out) return;
+    int64_t seconds = static_cast<int64_t>(epoch % static_cast<time_t>(86400));
+    seconds = (seconds + 7 * 3600) % 86400;
+    if (seconds < 0) seconds += 86400;
+    const uint8_t hour = static_cast<uint8_t>(seconds / 3600);
+    const uint8_t minute = static_cast<uint8_t>((seconds % 3600) / 60);
+    out[0] = static_cast<char>('0' + hour / 10);
+    out[1] = static_cast<char>('0' + hour % 10);
+    out[2] = ':';
+    out[3] = static_cast<char>('0' + minute / 10);
+    out[4] = static_cast<char>('0' + minute % 10);
+    out[5] = '\0';
 }
-

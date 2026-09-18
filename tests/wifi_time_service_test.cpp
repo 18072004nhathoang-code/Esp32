@@ -86,6 +86,9 @@ int main()
     char hhmm[6] = {};
     utc7_hhmm(17 * 3600, hhmm);
     assert(strcmp(hhmm, "00:00") == 0);      // UTC+7 midnight rollover
+    utc7_hhmm(-7 * 3600, hhmm);
+    assert(strcmp(hhmm, "00:00") == 0);      // negative epoch remains bounded
+    utc7_hhmm(static_cast<time_t>(INT64_MAX), hhmm);
+    assert(strlen(hhmm) == 5 && hhmm[2] == ':');
     return 0;
 }
-
