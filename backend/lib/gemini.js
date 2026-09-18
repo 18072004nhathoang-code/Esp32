@@ -34,6 +34,14 @@ function citations(payload) {
   return result;
 }
 
+function safeTruncateUtf8(str, maxBytes) {
+  if (typeof str !== "string") return "";
+  let buf = Buffer.from(str, "utf8");
+  if (buf.length <= maxBytes) return str;
+  buf = buf.subarray(0, maxBytes);
+  return buf.toString("utf8").replace(/\uFFFD*$/, "").trim();
+}
+
 async function geminiFetch(url, body, config, fetchImpl) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -56,8 +64,7 @@ async function geminiFetch(url, body, config, fetchImpl) {
 export async function queryGemini(wav, config, fetchImpl = fetch) {
   const sourceSummary = config.musicSources.map(({ id, label }) => ({ id, label }));
   const prompt = [
-    "Bạn là trợ lý tiếng Việt trên ESP32. Hãy nghe âm thanh, chép lại chính xác và trả lời ngắn gọn.",
-    "Nếu câu hỏi cần dữ liệu hiện tại/mới nhất, BẮT BUỘC dùng Google Search; đặt needs_current_info=true.",
+    "Bạn là trợ lý tiếng Việt trên ESP32. Hãy nghe âm thanh, chép lại chính xác và trả lời cực kỳ ngắn gọn (tối đa 1-2 câu ngắn) để phản hồi nhanh nhất.",
     "Chỉ phát lệnh nhạc khi người dùng yêu cầu rõ ràng. Action cho phép: music.play, music.pause, music.resume, music.stop, music.volume.",
     "music.play không source_id nghĩa là bài SD đang chọn/đầu tiên. Chỉ dùng source_id có trong danh sách cấu hình; không tạo URL.",
     `Nguồn stream cấu hình: ${JSON.stringify(sourceSummary)}.`,
@@ -69,12 +76,14 @@ export async function queryGemini(wav, config, fetchImpl = fetch) {
       { inlineData: { mimeType: "audio/wav", data: wav.toString("base64") } },
       { text: prompt },
     ] }],
-    tools: [{ google_search: {} }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+    generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
   };
+  if (config.enableSearch) {
+    body.tools = [{ google_search: {} }];
+  }
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.queryModel)}:generateContent`;
   let provider;
-  let searchUsed = true;
+  let searchUsed = !!config.enableSearch;
   try {
     provider = await geminiFetch(url, body, config, fetchImpl);
   } catch (error) {
@@ -88,8 +97,10 @@ export async function queryGemini(wav, config, fetchImpl = fetch) {
   }
   const parsed = extractJson(responseText(provider));
   const sources = citations(provider);
-  const transcript = boundedText(parsed.transcript, config.maxTextBytes);
-  const reply = boundedText(parsed.reply, config.maxTextBytes);
+  const rawTranscript = typeof parsed.transcript === "string" ? parsed.transcript : "";
+  const rawReply = typeof parsed.reply === "string" ? parsed.reply : "";
+  const transcript = boundedText(safeTruncateUtf8(rawTranscript, config.maxTextBytes) || "...", config.maxTextBytes);
+  const reply = boundedText(safeTruncateUtf8(rawReply, config.maxTextBytes) || "Tôi đã nghe bạn.", config.maxTextBytes);
   const actions = sanitizeActions(parsed.actions, config.musicSources);
   if (searchUsed && parsed.needs_current_info === true && sources.length === 0) {
     throw new Error("current-information answer was not grounded by Google Search");

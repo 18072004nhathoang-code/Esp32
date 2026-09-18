@@ -33,6 +33,7 @@ export function configFromEnv(env = process.env) {
     timeoutMs: Math.min(Math.max(timeoutMs, 1000), 60000),
     maxQueryBytes: Math.min(Math.max(maxQueryBytes, 32044), 1024 * 1024),
     maxTextBytes: Math.min(Math.max(maxTextBytes, 32), 511),
+    enableSearch: env.ENABLE_SEARCH === "true",
     musicSources: parseMusicSources(env.MUSIC_SOURCES_JSON),
   });
 }
