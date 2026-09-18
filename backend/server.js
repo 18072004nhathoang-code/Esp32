@@ -2,8 +2,10 @@ import http from "node:http";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseMusicSources, parsePcm16Mono16kWav } from "./lib/protocol.js";
-import { queryGemini, ttsGemini } from "./lib/gemini.js";
+import { queryDeepSeek } from "./lib/deepseek.js";
+import { ServiceError, publicError } from "./lib/errors.js";
+import { transcribeGemini, ttsGemini } from "./lib/gemini.js";
+import { boundedText, parseMusicSources, parsePcm16Mono16kWav } from "./lib/protocol.js";
 
 function loadEnvFile(path) {
   if (!fs.existsSync(path)) return;
@@ -16,24 +18,69 @@ function loadEnvFile(path) {
   }
 }
 
-export function configFromEnv(env = process.env) {
-  const timeoutMs = Number(env.REQUEST_TIMEOUT_MS || 45000);
-  const maxQueryBytes = Number(env.MAX_QUERY_BYTES || 400000);
-  const maxTextBytes = Number(env.MAX_TEXT_BYTES || 511);
-  if (!env.GEMINI_API_KEY || !env.ESP_DEVICE_TOKEN || env.ESP_DEVICE_TOKEN.length < 32) {
-    throw new Error("GEMINI_API_KEY and an ESP_DEVICE_TOKEN of at least 32 characters are required");
+function integerSetting(value, fallback, minimum, maximum, name) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
   }
-  if (![timeoutMs, maxQueryBytes, maxTextBytes].every(Number.isSafeInteger)) throw new Error("numeric environment setting is invalid");
+  return parsed;
+}
+
+function booleanSetting(value, fallback, name) {
+  const normalized = String(value ?? fallback).toLowerCase();
+  if (normalized !== "true" && normalized !== "false") throw new Error(`${name} must be true or false`);
+  return normalized === "true";
+}
+
+function deepseekBaseUrl(value) {
+  let parsed;
+  try { parsed = new URL(value || "https://api.deepseek.com"); } catch { throw new Error("DEEPSEEK_BASE_URL is invalid"); }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash ||
+      (parsed.pathname !== "/" && parsed.pathname !== "")) {
+    throw new Error("DEEPSEEK_BASE_URL must be an HTTPS origin without credentials or a path");
+  }
+  return parsed.origin;
+}
+
+export function configFromEnv(env = process.env) {
+  const llmProvider = (env.AI_LLM_PROVIDER || "deepseek").toLowerCase();
+  const sttProvider = (env.AI_STT_PROVIDER || "gemini").toLowerCase();
+  const ttsProvider = (env.AI_TTS_PROVIDER || "gemini").toLowerCase();
+  if (llmProvider !== "deepseek") throw new Error(`AI_LLM_PROVIDER '${llmProvider}' is not supported`);
+  if (sttProvider !== "gemini") throw new Error(`AI_STT_PROVIDER '${sttProvider}' is not supported`);
+  if (ttsProvider !== "gemini") throw new Error(`AI_TTS_PROVIDER '${ttsProvider}' is not supported`);
+  const deepseekModel = env.DEEPSEEK_MODEL || "deepseek-flash";
+  if (deepseekModel !== "deepseek-flash") {
+    throw new Error("DEEPSEEK_MODEL must use the API model ID deepseek-flash");
+  }
+  if (!env.DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY is required for AI_LLM_PROVIDER=deepseek");
+  if ((sttProvider === "gemini" || ttsProvider === "gemini") && !env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is required for the selected Gemini STT/TTS provider");
+  }
+  if (!env.ESP_DEVICE_TOKEN || env.ESP_DEVICE_TOKEN.length < 32) {
+    throw new Error("ESP_DEVICE_TOKEN of at least 32 characters is required");
+  }
   return Object.freeze({
-    apiKey: env.GEMINI_API_KEY,
+    llmProvider,
+    sttProvider,
+    ttsProvider,
+    deepseekApiKey: env.DEEPSEEK_API_KEY,
+    deepseekBaseUrl: deepseekBaseUrl(env.DEEPSEEK_BASE_URL),
+    deepseekModel,
+    deepseekThinking: booleanSetting(env.DEEPSEEK_THINKING, false, "DEEPSEEK_THINKING"),
+    deepseekMaxOutputTokens: integerSetting(env.DEEPSEEK_MAX_OUTPUT_TOKENS, 256, 64, 1024, "DEEPSEEK_MAX_OUTPUT_TOKENS"),
+    deepseekRetries: integerSetting(env.DEEPSEEK_MAX_RETRIES, 2, 0, 3, "DEEPSEEK_MAX_RETRIES"),
+    deepseekRetryBaseMs: integerSetting(env.DEEPSEEK_RETRY_BASE_MS, 250, 1, 5000, "DEEPSEEK_RETRY_BASE_MS"),
+    geminiApiKey: env.GEMINI_API_KEY,
+    geminiSttModel: env.GEMINI_STT_MODEL || "gemini-2.5-flash",
+    geminiTtsModel: env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview",
+    geminiTtsVoice: env.GEMINI_TTS_VOICE || "Kore",
     deviceToken: env.ESP_DEVICE_TOKEN,
-    queryModel: env.GEMINI_QUERY_MODEL || "gemini-2.5-flash",
-    ttsModel: env.GEMINI_TTS_MODEL || "gemini-3.1-flash-tts-preview",
-    ttsVoice: env.GEMINI_TTS_VOICE || "Kore",
-    timeoutMs: Math.min(Math.max(timeoutMs, 1000), 60000),
-    maxQueryBytes: Math.min(Math.max(maxQueryBytes, 32044), 1024 * 1024),
-    maxTextBytes: Math.min(Math.max(maxTextBytes, 32), 511),
-    enableSearch: env.ENABLE_SEARCH === "true",
+    timeoutMs: integerSetting(env.REQUEST_TIMEOUT_MS, 45000, 1000, 60000, "REQUEST_TIMEOUT_MS"),
+    maxQueryBytes: integerSetting(env.MAX_QUERY_BYTES, 400000, 32044, 1024 * 1024, "MAX_QUERY_BYTES"),
+    maxTextBytes: integerSetting(env.MAX_TEXT_BYTES, 511, 32, 511, "MAX_TEXT_BYTES"),
+    maxConcurrentRequests: integerSetting(env.MAX_CONCURRENT_REQUESTS, 4, 1, 32, "MAX_CONCURRENT_REQUESTS"),
+    ttsPrewarm: booleanSetting(env.TTS_PREWARM_ENABLED, false, "TTS_PREWARM_ENABLED"),
     musicSources: parseMusicSources(env.MUSIC_SOURCES_JSON),
   });
 }
@@ -46,79 +93,155 @@ function authorized(req, expected) {
 
 function readBody(req, limit, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const chunks = []; let size = 0; let settled = false;
-    const finish = (error, body) => { if (settled) return; settled = true; clearTimeout(timer); error ? reject(error) : resolve(body); };
-    const timer = setTimeout(() => { req.destroy(); finish(Object.assign(new Error("request timeout"), { status: 408 })); }, timeoutMs);
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const finish = (error, body) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      error ? reject(error) : resolve(body);
+    };
+    const timer = setTimeout(() => {
+      req.destroy();
+      finish(new ServiceError("REQUEST_TIMEOUT", "Hết thời gian nhận request.", 408));
+    }, timeoutMs);
     req.on("data", (chunk) => {
+      if (settled) return;
       size += chunk.length;
-      if (size > limit) { req.destroy(); finish(Object.assign(new Error("request body too large"), { status: 413 })); return; }
+      if (size > limit) {
+        finish(new ServiceError("REQUEST_TOO_LARGE", "Request body vượt giới hạn.", 413));
+        req.resume();
+        return;
+      }
       chunks.push(chunk);
     });
-    req.on("end", () => finish(null, Buffer.concat(chunks)));
-    req.on("error", (error) => finish(error));
+    req.on("end", () => finish(null, Buffer.concat(chunks, size)));
+    req.on("aborted", () => finish(new ServiceError("REQUEST_CANCELLED", "Yêu cầu đã bị hủy.", 499)));
+    req.on("error", () => finish(new ServiceError("REQUEST_IO", "Lỗi khi nhận request.", 400)));
   });
 }
 
 function sendJson(res, status, value) {
+  if (res.destroyed || res.writableEnded) return;
   const body = Buffer.from(JSON.stringify(value));
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": body.length, "cache-control": "no-store" });
   res.end(body);
 }
 
-const ttsCache = new Map();
-
-function prewarmTts(text, config, ttsFn) {
-  if (!text || typeof text !== "string") return;
-  const trimmed = text.trim();
-  if (!trimmed || ttsCache.has(trimmed)) return;
-  const promise = Promise.resolve(ttsFn(trimmed, config)).catch(() => {
-    ttsCache.delete(trimmed);
-    return null;
-  });
-  ttsCache.set(trimmed, promise);
-  if (ttsCache.size > 20) {
-    const oldestKey = ttsCache.keys().next().value;
-    ttsCache.delete(oldestKey);
-  }
+function requestContext(req, res, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(
+    new ServiceError("AI_TIMEOUT", "Pipeline STT→LLM đã hết thời gian.", 504)), timeoutMs);
+  const cancel = () => {
+    if (!res.writableEnded && !controller.signal.aborted) {
+      controller.abort(new ServiceError("REQUEST_CANCELLED", "Yêu cầu đã bị hủy.", 499));
+    }
+  };
+  req.once("aborted", cancel);
+  res.once("close", cancel);
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timer);
+      req.removeListener("aborted", cancel);
+      res.removeListener("close", cancel);
+    },
+  };
 }
 
 export function createServer(config, dependencies = {}) {
-  const query = dependencies.query || queryGemini;
+  const stt = dependencies.stt || transcribeGemini;
+  const llm = dependencies.llm || queryDeepSeek;
   const tts = dependencies.tts || ttsGemini;
+  const ttsCache = new Map();
+  let activeRequests = 0;
+
+  function prewarmTts(text) {
+    if (!config.ttsPrewarm || !text || ttsCache.has(text)) return;
+    const signal = AbortSignal.timeout(config.timeoutMs);
+    const promise = Promise.resolve(tts(text, config, { signal })).then((wav) => {
+      parsePcm16Mono16kWav(wav);
+      return wav;
+    }).catch(() => {
+      ttsCache.delete(text);
+      return null;
+    });
+    ttsCache.set(text, promise);
+    if (ttsCache.size > 20) ttsCache.delete(ttsCache.keys().next().value);
+  }
+
   return http.createServer(async (req, res) => {
+    if (req.method === "GET" && req.url === "/healthz") {
+      return sendJson(res, 200, {
+        ok: true,
+        providers: { stt: config.sttProvider, llm: config.llmProvider, tts: config.ttsProvider },
+      });
+    }
+    if (req.method !== "POST" || (req.url !== "/v1/query" && req.url !== "/v1/tts")) {
+      return sendJson(res, 404, { error: { code: "NOT_FOUND", message: "Endpoint không tồn tại." } });
+    }
+    if (!authorized(req, config.deviceToken)) {
+      return sendJson(res, 401, { error: { code: "DEVICE_AUTH", message: "Device token không hợp lệ." } });
+    }
+    if (activeRequests >= config.maxConcurrentRequests) {
+      return sendJson(res, 503, { error: { code: "AI_BUSY", message: "Gateway đang xử lý quá nhiều yêu cầu." } });
+    }
+    activeRequests++;
+    const context = requestContext(req, res, config.timeoutMs);
     try {
-      if (req.method === "GET" && req.url === "/healthz") return sendJson(res, 200, { ok: true });
-      if (req.method !== "POST" || (req.url !== "/v1/query" && req.url !== "/v1/tts")) return sendJson(res, 404, { error: "not found" });
-      if (!authorized(req, config.deviceToken)) return sendJson(res, 401, { error: "invalid device token" });
       if (req.url === "/v1/query") {
-        if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("audio/wav")) return sendJson(res, 415, { error: "content-type must be audio/wav" });
-        const wav = await readBody(req, config.maxQueryBytes, config.timeoutMs);
-        parsePcm16Mono16kWav(wav);
-        const result = await query(wav, config);
-        if (result && typeof result.reply === "string") {
-          prewarmTts(result.reply, config, tts);
+        if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("audio/wav")) {
+          throw new ServiceError("INVALID_CONTENT_TYPE", "Content-Type phải là audio/wav.", 415);
         }
+        const wav = await readBody(req, config.maxQueryBytes, config.timeoutMs);
+        try { parsePcm16Mono16kWav(wav); } catch {
+          throw new ServiceError("INVALID_WAV", "WAV phải là PCM16 mono 16 kHz hoàn chỉnh.", 400);
+        }
+        const transcript = boundedText(await stt(wav, config, context), config.maxTextBytes);
+        const answer = await llm(transcript, config, context);
+        const result = {
+          transcript,
+          reply: boundedText(answer.reply, config.maxTextBytes),
+          actions: answer.actions || [],
+          sources: answer.sources || [],
+        };
+        prewarmTts(result.reply);
         return sendJson(res, 200, result);
       }
-      if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) return sendJson(res, 415, { error: "content-type must be application/json" });
+
+      if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+        throw new ServiceError("INVALID_CONTENT_TYPE", "Content-Type phải là application/json.", 415);
+      }
       const raw = await readBody(req, 4096, config.timeoutMs);
       let input;
-      try { input = JSON.parse(raw.toString("utf8")); } catch { return sendJson(res, 400, { error: "invalid JSON" }); }
-      if (!input || Object.keys(input).length !== 1 || typeof input.text !== "string") return sendJson(res, 400, { error: "expected {text}" });
+      try { input = JSON.parse(raw.toString("utf8")); } catch {
+        throw new ServiceError("INVALID_JSON", "JSON request không hợp lệ.", 400);
+      }
+      if (!input || Object.keys(input).length !== 1 || typeof input.text !== "string") {
+        throw new ServiceError("INVALID_TTS_REQUEST", "TTS yêu cầu đúng một trường text.", 400);
+      }
+      const text = boundedText(input.text, config.maxTextBytes);
       let wav;
-      const key = input.text.trim();
-      if (ttsCache.has(key)) {
-        wav = await ttsCache.get(key);
-        ttsCache.delete(key);
+      if (ttsCache.has(text)) {
+        wav = await ttsCache.get(text);
+        ttsCache.delete(text);
       }
-      if (!wav) {
-        wav = await tts(input.text, config);
+      if (!wav) wav = await tts(text, config, context);
+      try { parsePcm16Mono16kWav(wav); } catch {
+        throw new ServiceError("INVALID_TTS_AUDIO", "Provider TTS trả về WAV không hợp lệ.");
       }
+      if (res.destroyed || res.writableEnded || context.signal.aborted) return;
       res.writeHead(200, { "content-type": "audio/wav", "content-length": wav.length, "cache-control": "no-store" });
       res.end(wav);
     } catch (error) {
-      const status = error.status || (/WAV|text field|audio/i.test(error.message) ? 400 : 502);
-      sendJson(res, status, { error: error.message === "request body too large" ? error.message : "AI request failed" });
+      if (!res.destroyed && !res.writableEnded) {
+        const output = publicError(error);
+        sendJson(res, output.status, output.value);
+      }
+    } finally {
+      context.cleanup();
+      activeRequests--;
     }
   });
 }

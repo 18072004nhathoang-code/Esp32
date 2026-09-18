@@ -43,14 +43,18 @@ jobs:
           #define GOOGLE_MAPS_STATIC_API_KEY "${MAPS_API_KEY:-}"
           #define MAPS_API_KEY                "${MAPS_API_KEY:-}"
 
-          // AI Voice Assistant API Keys
-          #define GEMINI_API_KEY              ""
-          #define OPENAI_API_KEY              ""
+          // Provider API keys stay on the HTTPS backend; firmware gets only
+          // its independent gateway bearer token from its deployment config.
           #define CAMERA_TLS_CA_CERT          ""
           EOF
 
       - name: Run behavioral regression tests
         run: node simulator/regression_test.js
+
+      - name: Run AI backend tests
+        run: |
+          npm ci --prefix backend
+          npm test --prefix backend
 
       - name: Run native C++ firmware contract tests
         run: |
@@ -62,8 +66,12 @@ jobs:
           /tmp/fault_injection_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/music_decoder_lifecycle_test.cpp -o /tmp/music_decoder_lifecycle_test
           /tmp/music_decoder_lifecycle_test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/ai_voice_protocol_test.cpp -o /tmp/ai_voice_protocol_test
+          /tmp/ai_voice_protocol_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/wifi_time_service_test.cpp -o /tmp/wifi_time_service_test
           /tmp/wifi_time_service_test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_protocol_test.cpp -o /tmp/xiaozhi_protocol_test
+          /tmp/xiaozhi_protocol_test
 
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p

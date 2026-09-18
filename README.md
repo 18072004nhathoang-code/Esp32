@@ -98,6 +98,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | `ESP32-audioI2S` | vendored từ commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`**, local patch `2.0.0-mini-os.1` | Giải mã MP3; `PeriodicTask` shutdown bằng ACK trước khi giải phóng object |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
 | `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
+| `sh123/esp32_opus_arduino` | commit **`a3816682932b8792f90072ee05c33fe25c055628`** | Encode/decode Opus mono cho giao thức Xiaozhi |
 
 Font được tái tạo bằng `lv_font_conv@1.5.3`; nguồn `tools/BeVietnamPro-SemiBold.ttf`
 có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
@@ -115,7 +116,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | **WiFi_Manager** | **Core 0** | **2** | Một worker sở hữu radio/NVS; scan có request ID và trạng thái `QUEUED/WAITING_FOR_RADIO/RUNNING/DONE/FAILED/CANCELED`, snapshot revision nguyên tử, timeout/cancel/drain completion cũ; Disconnect/Forget dùng control mailbox độc lập queue thường. |
 | **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
-| **AI_Voice_Task** | **Core 0** | **2** | Request ID riêng, trạng thái CANCELING/ACK, upload lease WAV bất biến, dechunk bằng HTTPClient và giới hạn JSON 16KB/TTS 2MB trước khi parse/phát. |
+| **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, queue uplink/downlink hữu hạn, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. |
 
 ---
 
@@ -130,15 +131,16 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
    #define DEFAULT_WIFI_SSID           "Your_SSID"
    #define DEFAULT_WIFI_PASS           "Your_Password"
    #define GOOGLE_MAPS_STATIC_API_KEY  "AIzaSy..."
-   #define AI_VOICE_ENDPOINT           "https://voice-gateway.example/v1/query"
-   #define AI_VOICE_TTS_ENDPOINT       "https://voice-gateway.example/v1/tts"
-   #define AI_VOICE_BEARER_TOKEN       "..."
-   #define AI_VOICE_CA_CERT            "-----BEGIN CERTIFICATE-----..."
+   #define AI_VOICE_PROVIDER_XIAOZHI   1
+   #define XIAOZHI_OTA_ENDPOINT        "https://api.tenclass.net/xiaozhi/ota/"
+   #define XIAOZHI_OTA_CA_CERT         "-----BEGIN CERTIFICATE-----..."
+   #define XIAOZHI_WSS_CA_CERT         "-----BEGIN CERTIFICATE-----..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
-4. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
-5. **Giới hạn TLS của toolchain**: Platform Espressif32 6.8.1 dùng Arduino-ESP32 2.0.17 với `CONFIG_MBEDTLS_HAVE_TIME_DATE` tắt trong SDK prebuilt cho ESP32-S3. CA chain và hostname vẫn được kiểm tra, nhưng thời hạn not-before/not-after của chứng chỉ không được kiểm tra bởi build này. Firmware log rõ giới hạn khi boot và không gọi đây là full certificate validation. Bản production cần framework/SDK tự build có X.509 time validation và chỉ mở kết nối sau khi SNTP đã cung cấp thời gian hợp lệ.
-6. **Giới hạn bảo vệ secret trên thiết bị**: `.gitignore` chỉ ngăn commit file secret, không bảo vệ dữ liệu khỏi flash dump. Build PlatformIO thông thường không provision Secure Boot, Flash Encryption hoặc encrypted NVS. Xem `docs/PRODUCTION_SECURITY.md` trước khi phân phối thiết bị.
+4. Xiaozhi là provider mặc định. Device gọi endpoint kích hoạt chính thức bằng `Activation-Version: 1`, MAC thật làm `Device-Id`, UUID v4 bền vững trong namespace NVS `xiaozhi` làm `Client-Id`; URL/token/version WSS chỉ được nhận từ phản hồi activation rồi lưu NVS. UI hiển thị mã kích hoạt và polling có backoff, không chặn LVGL. Firmware bỏ qua hoàn toàn trường OTA firmware/assets và không ghi token vào log. `backend/` là gateway Gemini/DeepSeek cũ, vẫn có mã nguồn nhưng bị vô hiệu khi `AI_VOICE_PROVIDER_XIAOZHI=1`; không có fallback trả phí.
+5. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
+6. **Giới hạn TLS của toolchain**: Platform Espressif32 6.8.1 dùng Arduino-ESP32 2.0.17 với `CONFIG_MBEDTLS_HAVE_TIME_DATE` tắt trong SDK prebuilt cho ESP32-S3. CA chain và hostname vẫn được kiểm tra, nhưng thời hạn not-before/not-after của chứng chỉ không được kiểm tra bởi build này. Firmware log rõ giới hạn khi boot và không gọi đây là full certificate validation. Bản production cần framework/SDK tự build có X.509 time validation và chỉ mở kết nối sau khi SNTP đã cung cấp thời gian hợp lệ.
+7. **Giới hạn bảo vệ secret trên thiết bị**: `.gitignore` chỉ ngăn commit file secret, không bảo vệ dữ liệu khỏi flash dump. Build PlatformIO thông thường không provision Secure Boot, Flash Encryption hoặc encrypted NVS. Xem `docs/PRODUCTION_SECURITY.md` trước khi phân phối thiết bị.
 
 ---
 
@@ -162,7 +164,7 @@ pio device monitor -b 115200
 1. **System Monitor**: Đọc tần số CPU, tải CPU ước lượng từ idle hooks của hai core, heap/PSRAM, nhiệt độ chip, uptime 64-bit, dung lượng MicroSD, WiFi/RSSI và số task FreeRTOS thật.
 2. **Network Map**: Tải ảnh bản đồ HTTPS từ Google Static Maps khi có key; hỗ trợ pan/zoom, cache MicroSD, ping-pong RGB565 và empty/error state khi mất mạng. Khi thiếu key, cache offline vẫn đọc được và mạng báo `PROVIDER_NOT_CONFIGURED`; không dùng endpoint fallback không được cấu hình.
 3. **Music Player**: Quét file MP3 thật trong `/music`, phát/tạm dừng/tua/chuyển bài qua command queue, lấy thời lượng từ decoder, quản lý độc quyền I2S và khóa I/O MicroSD.
-4. **AI Voice**: Thu PCM thật từ micro, đóng gói WAV từ snapshot có lease và POST tới `AI_VOICE_ENDPOINT`; gateway phải trả JSON `transcript`/`reply` hợp lệ, tối đa 16KB sau dechunk. TTS tối đa 2MB sau dechunk và chỉ được phát khi RIFF hoàn chỉnh, PCM16 mono 16kHz, data chunk không cắt. Request cũ bị loại theo request ID; cancel giữ trạng thái `CANCELING` tới khi worker ACK. Cả hai endpoint bắt buộc HTTPS với CA và bearer token; firmware không log secret.
+4. **AI Voice / Xiaozhi**: Push-to-talk đọc PCM16 mono 16kHz thật từ AudioManager trong lúc đang thu, gom frame 60ms, encode Opus và gửi qua WSS. Server hello được kiểm tra trước khi gửi `listen/start`; protocol binary v1/v2/v3, fragment, heartbeat, timeout và session generation loại dữ liệu cũ. Opus downlink chấp nhận sample rate hợp lệ do server hello công bố, decode rồi resample về 16kHz trước ES8311. Cancel gửi abort, hủy recording, đóng WSS và không phát frame cũ. Trước khi thu, Music lưu bookmark rồi Stop/ACK và hủy decoder để trả hẳn driver I2S; sau hội thoại chỉ dựng lại bài/vị trí/stream nếu không có lệnh Pause/Stop mới. MCP chỉ công bố Music, mở/start/stop/refresh/status Camera và giờ SNTP; tên lệnh/argument/source ID nằm trong allowlist, kết quả thành công chỉ gửi sau ACK thực của service/UI. Không hỗ trợ lệnh hệ thống, URL tùy ý hay OTA từ server.
 5. **WiFi Hub & Control Center**: Quét nền mạng 2.4GHz không ngắt STA đang ổn định; kết nối/ngắt/quên mạng, ghi nhớ credential trong NVS, lỗi scan tách khỏi lỗi kết nối và auto-reconnect hữu hạn do cùng một worker radio điều phối. Cấu hình WiFi mặc định để trống; firmware chỉ dùng credential thật từ NVS hoặc `secrets.h` do người dùng cung cấp.
 6. **Sensors & Diagnostics**: Đọc trạng thái thật của FT6336, ES8311, MicroSD và camera DVP. Profile ES3C28P không khai báo IMU/la bàn/barometer nên UI vô hiệu hóa và báo “không khả dụng”, không sinh số đo giả.
 7. **Camera Subsystem**:
@@ -174,7 +176,9 @@ pio device monitor -b 115200
 
 Status bar dùng giờ SNTP thật theo UTC+7 (`--:--` trước khi đồng bộ); uptime vẫn hiển thị riêng trong System Monitor. SNTP được yêu cầu bất đồng bộ sau khi WiFi có IP và đồng bộ lại khi reconnect, không ghi NVS mỗi giây.
 
-Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan/time service state-machine test, decoder lifecycle create/play/stop/delete lặp lại và self-test C++ được build vào firmware. Các case bao phủ transform/contact ID, content origin, audio Cancel A→Start B, pause timeout/ACK muộn, shutdown timeout không destroy, stale EOF/session, lỗi uninstall/restore I2S, WAV/cache partial-write/rename/restore, WiFi scan queue/timeout/cancel/late completion/zero result, WiFi Forget barrier, Camera revision Dừng→Configure, AI cancel queue-full/retry, SNTP offline/reconnect/midnight, giới hạn body và WAV lỗi/cắt.
+Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan/time service state-machine test, decoder lifecycle và Xiaozhi protocol test. Xiaozhi test bao phủ config activation chỉ chấp nhận WSS, activation polling clamp/expiry deadline, hello timeout, disconnect, framing v1/v2/v3, malformed length, WebSocket fragment/overflow, bounded queue, stale/cancel generation, music handoff, MCP allowlist/volume và ACK failure.
+
+Tích hợp được đối chiếu với upstream Xiaozhi commit [`5d54beb743ff49c4e8db81bbef9413bdd6e2ba17`](https://github.com/78/xiaozhi-esp32/commit/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17), tài liệu [`docs/websocket.md`](https://github.com/78/xiaozhi-esp32/blob/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17/docs/websocket.md) và [`docs/mcp-protocol.md`](https://github.com/78/xiaozhi-esp32/blob/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17/docs/mcp-protocol.md). Project giữ Arduino-ESP32/ESP-IDF hiện tại; không nhập boot/UI/OTA của upstream.
 
 Thông tin attribution, phiên bản và nghĩa vụ phân phối dependency nằm trong `THIRD_PARTY_NOTICES.md`. Bản phân phối binary có ESP32-audioI2S GPL-3.0 phải đi kèm Corresponding Source và thông tin build của đúng commit đã dùng.
 

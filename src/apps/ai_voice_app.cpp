@@ -18,10 +18,20 @@ static lv_obj_t *bottom_bar = nullptr;
 static lv_obj_t *btn_push_to_talk = nullptr;
 static lv_obj_t *lbl_ptt_icon = nullptr;
 static lv_obj_t *lbl_status_text = nullptr;
+static lv_obj_t *activation_panel = nullptr;
+static lv_obj_t *lbl_activation = nullptr;
 static lv_obj_t *wave_bars[NUM_WAVE_BARS] = {nullptr};
 
 static int last_msg_count = 0;
 static bool is_button_held = false;
+
+static void activation_button_cb(lv_event_t *e)
+{
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    const intptr_t action = reinterpret_cast<intptr_t>(lv_event_get_user_data(e));
+    if (action == 1) (void)ai_voice_retry_activation();
+    else (void)ai_voice_cancel_activation();
+}
 
 /* Tạo một bong bóng tin nhắn chat */
 static void add_chat_bubble(const ChatMessage *msg)
@@ -166,6 +176,45 @@ void ai_voice_app_open(lv_obj_t *parent)
     }
     last_msg_count = count;
 
+    activation_panel = lv_obj_create(chat_container);
+    lv_obj_set_width(activation_panel, 208);
+    lv_obj_set_height(activation_panel, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(activation_panel, 8, 0);
+    lv_obj_set_style_bg_color(activation_panel, lv_color_hex(0x17112A), 0);
+    lv_obj_set_style_border_color(activation_panel, lv_color_hex(0x9D4EDD), 0);
+    lv_obj_set_style_border_width(activation_panel, 1, 0);
+    lv_obj_set_style_radius(activation_panel, 10, 0);
+    lv_obj_set_flex_flow(activation_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(activation_panel, 6, 0);
+    lv_obj_add_flag(activation_panel, LV_OBJ_FLAG_HIDDEN);
+
+    lbl_activation = lv_label_create(activation_panel);
+    lv_label_set_long_mode(lbl_activation, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl_activation, 190);
+    lv_obj_set_style_text_font(lbl_activation, UI_FONT_12, 0);
+    lv_obj_set_style_text_color(lbl_activation, lv_color_hex(0xFFFFFF), 0);
+
+    lv_obj_t *activation_actions = lv_obj_create(activation_panel);
+    lv_obj_set_size(activation_actions, 190, 32);
+    lv_obj_set_style_bg_opa(activation_actions, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(activation_actions, 0, 0);
+    lv_obj_set_style_pad_all(activation_actions, 0, 0);
+    lv_obj_set_flex_flow(activation_actions, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(activation_actions, LV_FLEX_ALIGN_END,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    const char *labels[] = {"Thử lại", "Hủy"};
+    for (int i = 0; i < 2; ++i)
+    {
+        lv_obj_t *button = lv_btn_create(activation_actions);
+        lv_obj_set_size(button, 70, 30);
+        lv_obj_add_event_cb(button, activation_button_cb, LV_EVENT_CLICKED,
+                            reinterpret_cast<void *>(static_cast<intptr_t>(i == 0 ? 1 : 2)));
+        lv_obj_t *label = lv_label_create(button);
+        lv_label_set_text(label, labels[i]);
+        lv_obj_set_style_text_font(label, UI_FONT_12, 0);
+        lv_obj_center(label);
+    }
+
     // =========================================================================
     // 2. KHUNG ĐIỀU KHIỂN ĐÁY: NÚT PUSH-TO-TALK, SÓNG ÂM VÀ STATUS
     // =========================================================================
@@ -246,6 +295,8 @@ void ai_voice_app_close(void)
     btn_push_to_talk = nullptr;
     lbl_ptt_icon = nullptr;
     lbl_status_text = nullptr;
+    activation_panel = nullptr;
+    lbl_activation = nullptr;
     for (int i = 0; i < NUM_WAVE_BARS; i++)
     {
         wave_bars[i] = nullptr;
@@ -285,6 +336,29 @@ void ai_voice_app_update(void)
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00E676), 0);
         else
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
+    }
+
+    if (activation_panel && lbl_activation && btn_push_to_talk)
+    {
+        char code[32] = {};
+        char message[160] = {};
+        const bool activation = ai_voice_get_activation(
+            code, sizeof(code), message, sizeof(message));
+        if (activation)
+        {
+            char display[224];
+            snprintf(display, sizeof(display), "Mã kích hoạt: %s\n%s", code,
+                     message[0] ? message : "Mở trang kích hoạt Xiaozhi và nhập mã trên.");
+            lv_label_set_text(lbl_activation, display);
+            lv_obj_clear_flag(activation_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_state(btn_push_to_talk, LV_STATE_DISABLED);
+        }
+        else
+        {
+            lv_obj_add_flag(activation_panel, LV_OBJ_FLAG_HIDDEN);
+            if (ai_voice_get_state() == AI_STATE_IDLE)
+                lv_obj_clear_state(btn_push_to_talk, LV_STATE_DISABLED);
+        }
     }
 
     // 3. Hiển thị biên độ microphone thật; không tạo hoạt ảnh giả khi không thu.

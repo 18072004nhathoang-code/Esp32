@@ -19,6 +19,13 @@ export function boundedText(value, maxBytes, required = true) {
   return text;
 }
 
+export function safeTruncateUtf8(value, maxBytes) {
+  if (typeof value !== "string") return "";
+  const source = Buffer.from(value, "utf8");
+  if (source.length <= maxBytes) return value.trim();
+  return source.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD+$/u, "").trim();
+}
+
 export function parseMusicSources(raw) {
   let value;
   try { value = JSON.parse(raw || "[]"); } catch { throw new Error("MUSIC_SOURCES_JSON is invalid JSON"); }

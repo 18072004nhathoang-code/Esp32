@@ -84,6 +84,7 @@ static QueueHandle_t music_ack_queue = nullptr;
 static SemaphoreHandle_t music_ai_action_mutex = nullptr;
 static MusicStreamSource stream_sources[8] = {};
 static size_t stream_source_count = 0;
+static char current_stream_source_id[32] = {};
 static uint32_t next_music_request_id = 0;
 static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
@@ -377,7 +378,8 @@ static void music_audio_task(void *pvParameters)
 
                                     if (connected)
                                     {
-                                        player_state.current_track_idx = idx;
+                                    player_state.current_track_idx = idx;
+                                    current_stream_source_id[0] = '\0';
                                         player_state.total_duration_sec = playlist[idx].duration_sec;
                                         player_state.current_time_sec = 0;
                                         player_state.is_playing = true;
@@ -547,6 +549,8 @@ static void music_audio_task(void *pvParameters)
                                     audio->connecttohost(cmd.filepath))
                                 {
                                     player_state.current_track_idx = -1;
+                                    strlcpy(current_stream_source_id, cmd.source_id,
+                                            sizeof(current_stream_source_id));
                                     player_state.current_time_sec = 0;
                                     player_state.total_duration_sec = 0;
                                     player_state.is_playing = true;
@@ -1000,6 +1004,23 @@ bool music_player_is_paused(void)
     return value;
 }
 
+static bool execute_music_command_wait_locked(MusicCommand &cmd, uint32_t timeout_ms)
+{
+    cmd.request_id = ++next_music_request_id;
+    if (!music_ack_queue || !enqueue_music_command(cmd)) return false;
+    const TickType_t started = xTaskGetTickCount();
+    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    MusicCommandAck ack = {};
+    while (true)
+    {
+        const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
+        if (elapsed_ticks >= timeout) return false;
+        if (xQueueReceive(music_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE)
+            return false;
+        if (ack.request_id == cmd.request_id) return ack.ok;
+    }
+}
+
 bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,
                                     char *error, size_t error_size)
 {
@@ -1011,7 +1032,6 @@ bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeou
         return false;
     }
     MusicCommand cmd = {};
-    cmd.request_id = ++next_music_request_id;
     switch (action->type)
     {
         case AI_MUSIC_ACTION_PLAY:
@@ -1048,20 +1068,114 @@ bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeou
         case AI_MUSIC_ACTION_VOLUME: cmd.type = MUSIC_CMD_SET_VOLUME; cmd.param = action->volume; break;
         default: break;
     }
-    bool ok = false;
-    if (cmd.type != MUSIC_CMD_NONE && enqueue_music_command(cmd))
-    {
-        const TickType_t started = xTaskGetTickCount();
-        const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
-        MusicCommandAck ack = {};
-        while (xQueueReceive(music_ack_queue, &ack, timeout) == pdTRUE)
-        {
-            if (ack.request_id == cmd.request_id) { ok = ack.ok; break; }
-            if (xTaskGetTickCount() - started >= timeout) break;
-        }
-    }
+    const bool ok = cmd.type != MUSIC_CMD_NONE &&
+                    execute_music_command_wait_locked(cmd, timeout_ms);
     if (!ok && error && error_size && error[0] == '\0')
         strlcpy(error, "Thiết bị không thực hiện được lệnh nhạc", error_size);
+    xSemaphoreGive(music_ai_action_mutex);
+    return ok;
+}
+
+bool music_player_suspend_for_voice(MusicVoiceHandoff *handoff, uint32_t timeout_ms,
+                                    char *error, size_t error_size)
+{
+    if (error && error_size) error[0] = '\0';
+    if (!handoff || !music_ai_action_mutex ||
+        xSemaphoreTake(music_ai_action_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        if (error && error_size) strlcpy(error, "Trình phát nhạc đang bận", error_size);
+        return false;
+    }
+    memset(handoff, 0, sizeof(*handoff));
+    handoff->track_index = -1;
+    bool has_decoder = false;
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        if (error && error_size) strlcpy(error, "Không khóa được trạng thái trình phát", error_size);
+        xSemaphoreGive(music_ai_action_mutex);
+        return false;
+    }
+    else
+    {
+        has_decoder = audio != nullptr || player_state.is_playing;
+        handoff->resume_after_voice = player_state.is_playing && !player_state.is_paused;
+        handoff->track_index = player_state.current_track_idx;
+        handoff->position_sec = player_state.current_time_sec;
+        handoff->is_stream = player_state.current_track_idx < 0;
+        strlcpy(handoff->source_id, current_stream_source_id, sizeof(handoff->source_id));
+        xSemaphoreGive(audio_mutex);
+    }
+    if (!has_decoder)
+    {
+        xSemaphoreGive(music_ai_action_mutex);
+        return true;
+    }
+
+    MusicCommand stop = {};
+    stop.type = MUSIC_CMD_STOP;
+    const bool stopped = execute_music_command_wait_locked(stop, timeout_ms);
+    handoff->valid = stopped;
+    if (!stopped && error && error_size)
+        strlcpy(error, "Không giải phóng được decoder/I2S nhạc", error_size);
+    xSemaphoreGive(music_ai_action_mutex);
+    return stopped;
+}
+
+bool music_player_restore_after_voice(const MusicVoiceHandoff *handoff, uint32_t timeout_ms,
+                                      char *error, size_t error_size)
+{
+    if (error && error_size) error[0] = '\0';
+    if (!handoff || !handoff->valid || !handoff->resume_after_voice) return true;
+    if (!music_ai_action_mutex ||
+        xSemaphoreTake(music_ai_action_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        if (error && error_size) strlcpy(error, "Trình phát nhạc đang bận", error_size);
+        return false;
+    }
+
+    const TickType_t started = xTaskGetTickCount();
+    MusicCommand play = {};
+    if (handoff->is_stream)
+    {
+        const MusicStreamSource *source = find_stream_source(handoff->source_id);
+        if (!source)
+        {
+            if (error && error_size) strlcpy(error, "Nguồn stream không còn khả dụng", error_size);
+            xSemaphoreGive(music_ai_action_mutex);
+            return false;
+        }
+        play.type = MUSIC_CMD_PLAY_STREAM;
+        strlcpy(play.filepath, source->url, sizeof(play.filepath));
+        strlcpy(play.source_id, source->id, sizeof(play.source_id));
+    }
+    else
+    {
+        if (handoff->track_index < 0 || handoff->track_index >= total_tracks_found)
+        {
+            if (error && error_size) strlcpy(error, "Bài hát không còn trên thẻ SD", error_size);
+            xSemaphoreGive(music_ai_action_mutex);
+            return false;
+        }
+        play.type = MUSIC_CMD_PLAY_INDEX;
+        play.track_idx = handoff->track_index;
+        strlcpy(play.filepath, playlist[handoff->track_index].filepath, sizeof(play.filepath));
+    }
+    bool ok = execute_music_command_wait_locked(play, timeout_ms);
+    if (ok && !handoff->is_stream && handoff->position_sec > 0)
+    {
+        const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
+        const uint32_t elapsed_ms = elapsed_ticks * portTICK_PERIOD_MS;
+        if (elapsed_ms >= timeout_ms) ok = false;
+        else
+        {
+            MusicCommand seek = {};
+            seek.type = MUSIC_CMD_SEEK;
+            seek.param = handoff->position_sec;
+            ok = execute_music_command_wait_locked(seek, timeout_ms - elapsed_ms);
+        }
+    }
+    if (!ok && error && error_size)
+        strlcpy(error, "Không khôi phục được nhạc sau hội thoại", error_size);
     xSemaphoreGive(music_ai_action_mutex);
     return ok;
 }

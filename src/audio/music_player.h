@@ -31,6 +31,16 @@ struct MusicPlayerState
     uint8_t volume; // 0 - 100%
 };
 
+struct MusicVoiceHandoff
+{
+    bool valid;
+    bool resume_after_voice;
+    bool is_stream;
+    int track_index;
+    uint32_t position_sec;
+    char source_id[32];
+};
+
 /**
  * @brief Khởi tạo Driver I2S, Codec và khởi động Task FreeRTOS phát nhạc trên Core 0
  */
@@ -111,6 +121,14 @@ bool music_player_is_paused(void);
 /** Execute an allowlisted AI action and wait for the decoder task ACK. */
 bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,
                                     char *error, size_t error_size);
+
+/** Fully destroy the decoder and release I2S before voice capture. */
+bool music_player_suspend_for_voice(MusicVoiceHandoff *handoff, uint32_t timeout_ms,
+                                    char *error, size_t error_size);
+
+/** Restore a voice-suspended source after I2S has returned to MUSIC. */
+bool music_player_restore_after_voice(const MusicVoiceHandoff *handoff, uint32_t timeout_ms,
+                                      char *error, size_t error_size);
 
 /**
  * @brief Lấy thời gian phát hiện tại (giây)

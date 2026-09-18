@@ -41,4 +41,4 @@ void ui_open_ai_voice_app(void);
 /**
  * @brief Mở màn hình ứng dụng Camera & RTSP Streamer
  */
-void ui_open_camera_app(void);
+bool ui_open_camera_app(void);

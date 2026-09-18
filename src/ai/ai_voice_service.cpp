@@ -1,3 +1,12 @@
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef AI_VOICE_PROVIDER_XIAOZHI
+#define AI_VOICE_PROVIDER_XIAOZHI 1
+#endif
+
+#if !AI_VOICE_PROVIDER_XIAOZHI
+
 #include "ai_voice_service.h"
 
 #include "../audio/audio_manager.h"
@@ -58,6 +67,8 @@ bool s_release_requested = false;
 bool s_music_paused_for_voice = false;
 uint32_t s_cancel_retry_after_ms = 0;
 uint32_t s_cancel_deadline_ms = 0;
+Client *s_active_network_client = nullptr;
+uint32_t s_active_network_request_id = 0;
 char s_last_error[128] = "AI endpoint is not configured";
 static constexpr size_t kJsonBodyLimit = 16U * 1024U;
 static constexpr size_t kTtsBodyLimit = 2U * 1024U * 1024U;
@@ -93,6 +104,29 @@ void set_error(const char *message)
     xSemaphoreGive(s_mutex);
 }
 
+void register_network_client(Client *client, uint32_t request_id)
+{
+    if (!client || !request_id || !s_mutex ||
+        xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (request_response_is_current(request_id, s_active_request_id, s_cancelled_through))
+    {
+        s_active_network_client = client;
+        s_active_network_request_id = request_id;
+    }
+    xSemaphoreGive(s_mutex);
+}
+
+void clear_network_client(Client *client, uint32_t request_id)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (s_active_network_client == client && s_active_network_request_id == request_id)
+    {
+        s_active_network_client = nullptr;
+        s_active_network_request_id = 0;
+    }
+    xSemaphoreGive(s_mutex);
+}
+
 const char *active_token()
 {
     return AI_VOICE_BEARER_TOKEN;
@@ -100,12 +134,7 @@ const char *active_token()
 
 static bool is_valid_ai_endpoint(const char *url)
 {
-    if (!url || !*url) return false;
-    if (strncmp(url, "https://", 8) == 0)
-    {
-        return AI_VOICE_CA_CERT[0] != '\0';
-    }
-    return strncmp(url, "http://", 7) == 0;
+    return url && strncmp(url, "https://", 8) == 0 && AI_VOICE_CA_CERT[0] != '\0';
 }
 
 bool configuration_ready()
@@ -383,6 +412,37 @@ bool serialize_tts_request_json(const char *text, String &body)
     return serializeJson(request_json, body) > 0;
 }
 
+void set_gateway_error(HTTPClient &http, int status, uint32_t request_id,
+                       uint32_t deadline_ms, const char *fallback)
+{
+    static constexpr size_t kErrorBodyLimit = 2048;
+    char message[128] = {};
+    const int response_size = http.getSize();
+    if (status > 0 && response_size <= static_cast<int>(kErrorBodyLimit))
+    {
+        BoundedBodyStream sink(kErrorBodyLimit, request_id, deadline_ms);
+        const int written = http.writeToStream(&sink);
+        if (http_dechunked_body_complete(response_size, sink.size(), written, sink.failed()))
+        {
+            StaticJsonDocument<512> document;
+            if (!deserializeJson(document, sink.data(), sink.size()))
+            {
+                const char *error_code = document["error"]["code"] | "";
+                if (error_code[0])
+                {
+                    snprintf(message, sizeof(message), "%s (HTTP %d)", error_code, status);
+                }
+            }
+        }
+    }
+    if (!message[0])
+    {
+        if (status > 0) snprintf(message, sizeof(message), "AI_HTTP_%d: %s", status, fallback);
+        else strlcpy(message, fallback, sizeof(message));
+    }
+    set_error(message);
+}
+
 bool post_recording(uint32_t request_id, AiQueryResponse *response)
 {
     if (!wifi_manager_is_connected()) { set_error("WiFi is not connected"); return false; }
@@ -422,24 +482,32 @@ bool post_recording(uint32_t request_id, AiQueryResponse *response)
     http.addHeader("Authorization", String("Bearer ") + active_token());
 
     RecordedWavStream wav(lease, request_id, deadline_ms);
+    Client *network_client = is_https ? static_cast<Client *>(&tls) : static_cast<Client *>(&plain);
+    register_network_client(network_client, request_id);
     const int code = http.sendRequest("POST", &wav, wav.total_size());
     audio_release_recording_lease(&lease);
     if (code < 200 || code >= 300)
     {
+        if (!request_cancelled(request_id))
+            set_gateway_error(http, code, request_id, deadline_ms,
+                              code > 0 ? "AI endpoint rejected the request" : "AI HTTPS request failed");
         http.end();
-        set_error(code > 0 ? "AI endpoint rejected the request" : "AI HTTPS request failed");
+        clear_network_client(network_client, request_id);
         return false;
     }
     const int response_size = http.getSize();
     if (response_size > static_cast<int>(kJsonBodyLimit) || request_cancelled(request_id))
     {
+        const bool oversized = response_size > static_cast<int>(kJsonBodyLimit);
         http.end();
-        set_error("AI response exceeds limit");
+        clear_network_client(network_client, request_id);
+        if (oversized) set_error("AI response exceeds limit");
         return false;
     }
     BoundedBodyStream sink(kJsonBodyLimit, request_id, deadline_ms);
     const int written = http.writeToStream(&sink); // HTTPClient removes chunk framing here.
     http.end();
+    clear_network_client(network_client, request_id);
     if (!http_dechunked_body_complete(response_size, sink.size(), written, sink.failed()) ||
         request_cancelled(request_id))
     {
@@ -480,19 +548,31 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
     http.addHeader("Authorization", String("Bearer ") + active_token());
     String body;
     if (!serialize_tts_request_json(text, body)) { http.end(); return false; }
+    Client *network_client = is_https ? static_cast<Client *>(&tls) : static_cast<Client *>(&plain);
+    register_network_client(network_client, request_id);
     int code = http.POST(reinterpret_cast<uint8_t *>(const_cast<char *>(body.c_str())), body.length());
     const int content_length = http.getSize();
-    if (code < 200 || code >= 300 ||
-        (content_length >= 0 && content_length > static_cast<int>(kTtsBodyLimit)) ||
+    if (code < 200 || code >= 300)
+    {
+        if (!request_cancelled(request_id))
+            set_gateway_error(http, code, request_id, deadline_ms,
+                              code > 0 ? "TTS endpoint rejected the request" : "TTS HTTPS request failed");
+        http.end();
+        clear_network_client(network_client, request_id);
+        return false;
+    }
+    if ((content_length >= 0 && content_length > static_cast<int>(kTtsBodyLimit)) ||
         request_cancelled(request_id))
     {
         http.end();
+        clear_network_client(network_client, request_id);
         return false;
     }
 
     BoundedBodyStream sink(kTtsBodyLimit, request_id, deadline_ms);
     const int written = http.writeToStream(&sink); // Dechunk before RIFF parsing.
     http.end();
+    clear_network_client(network_client, request_id);
     if (!http_dechunked_body_complete(content_length, sink.size(), written, sink.failed()) ||
         request_cancelled(request_id))
     {
@@ -794,7 +874,8 @@ void ai_task(void *)
                 if (!tts_ok && !request_cancelled(request_id))
                 {
                     ai_voice_add_message(false, response.reply);
-                    set_error("TTS playback failed");
+                    if (ai_voice_get_state() != AI_STATE_ERROR)
+                        set_error("TTS playback failed");
                 }
                 if (!request_cancelled(request_id))
                 {
@@ -966,6 +1047,10 @@ void ai_voice_cancel(void)
     }
     if (s_active_request_id > s_cancelled_through) s_cancelled_through = s_active_request_id;
     const bool worker_active = s_active_request_id != 0;
+    // Closing the active TLS/plain socket propagates cancellation to the
+    // gateway, whose disconnect handler aborts the provider request.
+    if (s_active_network_client && s_active_network_request_id == s_active_request_id)
+        s_active_network_client->stop();
     xSemaphoreGive(s_mutex);
     uint32_t cancel_request_id = 0;
     if (cancel_recording && !audio_cancel_recording_async(&cancel_request_id))
@@ -1072,7 +1157,7 @@ bool ai_voice_play_tts(const char *text)
             cancelled = request_id <= s_cancelled_through;
             if (cancelled || ok)
                 s_state = AI_STATE_IDLE;
-            else
+            else if (s_state != AI_STATE_ERROR)
             {
                 strlcpy(s_last_error, "TTS HTTPS/WAV playback failed", sizeof(s_last_error));
                 s_state = AI_STATE_ERROR;
@@ -1102,3 +1187,16 @@ bool ai_voice_json_regression_test(void)
     if (deserializeJson(decoded, encoded) || !decoded["text"].is<const char *>()) return false;
     return strcmp(decoded["text"].as<const char *>(), "tab\tnewline\nquote\"") == 0;
 }
+
+bool ai_voice_get_activation(char *code, size_t code_size,
+                             char *message, size_t message_size)
+{
+    if (code && code_size) code[0] = '\0';
+    if (message && message_size) message[0] = '\0';
+    return false;
+}
+
+bool ai_voice_retry_activation(void) { return false; }
+bool ai_voice_cancel_activation(void) { return false; }
+
+#endif

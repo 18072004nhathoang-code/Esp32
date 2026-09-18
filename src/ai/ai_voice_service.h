@@ -1,6 +1,6 @@
 /**
  * @file ai_voice_service.h
- * @brief Phân hệ kết nối AI Voice Assistant: Thu âm I2S -> STT -> Gemini/OpenAI -> TTS Loa ngoài
+ * @brief Phân hệ AI Voice: thu I2S -> gateway STT/LLM/TTS -> loa ngoài
  * Chạy nền trên FreeRTOS Core 0 chuyên dụng cho ESP32-S3
  */
 
@@ -16,7 +16,7 @@ enum AIVoiceState
     AI_STATE_IDLE = 0,         // Sẵn sàng chờ lệnh
     AI_STATE_STARTING,         // Đang tạm dừng nhạc và chuẩn bị microphone
     AI_STATE_LISTENING,        // Đang thu âm từ Micro MEMS
-    AI_STATE_PROCESSING,       // Đang gửi dữ liệu và đợi Gemini AI suy nghĩ
+    AI_STATE_PROCESSING,       // Đang gửi dữ liệu và đợi gateway STT/LLM
     AI_STATE_SPEAKING,         // Đang phát giọng nói phản hồi ra Loa ngoài
     AI_STATE_CANCELING,        // Đang chờ worker hủy request và nhả tài nguyên
     AI_STATE_NEEDS_USER_INPUT, // Thiếu endpoint/token/CA bắt buộc
@@ -84,6 +84,12 @@ void ai_voice_clear_history(void);
  * @brief Phát âm thanh phản hồi từ văn bản qua TTS ra Loa ngoài
  */
 bool ai_voice_play_tts(const char *text);
+
+/** Xiaozhi activation is asynchronous and never blocks LVGL. */
+bool ai_voice_get_activation(char *code, size_t code_size,
+                             char *message, size_t message_size);
+bool ai_voice_retry_activation(void);
+bool ai_voice_cancel_activation(void);
 
 /** Firmware-side regression for the exact ArduinoJson codec used by requests. */
 bool ai_voice_json_regression_test(void);

@@ -2213,6 +2213,22 @@ size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samp
     return count;
 }
 
+size_t audio_copy_live_recording_samples(size_t offset, int16_t *dest,
+                                         size_t max_samples, size_t *total_available)
+{
+    if (total_available) *total_available = 0;
+    if (!dest || max_samples == 0 || !audio_state_mutex ||
+        xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const size_t available = recording_state == RECORD_ACTIVE ? recorded_samples_count : 0;
+    if (total_available) *total_available = available;
+    size_t count = offset < available ? available - offset : 0;
+    if (count > max_samples) count = max_samples;
+    if (count > 0 && psram_record_buf) memcpy(dest, psram_record_buf + offset,
+                                              count * sizeof(int16_t));
+    xSemaphoreGive(audio_state_mutex);
+    return count;
+}
+
 bool audio_acquire_recording_lease(AudioRecordingLease *lease)
 {
     if (!lease || !audio_state_mutex ||

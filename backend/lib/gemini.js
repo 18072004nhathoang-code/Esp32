@@ -1,111 +1,98 @@
-import { boundedText, resamplePcm16Mono, sanitizeActions, wavFromPcm16 } from "./protocol.js";
-
-function extractJson(text) {
-  if (typeof text !== "string") throw new Error("Gemini returned no text");
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start < 0 || end < start) throw new Error("Gemini response is not JSON");
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
+import { abortError, ServiceError } from "./errors.js";
+import { boundedText, resamplePcm16Mono, safeTruncateUtf8, wavFromPcm16 } from "./protocol.js";
 
 function responseText(payload) {
   const parts = payload?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts)) throw new Error("Gemini response has no candidate");
+  if (!Array.isArray(parts)) throw new ServiceError("GEMINI_SCHEMA", "Gemini không trả về candidate hợp lệ.");
   return parts.map((part) => typeof part.text === "string" ? part.text : "").join("").trim();
 }
 
-function citations(payload) {
-  const chunks = payload?.candidates?.[0]?.groundingMetadata?.groundingChunks;
-  if (!Array.isArray(chunks)) return [];
-  const seen = new Set();
-  const result = [];
-  for (const chunk of chunks) {
-    const title = chunk?.web?.title;
-    const url = chunk?.web?.uri;
-    if (typeof title !== "string" || typeof url !== "string" || seen.has(url)) continue;
-    let parsed;
-    try { parsed = new URL(url); } catch { continue; }
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") continue;
-    seen.add(url);
-    result.push({ title: title.slice(0, 80), url: url.slice(0, 240) });
-    if (result.length === 3) break;
+async function readLimited(response, limit, signal) {
+  const declared = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel();
+    throw new ServiceError("GEMINI_RESPONSE_TOO_LARGE", "Phản hồi Gemini vượt giới hạn.");
   }
-  return result;
-}
-
-function safeTruncateUtf8(str, maxBytes) {
-  if (typeof str !== "string") return "";
-  let buf = Buffer.from(str, "utf8");
-  if (buf.length <= maxBytes) return str;
-  buf = buf.subarray(0, maxBytes);
-  return buf.toString("utf8").replace(/\uFFFD*$/, "").trim();
-}
-
-async function geminiFetch(url, body, config, fetchImpl) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.timeoutMs);
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
   try {
-    const response = await fetchImpl(url, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": config.apiKey },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    if (!response.ok) throw new Error(`Gemini HTTP ${response.status}`);
-    if (Buffer.byteLength(raw) > 2 * 1024 * 1024) throw new Error("Gemini response too large");
-    return JSON.parse(raw);
+    for (;;) {
+      if (signal?.aborted) throw abortError(signal);
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) throw new ServiceError("GEMINI_RESPONSE_TOO_LARGE", "Phản hồi Gemini vượt giới hạn.");
+      chunks.push(Buffer.from(value));
+    }
   } finally {
-    clearTimeout(timer);
+    if (size > limit || signal?.aborted) await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks, size).toString("utf8");
+}
+
+function geminiHttpError(status, capability) {
+  if (status === 401 || status === 403) return new ServiceError(`GEMINI_${capability}_AUTH`, `Gemini ${capability} từ chối API key.`, 502, status);
+  if (status === 429) return new ServiceError(`GEMINI_${capability}_RATE_LIMIT`, `Gemini ${capability} đang hết quota hoặc giới hạn tần suất.`, 503, status);
+  if (status >= 500) return new ServiceError(`GEMINI_${capability}_UNAVAILABLE`, `Gemini ${capability} đang tạm thời không khả dụng.`, 503, status);
+  return new ServiceError(`GEMINI_${capability}_REQUEST`, `Gemini ${capability} từ chối yêu cầu (${status}).`, 502, status);
+}
+
+async function geminiFetch(url, body, config, options, responseLimit, capability) {
+  const fetchImpl = options.fetchImpl || fetch;
+  const signal = options.signal;
+  if (signal?.aborted) throw abortError(signal);
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": config.geminiApiKey },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch {
+    if (signal?.aborted) throw abortError(signal);
+    throw new ServiceError(`GEMINI_${capability}_NETWORK`, `Không thể kết nối Gemini ${capability}.`);
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {});
+    throw geminiHttpError(response.status, capability);
+  }
+  const raw = await readLimited(response, responseLimit, signal);
+  try { return JSON.parse(raw); } catch {
+    throw new ServiceError(`GEMINI_${capability}_JSON`, `Gemini ${capability} trả về JSON không hợp lệ.`);
   }
 }
 
-export async function queryGemini(wav, config, fetchImpl = fetch) {
-  const sourceSummary = config.musicSources.map(({ id, label }) => ({ id, label }));
-  const prompt = [
-    "Bạn là trợ lý tiếng Việt trên ESP32. Hãy nghe âm thanh, chép lại chính xác và trả lời cực kỳ ngắn gọn (chỉ 1 câu ngắn, súc tích) để phát âm thanh tức thì.",
-    "Chỉ phát lệnh nhạc khi người dùng yêu cầu rõ ràng. Action cho phép: music.play, music.pause, music.resume, music.stop, music.volume.",
-    "music.play không source_id nghĩa là bài SD đang chọn/đầu tiên. Chỉ dùng source_id có trong danh sách cấu hình; không tạo URL.",
-    `Nguồn stream cấu hình: ${JSON.stringify(sourceSummary)}.`,
-    "Không nói lệnh đã thành công vì thiết bị sẽ tự xác nhận. Trả đúng một JSON, không markdown:",
-    '{"transcript":"...","reply":"...","needs_current_info":false,"actions":[]}',
-  ].join("\n");
+export async function transcribeGemini(wav, config, options = {}) {
   const body = {
     contents: [{ role: "user", parts: [
       { inlineData: { mimeType: "audio/wav", data: wav.toString("base64") } },
-      { text: prompt },
-    ] }],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 256 },
+      { text: "Chỉ chép nguyên văn lời nói tiếng Việt trong audio. Trả đúng JSON {\"transcript\":\"...\"}; không trả lời câu hỏi, không tạo action, không thêm diễn giải." },
+   ] }],
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 128,
+      responseMimeType: "application/json",
+    },
   };
-  if (config.enableSearch) {
-    body.tools = [{ google_search: {} }];
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.geminiSttModel)}:generateContent`;
+  const payload = await geminiFetch(url, body, config, options, 256 * 1024, "STT");
+  let value;
+  try { value = JSON.parse(responseText(payload)); } catch (error) {
+    if (error instanceof ServiceError) throw error;
+    throw new ServiceError("GEMINI_STT_JSON", "Gemini STT trả về transcript không hợp lệ.");
   }
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.queryModel)}:generateContent`;
-  let provider;
-  let searchUsed = !!config.enableSearch;
-  try {
-    provider = await geminiFetch(url, body, config, fetchImpl);
-  } catch (error) {
-    if (body.tools) {
-      delete body.tools;
-      searchUsed = false;
-      provider = await geminiFetch(url, body, config, fetchImpl);
-    } else {
-      throw error;
-    }
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((key) => key !== "transcript") || typeof value.transcript !== "string") {
+    throw new ServiceError("GEMINI_STT_SCHEMA", "Gemini STT trả về dữ liệu không đúng schema.");
   }
-  const parsed = extractJson(responseText(provider));
-  const sources = citations(provider);
-  const rawTranscript = typeof parsed.transcript === "string" ? parsed.transcript : "";
-  const rawReply = typeof parsed.reply === "string" ? parsed.reply : "";
-  const transcript = boundedText(safeTruncateUtf8(rawTranscript, config.maxTextBytes) || "...", config.maxTextBytes);
-  const reply = boundedText(safeTruncateUtf8(rawReply, config.maxTextBytes) || "Tôi đã nghe bạn.", config.maxTextBytes);
-  const actions = sanitizeActions(parsed.actions, config.musicSources);
-  if (searchUsed && parsed.needs_current_info === true && sources.length === 0) {
-    throw new Error("current-information answer was not grounded by Google Search");
+  const transcript = safeTruncateUtf8(value.transcript, config.maxTextBytes);
+  if (!transcript) throw new ServiceError("GEMINI_STT_EMPTY", "Không nhận dạng được lời nói trong bản thu.", 422);
+  try { return boundedText(transcript, config.maxTextBytes); } catch {
+    throw new ServiceError("GEMINI_STT_SCHEMA", "Transcript không hợp lệ.");
   }
-  return { transcript, reply, actions, sources };
 }
 
 function findAudio(value) {
@@ -122,18 +109,22 @@ function findAudio(value) {
   return null;
 }
 
-export async function ttsGemini(text, config, fetchImpl = fetch) {
+export async function ttsGemini(text, config, options = {}) {
   const input = boundedText(text, config.maxTextBytes);
   const body = {
-    model: config.ttsModel,
+    model: config.geminiTtsModel,
     input: `Đọc tự nhiên bằng tiếng Việt: ${input}`,
     response_format: { type: "audio" },
-    generation_config: { speech_config: [{ voice: config.ttsVoice }] },
+    generation_config: { speech_config: [{ voice: config.geminiTtsVoice }] },
   };
-  const provider = await geminiFetch("https://generativelanguage.googleapis.com/v1beta/interactions", body, config, fetchImpl);
+  const provider = await geminiFetch(
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
+    body, config, options, 3 * 1024 * 1024, "TTS");
   const encoded = findAudio(provider);
-  if (!encoded) throw new Error("Gemini TTS returned no audio");
+  if (!encoded) throw new ServiceError("GEMINI_TTS_EMPTY", "Gemini TTS không trả về âm thanh.");
   const pcm24k = Buffer.from(encoded, "base64");
-  if (!pcm24k.length || (pcm24k.length & 1) || pcm24k.length > 3 * 1024 * 1024) throw new Error("Gemini TTS returned invalid PCM");
+  if (!pcm24k.length || (pcm24k.length & 1) || pcm24k.length > 3 * 1024 * 1024) {
+    throw new ServiceError("GEMINI_TTS_AUDIO", "Gemini TTS trả về PCM không hợp lệ.");
+  }
   return wavFromPcm16(resamplePcm16Mono(pcm24k, 24000, 16000), 16000);
 }

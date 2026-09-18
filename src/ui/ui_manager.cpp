@@ -27,6 +27,7 @@
 #include "shared_i2c_bus.h"
 #include "../camera/camera_service.h"
 #include "service_state_logic.h"
+#include <freertos/queue.h>
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -78,6 +79,9 @@ static lv_obj_t *lbl_pitch_val = nullptr;
 static lv_color_t theme_accent = lv_color_hex(COLOR_ACCENT_CYAN);
 static uint32_t applied_settings_revision = 0;
 static bool applying_settings_runtime = false;
+static QueueHandle_t app_open_queue = nullptr;
+static QueueHandle_t app_open_ack_queue = nullptr;
+static uint32_t next_app_open_request_id = 0;
 
 enum AppID : uintptr_t {
     APP_NONE = 0,
@@ -95,6 +99,13 @@ enum AppID : uintptr_t {
     APP_COLOR_TEST = 13,
     APP_TOUCH_DEBUG = 14
 };
+struct AppOpenRequest
+{
+    AppID app;
+    uint32_t request_id;
+    TickType_t deadline;
+};
+struct AppOpenAck { uint32_t request_id; bool opened; };
 static AppID active_app = APP_NONE;
 static bool wifi_app_ever_opened = false;
 
@@ -1221,12 +1232,23 @@ static void open_camera_app(void)
     camera_app_open(app_content_container);
 }
 
-void ui_open_camera_app(void)
+bool ui_open_camera_app(void)
 {
-    if (lvgl_port_lock(500))
+    if (!app_open_queue || !app_open_ack_queue) return false;
+    AppOpenAck stale = {};
+    while (xQueueReceive(app_open_ack_queue, &stale, 0) == pdTRUE) {}
+    const TickType_t timeout = pdMS_TO_TICKS(1500);
+    const TickType_t started = xTaskGetTickCount();
+    const AppOpenRequest request = {APP_CAMERA, ++next_app_open_request_id, started + timeout};
+    if (xQueueSend(app_open_queue, &request, 0) != pdTRUE) return false;
+    AppOpenAck ack = {};
+    while (true)
     {
-        open_camera_app();
-        lvgl_port_unlock();
+        const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
+        if (elapsed_ticks >= timeout) return false;
+        if (xQueueReceive(app_open_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE)
+            return false;
+        if (ack.request_id == request.request_id) return ack.opened;
     }
 }
 
@@ -1235,6 +1257,8 @@ void ui_open_camera_app(void)
  * ========================================================================= */
 void ui_init(void)
 {
+    if (!app_open_queue) app_open_queue = xQueueCreate(4, sizeof(AppOpenRequest));
+    if (!app_open_ack_queue) app_open_ack_queue = xQueueCreate(4, sizeof(AppOpenAck));
     theme_accent = lv_color_hex(settings_service_get().accent_rgb);
     applied_settings_revision = settings_service_get_completion_revision();
     if (lvgl_port_lock(1000))
@@ -1253,6 +1277,20 @@ void ui_init(void)
 void ui_update_periodic(const SystemStats &stats)
 {
     if (!lvgl_port_lock(200)) return;
+
+    AppOpenRequest open_request = {};
+    while (app_open_queue && xQueueReceive(app_open_queue, &open_request, 0) == pdTRUE)
+    {
+        bool opened = false;
+        if (static_cast<int32_t>(xTaskGetTickCount() - open_request.deadline) < 0 &&
+            open_request.app == APP_CAMERA)
+        {
+            open_camera_app();
+            opened = active_app == APP_CAMERA;
+        }
+        const AppOpenAck ack = {open_request.request_id, opened};
+        if (app_open_ack_queue) (void)xQueueSend(app_open_ack_queue, &ack, 0);
+    }
 
     const uint32_t settings_revision = settings_service_get_completion_revision();
     if (settings_revision_needs_reconcile(settings_revision, applied_settings_revision))
