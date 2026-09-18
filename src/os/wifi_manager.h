@@ -7,6 +7,7 @@
 
 #include <Arduino.h>
 #include <vector>
+#include "wifi_scan_coordinator.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -44,6 +45,20 @@ struct WiFiNetworkInfo {
     uint8_t channel;
 };
 
+static constexpr size_t WIFI_SCAN_MAX_RESULTS = 32;
+
+struct WiFiScanSnapshot {
+    uint32_t request_id;
+    uint32_t revision;
+    uint32_t result_revision;
+    uint32_t queued_at_ms;
+    uint32_t started_at_ms;
+    WifiScanPhase state;
+    char error[96];
+    size_t result_count;
+    WiFiNetworkInfo results[WIFI_SCAN_MAX_RESULTS];
+};
+
 /**
  * @brief Khởi tạo hệ thống WiFi, đọc thông tin mạng đã lưu trong NVS Flash
  */
@@ -54,6 +69,12 @@ bool wifi_manager_init(void);
  */
 bool wifi_manager_scan_async(void);
 
+/** Cancel the current scan request without treating scanDelete() as a driver cancel. */
+bool wifi_manager_cancel_scan(void);
+
+/** Atomic scan state/results snapshot. */
+WiFiScanSnapshot wifi_manager_get_scan_snapshot(void);
+
 /**
  * @brief Kiểm tra xem quá trình quét mạng đã hoàn thành chưa
  */
@@ -61,6 +82,9 @@ bool wifi_manager_is_scan_done(void);
 
 /** @brief Lỗi gần nhất từ scan/connect/NVS; không chứa mật khẩu. */
 String wifi_manager_get_last_error(void);
+
+/** Connection error is intentionally independent from scan errors. */
+String wifi_manager_get_connection_error(void);
 
 /**
  * @brief Lấy danh sách các mạng WiFi vừa quét được

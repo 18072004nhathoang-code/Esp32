@@ -11,6 +11,38 @@ enum class MusicDecoderPhase : uint8_t
     RECOVERY_REQUIRED
 };
 
+// A null RTOS task handle is not an exit acknowledgement: the worker clears
+// its handle immediately before publishing the ACK. This generation tracker
+// closes that window and is shared by the patched decoder and native tests.
+class MusicWorkerExitTracker
+{
+public:
+    uint32_t begin()
+    {
+        uint32_t next = generation_ + 1;
+        if (next == 0) ++next;
+        generation_ = next;
+        return next;
+    }
+
+    void acknowledge(uint32_t generation)
+    {
+        if (generation == generation_) acknowledged_generation_ = generation;
+    }
+
+    bool confirmed(uint32_t generation) const
+    {
+        return generation != 0 && generation == generation_ &&
+               acknowledged_generation_ == generation;
+    }
+
+    uint32_t generation() const { return generation_; }
+
+private:
+    volatile uint32_t generation_ = 0;
+    volatile uint32_t acknowledged_generation_ = 0;
+};
+
 // Platform-independent state machine used by the firmware and native tests.
 // Resource destruction is legal only after a positive shutdown ACK.
 class MusicDecoderLifecycle

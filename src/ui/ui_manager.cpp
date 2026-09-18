@@ -20,6 +20,7 @@
 #include "../audio/music_player.h"
 #include "../ai/ai_voice_service.h"
 #include "../os/wifi_manager.h"
+#include "../os/time_service.h"
 #include "../os/power_manager.h"
 #include "../os/settings_service.h"
 #include "../storage/storage_manager.h"
@@ -95,6 +96,7 @@ enum AppID : uintptr_t {
     APP_TOUCH_DEBUG = 14
 };
 static AppID active_app = APP_NONE;
+static bool wifi_app_ever_opened = false;
 
 // Khai báo trước các hàm mở app
 static void open_system_monitor_app(void);
@@ -1146,6 +1148,7 @@ static void open_audio_app(void)
 
 static void open_wifi_app(void)
 {
+    wifi_app_ever_opened = true;
     prepare_app_window("WiFi Settings", APP_WIFI);
     wifi_app_open(app_content_container);
 }
@@ -1157,6 +1160,29 @@ void ui_open_wifi_app(void)
         open_wifi_app();
         lvgl_port_unlock();
     }
+}
+
+bool ui_is_home_active(void)
+{
+    bool home = false;
+    if (lvgl_port_lock(50))
+    {
+        home = active_app == APP_NONE && desktop_view &&
+               !lv_obj_has_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
+        lvgl_port_unlock();
+    }
+    return home;
+}
+
+bool ui_wifi_app_was_opened(void)
+{
+    bool opened = true;
+    if (lvgl_port_lock(50))
+    {
+        opened = wifi_app_ever_opened;
+        lvgl_port_unlock();
+    }
+    return opened;
 }
 
 static void open_music_app(void)
@@ -1280,8 +1306,9 @@ void ui_update_periodic(const SystemStats &stats)
     // 1. Cập nhật đồng hồ Status Bar
     if (lbl_clock)
     {
-        uint32_t s = stats.uptime_sec;
-        lv_label_set_text_fmt(lbl_clock, "%02u:%02u", (s % 3600) / 60, s % 60);
+        char clock_text[6] = "--:--";
+        time_service_format_clock(clock_text, sizeof(clock_text));
+        lv_label_set_text(lbl_clock, clock_text);
     }
 
     // Cập nhật biểu tượng Loa (chỉ hiện khi đang phát âm thanh)

@@ -85,5 +85,22 @@ int main()
     assert(camera_config_transaction_complete(true, true, true, true));
     assert(!camera_config_transaction_complete(true, true, true, false));
     assert(camera_config_transaction_complete(true, true, false, false));
+
+    // AI cancel queue-full path retries until an ACK request is installed.
+    assert(ai_cancel_retry_due(true, 0, 100, 100, 5000));
+    assert(!ai_cancel_retry_due(true, 9, 100, 100, 5000));
+    assert(!ai_cancel_retry_due(false, 0, 100, 100, 5000));
+
+    // Configure is valid only for the exact desired-state revision/session.
+    assert(camera_config_revision_current(3, 3, 7, 7, 11, 11, true));
+    assert(!camera_config_revision_current(3, 3, 7, 7, 11, 12, true));
+    assert(!camera_config_revision_current(3, 3, 7, 8, 11, 11, true));
+    assert(!camera_config_revision_current(3, 3, 7, 7, 11, 11, false));
+
+    // Startup never replaces another app or a password form the user opened.
+    assert(wifi_startup_may_open(true, false, true, false));
+    assert(!wifi_startup_may_open(true, false, false, false));
+    assert(!wifi_startup_may_open(true, false, true, true));
+    assert(!wifi_startup_may_open(true, true, true, false));
     return 0;
 }

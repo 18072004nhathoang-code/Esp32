@@ -192,7 +192,7 @@ const char* camera_service_get_status_text(void)
         case CAM_STATE_ERROR:             return "ERROR";
         case CAM_STATE_STOPPED:           return "STOPPED";
         case CAM_STATE_NOT_CONFIGURED:
-        default:                          return "NOT_CONFIGURED";
+        default:                          return "NEEDS_USER_INPUT";
     }
 }
 

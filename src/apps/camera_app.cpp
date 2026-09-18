@@ -116,6 +116,7 @@ struct CameraUiCommand
     CameraUiCommandType type;
     uint32_t request_id;
     uint32_t session_id;
+    uint32_t expected_control_revision;
     bool run_service;
     NetworkCameraProfile profile;
 };
@@ -156,10 +157,11 @@ static CameraConfigStatus get_camera_config_status()
 static bool camera_config_command_current(const CameraUiCommand &command)
 {
     portENTER_CRITICAL(&camera_control_mux);
-    const bool current = command.request_id != 0 &&
-        command.request_id == camera_config_status.requested_id &&
-        command.session_id == ui_session_id &&
-        camera_control.active && camera_control.session_id == command.session_id;
+    const bool current = camera_config_revision_current(
+        command.request_id, camera_config_status.requested_id,
+        command.session_id, ui_session_id,
+        command.expected_control_revision, camera_control.revision,
+        camera_control.active && camera_control.session_id == command.session_id);
     portEXIT_CRITICAL(&camera_control_mux);
     return current;
 }
@@ -239,6 +241,7 @@ static bool queue_ui_configuration(void)
     command.run_service = true;
     command.profile = prof;
     portENTER_CRITICAL(&camera_control_mux);
+    command.expected_control_revision = camera_control.revision;
     camera_config_status = {};
     camera_config_status.requested_id = command.request_id;
     camera_config_status.run_service = command.run_service;
@@ -623,7 +626,16 @@ static void camera_ui_worker(void *)
             if (latest && command.type == CAM_UI_CONFIGURE &&
                 camera_session_accepts(command.session_id, worker_session_id, preview_active))
             {
+                const NetworkCameraProfile previous_profile =
+                    camera_service_get_network_profile();
                 configure_ok = camera_service_configure_network(command.profile);
+                if (configure_ok && !camera_config_command_current(command))
+                {
+                    // Configure raced Stop/Close/Reopen. Restore the worker's
+                    // prior service profile and never persist/start this stale command.
+                    camera_service_configure_network(previous_profile);
+                    configure_ok = false;
+                }
                 if (configure_ok && camera_config_command_current(command))
                 {
                     save_ok = camera_service_save_network_profile();
@@ -638,7 +650,16 @@ static void camera_ui_worker(void *)
                     }
                 }
             }
-            if (latest && camera_config_command_current(command))
+            bool transaction_current = false;
+            portENTER_CRITICAL(&camera_control_mux);
+            transaction_current = command.request_id == camera_config_status.requested_id &&
+                command.session_id == ui_session_id && camera_control.active &&
+                camera_control.session_id == command.session_id &&
+                ((control_revision != 0 && camera_control.revision == control_revision) ||
+                 (control_revision == 0 &&
+                  camera_control.revision == command.expected_control_revision));
+            portEXIT_CRITICAL(&camera_control_mux);
+            if (latest && transaction_current)
             {
                 portENTER_CRITICAL(&camera_control_mux);
                 if (camera_config_status.requested_id == command.request_id)

@@ -50,6 +50,9 @@ uint32_t s_audio_start_request_id = 0;
 uint32_t s_audio_control_request_id = 0;
 bool s_waiting_record_start = false;
 bool s_waiting_record_commit = false;
+bool s_cancel_enqueue_pending = false;
+uint32_t s_cancel_retry_after_ms = 0;
+uint32_t s_cancel_deadline_ms = 0;
 char s_last_error[128] = "AI endpoint is not configured";
 static constexpr size_t kJsonBodyLimit = 16U * 1024U;
 static constexpr size_t kTtsBodyLimit = 2U * 1024U * 1024U;
@@ -432,6 +435,9 @@ void ai_task(void *)
         uint32_t recording_deadline = 0;
         uint32_t audio_start_request = 0;
         uint32_t audio_control_request = 0;
+        bool cancel_enqueue_pending = false;
+        uint32_t cancel_retry_after = 0;
+        uint32_t cancel_deadline = 0;
         AIVoiceState state_snapshot = AI_STATE_ERROR;
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) == pdTRUE)
         {
@@ -441,6 +447,9 @@ void ai_task(void *)
             recording_deadline = s_recording_deadline_ms;
             audio_start_request = s_audio_start_request_id;
             audio_control_request = s_audio_control_request_id;
+            cancel_enqueue_pending = s_cancel_enqueue_pending;
+            cancel_retry_after = s_cancel_retry_after_ms;
+            cancel_deadline = s_cancel_deadline_ms;
             state_snapshot = s_state;
             if (s_pending_request_id != 0)
             {
@@ -450,6 +459,35 @@ void ai_task(void *)
                 s_state = AI_STATE_PROCESSING;
             }
             xSemaphoreGive(s_mutex);
+        }
+        if (state_snapshot == AI_STATE_CANCELING && ai_cancel_retry_due(
+                cancel_enqueue_pending, audio_control_request, millis(),
+                cancel_retry_after, cancel_deadline))
+        {
+            uint32_t cancel_id = 0;
+            const bool queued = audio_cancel_recording_async(&cancel_id);
+            if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (s_state == AI_STATE_CANCELING && s_cancel_enqueue_pending)
+                {
+                    if (queued && cancel_id)
+                    {
+                        s_audio_control_request_id = cancel_id;
+                        s_cancel_enqueue_pending = false;
+                    }
+                    else if (deadline_expired(cancel_deadline))
+                    {
+                        s_cancel_enqueue_pending = false;
+                        strlcpy(s_last_error, "Audio cancel queue/ACK timed out", sizeof(s_last_error));
+                        s_state = AI_STATE_ERROR;
+                    }
+                    else
+                    {
+                        s_cancel_retry_after_ms = millis() + 100;
+                    }
+                }
+                xSemaphoreGive(s_mutex);
+            }
         }
         bool start_ok = false;
         const bool start_acked = audio_start_request != 0 &&
@@ -477,7 +515,16 @@ void ai_task(void *)
             {
                 uint32_t cancel_id = 0;
                 if (!audio_cancel_recording_async(&cancel_id))
-                    Serial.println("[AI] Unable to invalidate timed-out recording start");
+                {
+                    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        s_cancel_enqueue_pending = true;
+                        s_cancel_retry_after_ms = millis() + 100;
+                        s_cancel_deadline_ms = millis() + 5000;
+                        xSemaphoreGive(s_mutex);
+                    }
+                    Serial.println("[AI] Timed-out recording cancel pending retry");
+                }
                 else if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
                 {
                     s_audio_control_request_id = cancel_id;
@@ -517,7 +564,16 @@ void ai_task(void *)
                 {
                     uint32_t cancel_id = 0;
                     if (!audio_cancel_recording_async(&cancel_id))
-                        Serial.println("[AI] Unable to cancel failed recording finalize");
+                    {
+                        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            s_cancel_enqueue_pending = true;
+                            s_cancel_retry_after_ms = millis() + 100;
+                            s_cancel_deadline_ms = millis() + 5000;
+                            xSemaphoreGive(s_mutex);
+                        }
+                        Serial.println("[AI] Recording finalize cancel pending retry");
+                    }
                     else if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
                     {
                         s_audio_control_request_id = cancel_id;
@@ -533,12 +589,21 @@ void ai_task(void *)
                 s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 if (s_state == AI_STATE_CANCELING &&
-                    s_audio_control_request_id == audio_control_request &&
-                    s_active_request_id == 0 && s_pending_request_id == 0)
+                    s_audio_control_request_id == audio_control_request)
                 {
                     s_audio_control_request_id = 0;
                     s_audio_start_request_id = 0;
-                    s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
+                    s_cancel_enqueue_pending = false;
+                    if (!cleanup_ok)
+                    {
+                        strlcpy(s_last_error, "Audio cancel command failed", sizeof(s_last_error));
+                        s_state = AI_STATE_ERROR;
+                    }
+                    else if (s_active_request_id == 0 && s_pending_request_id == 0)
+                    {
+                        s_state = ai_voice_is_available() ? AI_STATE_IDLE :
+                            (configuration_ready() ? AI_STATE_ERROR : AI_STATE_NEEDS_USER_INPUT);
+                    }
                 }
                 xSemaphoreGive(s_mutex);
             }
@@ -569,7 +634,13 @@ void ai_task(void *)
                     s_active_request_id = 0;
                 s_completed_request_id = request_id;
                 if (s_state == AI_STATE_CANCELING || request_id <= s_cancelled_through)
-                    s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
+                {
+                    const bool cleanup_pending = s_cancel_enqueue_pending ||
+                                                 s_audio_control_request_id != 0;
+                    s_state = cleanup_pending ? AI_STATE_CANCELING :
+                        (ai_voice_is_available() ? AI_STATE_IDLE :
+                         (configuration_ready() ? AI_STATE_ERROR : AI_STATE_NEEDS_USER_INPUT));
+                }
                 else if (s_state != AI_STATE_ERROR)
                     s_state = AI_STATE_IDLE;
                 xSemaphoreGive(s_mutex);
@@ -587,7 +658,13 @@ bool ai_voice_init(void)
     ai_voice_clear_history();
     if (!configuration_ready())
     {
-        set_error("Configure HTTPS AI/TTS endpoints, CA and token in secrets.h");
+        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            strlcpy(s_last_error, "Configure HTTPS AI/TTS endpoints, CA and token in secrets.h",
+                    sizeof(s_last_error));
+            s_state = AI_STATE_NEEDS_USER_INPUT;
+            xSemaphoreGive(s_mutex);
+        }
         ai_voice_add_message(false, s_last_error);
         return false;
     }
@@ -689,6 +766,9 @@ void ai_voice_cancel(void)
     s_waiting_record_start = false;
     s_waiting_record_commit = false;
     s_state = AI_STATE_CANCELING;
+    s_cancel_enqueue_pending = cancel_recording;
+    s_cancel_retry_after_ms = millis();
+    s_cancel_deadline_ms = millis() + 5000;
     if (s_pending_request_id)
     {
         if (s_pending_request_id > s_cancelled_through) s_cancelled_through = s_pending_request_id;
@@ -700,15 +780,17 @@ void ai_voice_cancel(void)
     xSemaphoreGive(s_mutex);
     uint32_t cancel_request_id = 0;
     if (cancel_recording && !audio_cancel_recording_async(&cancel_request_id))
-        Serial.println("[AI] Unable to enqueue recording cancel");
+        Serial.println("[AI] Recording cancel pending; worker will retry");
     if (cancel_request_id && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         s_audio_control_request_id = cancel_request_id;
+        s_cancel_enqueue_pending = false;
         xSemaphoreGive(s_mutex);
     }
-    if (!worker_active && !cancel_request_id && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    if (!worker_active && !cancel_recording && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
-        s_state = ai_voice_is_available() ? AI_STATE_IDLE : AI_STATE_ERROR;
+        s_state = ai_voice_is_available() ? AI_STATE_IDLE :
+            (configuration_ready() ? AI_STATE_ERROR : AI_STATE_NEEDS_USER_INPUT);
         xSemaphoreGive(s_mutex);
     }
 }
@@ -729,6 +811,7 @@ const char *ai_voice_get_state_text(void)
         case AI_STATE_PROCESSING: return "Đang gửi HTTPS và xử lý...";
         case AI_STATE_SPEAKING: return "Đang phát TTS WAV...";
         case AI_STATE_CANCELING: return "Đang hủy và chờ worker dừng...";
+        case AI_STATE_NEEDS_USER_INPUT: return "Cần cấu hình endpoint/token/CA";
         case AI_STATE_ERROR: return s_last_error;
         default: return "Giữ nút để nói";
     }

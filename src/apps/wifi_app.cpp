@@ -33,8 +33,9 @@ static lv_obj_t *keyboard = nullptr;
 static char current_selected_ssid[33] = {0};
 static bool is_pwd_visible = false;
 static bool is_active = false;
-static bool need_list_refresh = false;
 static std::vector<WiFiNetworkInfo> cached_scan_results;
+static uint32_t displayed_scan_revision = UINT32_MAX;
+static uint32_t displayed_result_revision = UINT32_MAX;
 
 // Kiểm tra codepoint có nằm trong các dải glyph được font hệ thống hỗ trợ
 static bool is_supported_codepoint(uint32_t cp)
@@ -172,14 +173,21 @@ static void sanitize_ssid(const char *raw_ssid, char *safe_ssid, size_t max_len)
 // Bấm nút Quét Mạng
 static void scan_btn_event_cb(lv_event_t *e)
 {
+    (void)e;
+    const WiFiScanSnapshot before = wifi_manager_get_scan_snapshot();
+    if (before.state == WifiScanPhase::QUEUED ||
+        before.state == WifiScanPhase::WAITING_FOR_RADIO ||
+        before.state == WifiScanPhase::RUNNING)
+        return;
     if (lbl_scan_info)
     {
-        lv_label_set_text(lbl_scan_info, "Đang quét...");
+        lv_label_set_text(lbl_scan_info, "Đang chờ...");
         lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_CYAN), 0);
     }
     if (!wifi_manager_scan_async() && lbl_scan_info)
     {
-        lv_label_set_text(lbl_scan_info, wifi_manager_get_last_error().c_str());
+        const WiFiScanSnapshot failed = wifi_manager_get_scan_snapshot();
+        lv_label_set_text(lbl_scan_info, failed.error[0] ? failed.error : "Không thể gửi lệnh quét");
         lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_RED), 0);
     }
 }
@@ -261,7 +269,9 @@ static void keyboard_event_cb(lv_event_t *e)
 // Bấm chọn một mạng trong danh sách -> MỞ MODAL NHẬP MẬT KHẨU
 static void network_item_clicked_cb(lv_event_t *e)
 {
-    const char *ssid = (const char *)lv_event_get_user_data(e);
+    const uintptr_t encoded = reinterpret_cast<uintptr_t>(lv_event_get_user_data(e));
+    if (encoded == 0 || encoded > cached_scan_results.size()) return;
+    const char *ssid = cached_scan_results[encoded - 1].ssid;
     if (!ssid || strlen(ssid) == 0) return;
 
     strncpy(current_selected_ssid, ssid, sizeof(current_selected_ssid) - 1);
@@ -465,8 +475,10 @@ void wifi_app_open(lv_obj_t *parent)
     lv_keyboard_set_textarea(keyboard, ta_password);
     lv_obj_add_event_cb(keyboard, keyboard_event_cb, LV_EVENT_ALL, nullptr);
 
-    // Kích hoạt quét WiFi ngay khi mở app
-    scan_btn_event_cb(nullptr);
+    displayed_scan_revision = UINT32_MAX;
+    displayed_result_revision = UINT32_MAX;
+    const WiFiScanSnapshot snapshot = wifi_manager_get_scan_snapshot();
+    if (snapshot.state == WifiScanPhase::IDLE) scan_btn_event_cb(nullptr);
 }
 
 /* Đóng và dọn dẹp app */
@@ -495,40 +507,73 @@ void wifi_app_update(void)
 {
     if (!is_active || !network_list) return;
 
-    // Cập nhật trạng thái quét
-    if (wifi_manager_get_state() == WIFI_STATE_SCANNING || !wifi_manager_is_scan_done())
+    const WiFiScanSnapshot snapshot = wifi_manager_get_scan_snapshot();
+    const bool scan_changed = snapshot.revision != displayed_scan_revision ||
+                              snapshot.result_revision != displayed_result_revision;
+    if (scan_changed)
     {
-        if (lbl_scan_info)
+        displayed_scan_revision = snapshot.revision;
+        displayed_result_revision = snapshot.result_revision;
+        if (snapshot.state == WifiScanPhase::QUEUED ||
+            snapshot.state == WifiScanPhase::WAITING_FOR_RADIO)
         {
-            lv_label_set_text(lbl_scan_info, "Đang quét...");
-            lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-        }
-        need_list_refresh = true;
-    }
-    else
-    {
-        if (need_list_refresh)
-        {
-            need_list_refresh = false;
-
-            cached_scan_results = wifi_manager_get_scan_results();
-            lv_obj_clean(network_list);
-
             if (lbl_scan_info)
             {
-                lv_label_set_text_fmt(lbl_scan_info, "Tìm thấy: %d", (int)cached_scan_results.size());
-                lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_GREEN), 0);
+                lv_label_set_text(lbl_scan_info, "Đang chờ...");
+                lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_AMBER), 0);
+            }
+        }
+        else if (snapshot.state == WifiScanPhase::RUNNING)
+        {
+            if (lbl_scan_info)
+            {
+                lv_label_set_text(lbl_scan_info, "Đang quét...");
+                lv_obj_set_style_text_color(lbl_scan_info, lv_color_hex(COLOR_ACCENT_CYAN), 0);
+            }
+        }
+        else if (WifiScanCoordinator::terminal(snapshot.state))
+        {
+            lv_obj_clean(network_list);
+            cached_scan_results.assign(snapshot.results,
+                                       snapshot.results + snapshot.result_count);
+            if (snapshot.state == WifiScanPhase::DONE)
+            {
+                if (lbl_scan_info)
+                {
+                    if (snapshot.result_count)
+                        lv_label_set_text_fmt(lbl_scan_info, "Tìm thấy: %d", (int)snapshot.result_count);
+                    else
+                        lv_label_set_text(lbl_scan_info, "Không có mạng");
+                    lv_obj_set_style_text_color(lbl_scan_info,
+                        lv_color_hex(snapshot.result_count ? COLOR_ACCENT_GREEN : COLOR_TEXT_MUTED), 0);
+                }
+            }
+            else
+            {
+                if (lbl_scan_info)
+                {
+                    lv_label_set_text(lbl_scan_info,
+                        snapshot.state == WifiScanPhase::CANCELED ? "Đã hủy" : "Quét thất bại");
+                    lv_obj_set_style_text_color(lbl_scan_info,
+                        lv_color_hex(snapshot.state == WifiScanPhase::CANCELED
+                            ? COLOR_ACCENT_AMBER : COLOR_ACCENT_RED), 0);
+                }
             }
 
             if (cached_scan_results.empty())
             {
                 lv_obj_t *empty_lbl = lv_label_create(network_list);
-                String scan_error = wifi_manager_get_last_error();
-                lv_label_set_text(empty_lbl, scan_error.length() ? scan_error.c_str() : "Không tìm thấy mạng nào.");
-                lv_obj_set_style_text_color(empty_lbl, lv_color_hex(COLOR_TEXT_MUTED), 0);
+                const char *message = snapshot.state == WifiScanPhase::DONE
+                    ? "Không tìm thấy mạng nào."
+                    : (snapshot.error[0] ? snapshot.error :
+                       (snapshot.state == WifiScanPhase::CANCELED ? "Đã hủy quét." : "Quét thất bại."));
+                lv_label_set_text(empty_lbl, message);
+                lv_obj_set_style_text_color(empty_lbl,
+                    lv_color_hex(snapshot.state == WifiScanPhase::FAILED
+                        ? COLOR_ACCENT_RED : COLOR_TEXT_MUTED), 0);
                 lv_obj_set_style_text_font(empty_lbl, UI_FONT_12, 0);
             }
-            else
+            else if (snapshot.state == WifiScanPhase::DONE)
             {
                 for (size_t i = 0; i < cached_scan_results.size(); i++)
                 {
@@ -573,7 +618,8 @@ void wifi_app_update(void)
                     lv_obj_align(rssi_lbl, LV_ALIGN_BOTTOM_RIGHT, -4, -1);
 
                     // Callback khi chọn mạng
-                    lv_obj_add_event_cb(btn, network_item_clicked_cb, LV_EVENT_CLICKED, (void *)net.ssid);
+                    lv_obj_add_event_cb(btn, network_item_clicked_cb, LV_EVENT_CLICKED,
+                                        reinterpret_cast<void *>(i + 1));
                 }
             }
         }

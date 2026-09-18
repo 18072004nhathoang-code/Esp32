@@ -22,6 +22,7 @@
 #include <FS.h>
 #include <FFat.h>
 #include <atomic>
+#include <music_decoder_lifecycle.h>
 
 #if ESP_IDF_VERSION_MAJOR == 5
 #include <driver/i2s_std.h>
@@ -472,6 +473,7 @@ private:
     SemaphoreHandle_t     mutex_playAudioData;
     SemaphoreHandle_t     m_audioTaskExitAck = nullptr;
     TaskHandle_t          m_audioTaskHandle = nullptr;
+    MusicWorkerExitTracker m_audioTaskExit;
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"

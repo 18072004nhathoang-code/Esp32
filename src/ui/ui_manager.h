@@ -24,6 +24,10 @@ void ui_update_periodic(const SystemStats &stats);
  */
 void ui_open_wifi_app(void);
 
+/** True only while the desktop/home screen is active. */
+bool ui_is_home_active(void);
+bool ui_wifi_app_was_opened(void);
+
 /**
  * @brief Mở màn hình ứng dụng Music Player (phát nhạc MP3 từ thẻ nhớ MicroSD)
  */

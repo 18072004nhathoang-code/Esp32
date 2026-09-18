@@ -96,3 +96,27 @@ bool audio_duplex_restore_ready(bool driver_installed, bool codec_configured)
 {
     return driver_installed && codec_configured;
 }
+
+bool ai_cancel_retry_due(bool pending, uint32_t control_request_id,
+                         uint32_t now_ms, uint32_t retry_after_ms,
+                         uint32_t deadline_ms)
+{
+    return pending && control_request_id == 0 && deadline_ms != 0 &&
+           static_cast<int32_t>(now_ms - retry_after_ms) >= 0;
+}
+
+bool camera_config_revision_current(uint32_t request_id, uint32_t latest_request_id,
+                                    uint32_t session_id, uint32_t latest_session_id,
+                                    uint32_t expected_revision, uint32_t actual_revision,
+                                    bool active)
+{
+    return request_id != 0 && request_id == latest_request_id && session_id != 0 &&
+           session_id == latest_session_id && expected_revision != 0 &&
+           expected_revision == actual_revision && active;
+}
+
+bool wifi_startup_may_open(bool deadline_reached, bool connected,
+                           bool home_active, bool wifi_app_ever_opened)
+{
+    return deadline_reached && !connected && home_active && !wifi_app_ever_opened;
+}

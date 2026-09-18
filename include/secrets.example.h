@@ -8,8 +8,8 @@
 #pragma once
 
 // Cấu hình mạng WiFi mặc định (nếu không dùng NVS)
-#define DEFAULT_WIFI_SSID       "Your_WiFi_SSID"
-#define DEFAULT_WIFI_PASS       "Your_WiFi_Password"
+#define DEFAULT_WIFI_SSID       ""
+#define DEFAULT_WIFI_PASS       ""
 
 // Google Maps Static API Key (để tải ảnh vệ tinh / roadmap chất lượng cao)
 // Lấy key tại: https://console.cloud.google.com/

@@ -31,6 +31,12 @@ struct MockDecoder
 
 int main()
 {
+    MusicWorkerExitTracker worker_exit;
+    const uint32_t worker_generation = worker_exit.begin();
+    assert(!worker_exit.confirmed(worker_generation)); // handle=null alone is not completion
+    worker_exit.acknowledge(worker_generation);
+    assert(worker_exit.confirmed(worker_generation));
+
     MusicDecoderLifecycle lifecycle;
     MockDecoder decoder;
 

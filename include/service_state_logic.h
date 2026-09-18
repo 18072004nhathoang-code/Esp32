@@ -36,3 +36,12 @@ bool camera_config_transaction_complete(bool configure_ok, bool save_ok,
                                         bool run_service, bool start_ok);
 bool audio_music_handoff_can_grant(bool pause_acked, bool uninstall_ok);
 bool audio_duplex_restore_ready(bool driver_installed, bool codec_configured);
+bool ai_cancel_retry_due(bool pending, uint32_t control_request_id,
+                         uint32_t now_ms, uint32_t retry_after_ms,
+                         uint32_t deadline_ms);
+bool camera_config_revision_current(uint32_t request_id, uint32_t latest_request_id,
+                                    uint32_t session_id, uint32_t latest_session_id,
+                                    uint32_t expected_revision, uint32_t actual_revision,
+                                    bool active);
+bool wifi_startup_may_open(bool deadline_reached, bool connected,
+                           bool home_active, bool wifi_app_ever_opened);

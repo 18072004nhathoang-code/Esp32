@@ -6346,10 +6346,12 @@ bool Audio::startAudioTask() {
     }
     if(!mutex_playAudioData || !m_audioTaskExitAck) return false;
     while(xSemaphoreTake(m_audioTaskExitAck, 0) == pdTRUE) {}
+    const uint32_t task_generation = m_audioTaskExit.begin();
     m_f_audioTaskIsRunning = true;
     if(xTaskCreate(&Audio::taskWrapper, "PeriodicTask", 3300, this, 4, &m_audioTaskHandle) != pdPASS) {
         m_f_audioTaskIsRunning = false;
         m_audioTaskHandle = nullptr;
+        m_audioTaskExit.acknowledge(task_generation);
         log_e("Audio initialization failed: PeriodicTask");
         return false;
     }
@@ -6357,11 +6359,13 @@ bool Audio::startAudioTask() {
 }
 
 bool Audio::stopAudioTask(uint32_t timeout_ms)  {
-    if(m_audioTaskHandle == nullptr) return true;
+    const uint32_t stopping_generation = m_audioTaskExit.generation();
+    if(stopping_generation == 0 || m_audioTaskExit.confirmed(stopping_generation)) return true;
     m_f_audioTaskIsRunning = false;
     const TickType_t wait_ticks = timeout_ms == portMAX_DELAY
                                     ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    return xSemaphoreTake(m_audioTaskExitAck, wait_ticks) == pdTRUE &&
+    const bool signaled = xSemaphoreTake(m_audioTaskExitAck, wait_ticks) == pdTRUE;
+    return signaled && m_audioTaskExit.confirmed(stopping_generation) &&
            m_audioTaskHandle == nullptr;
 }
 
@@ -6375,7 +6379,9 @@ void Audio::audioTask() {
         vTaskDelay(7 / portTICK_PERIOD_MS);  // periodically every 7 ms
         performAudioTask();
     }
+    const uint32_t exiting_generation = m_audioTaskExit.generation();
     m_audioTaskHandle = nullptr;
+    m_audioTaskExit.acknowledge(exiting_generation);
     xSemaphoreGive(m_audioTaskExitAck);
     vTaskDelete(nullptr);  // Delete this task
 }
@@ -6389,7 +6395,9 @@ void Audio::performAudioTask() {
 }
 
 bool Audio::shutdown(uint32_t timeout_ms) {
-    if(!mutex_playAudioData) return m_audioTaskHandle == nullptr;
+    if(!mutex_playAudioData)
+        return m_audioTaskExit.generation() == 0 ||
+               m_audioTaskExit.confirmed(m_audioTaskExit.generation());
     const TickType_t lock_ticks = timeout_ms == portMAX_DELAY
                                    ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     if(xSemaphoreTake(mutex_playAudioData, lock_ticks) != pdTRUE) return false;

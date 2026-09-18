@@ -12,6 +12,7 @@
 #include "ui/ui_manager.h"
 #include "os/system_info.h"
 #include "os/wifi_manager.h"
+#include "os/time_service.h"
 #include "storage/storage_manager.h"
 #include "audio/audio_manager.h"
 #include "audio/music_player.h"
@@ -20,6 +21,7 @@
 #include "os/power_manager.h"
 #include "os/settings_service.h"
 #include "firmware_regression.h"
+#include "service_state_logic.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -211,6 +213,7 @@ void setup()
     Serial.println("[WIFI] Khởi tạo WiFi Manager Service trên Core 0...");
     bool wifi_ok = wifi_manager_init();
     wifi_manager_set_auto_reconnect(saved_settings.wifi_auto_reconnect);
+    time_service_init();
     Serial.printf("[WIFI] Status: %s\n", wifi_ok ? "Ready" : "DEGRADED");
 
     // 7. Khởi tạo Module Quản lý Nguồn và áp dụng cấu hình đã lưu.
@@ -226,13 +229,6 @@ void setup()
     // 9. Khởi tạo Desktop sau khi các service nền đã có trạng thái thật.
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
     ui_init();
-
-    // 10. Tự động chuyển vào màn hình WiFi Settings App nếu chưa có mạng trong Flash NVS
-    if (!wifi_manager_has_saved_credentials())
-    {
-        Serial.println("[SYSTEM] Chưa tìm thấy mạng WiFi trong NVS Flash! Tự động mở WiFi Settings App...");
-        ui_open_wifi_app();
-    }
 
     Serial.println("[SYSTEM] Mini OS Pro Max đã sẵn sàng hoạt động!");
 #ifdef MINI_OS_MUSIC_STRESS_TEST
@@ -257,18 +253,22 @@ void loop()
 
         // Thu thập thông số phần cứng
         system_info_update();
+        time_service_update();
         SystemStats current_stats = system_get_stats();
 
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)
         ui_update_periodic(current_stats);
 
         // Kiểm tra sau khi khởi động 10s: nếu kết nối thất bại và chưa có Internet, tự động mở WiFi Settings App
-        static bool boot_wifi_checked = false;
-        if (!boot_wifi_checked && millis() > 10000)
+        static bool boot_wifi_prompted = false;
+        if (!boot_wifi_prompted && millis() > 10000)
         {
-            boot_wifi_checked = true;
-            if (!wifi_manager_is_connected())
+            if (wifi_manager_is_connected())
+                boot_wifi_prompted = true;
+            else if (wifi_startup_may_open(true, false, ui_is_home_active(),
+                                           ui_wifi_app_was_opened()))
             {
+                boot_wifi_prompted = true;
                 Serial.println("[SYSTEM] Kết nối WiFi thất bại sau thời gian chờ. Tự động mở WiFi Settings App...");
                 ui_open_wifi_app();
             }
