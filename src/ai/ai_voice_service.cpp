@@ -98,11 +98,21 @@ const char *active_token()
     return AI_VOICE_BEARER_TOKEN;
 }
 
+static bool is_valid_ai_endpoint(const char *url)
+{
+    if (!url || !*url) return false;
+    if (strncmp(url, "https://", 8) == 0)
+    {
+        return AI_VOICE_CA_CERT[0] != '\0';
+    }
+    return strncmp(url, "http://", 7) == 0;
+}
+
 bool configuration_ready()
 {
-    return strncmp(AI_VOICE_ENDPOINT, "https://", 8) == 0 &&
-           strncmp(AI_VOICE_TTS_ENDPOINT, "https://", 8) == 0 &&
-           active_token()[0] != '\0' && AI_VOICE_CA_CERT[0] != '\0';
+    return is_valid_ai_endpoint(AI_VOICE_ENDPOINT) &&
+           is_valid_ai_endpoint(AI_VOICE_TTS_ENDPOINT) &&
+           active_token()[0] != '\0';
 }
 
 void put_le16(uint8_t *p, uint16_t value)
@@ -386,12 +396,23 @@ bool post_recording(uint32_t request_id, AiQueryResponse *response)
     const uint32_t deadline_ms = millis() + kRequestDeadlineMs;
 
     WiFiClientSecure tls;
-    tls.setCACert(AI_VOICE_CA_CERT);
+    WiFiClient plain;
     HTTPClient http;
-    if (!http.begin(tls, AI_VOICE_ENDPOINT))
+    const bool is_https = (strncmp(AI_VOICE_ENDPOINT, "https://", 8) == 0);
+    bool http_begun = false;
+    if (is_https)
+    {
+        tls.setCACert(AI_VOICE_CA_CERT);
+        http_begun = http.begin(tls, AI_VOICE_ENDPOINT);
+    }
+    else
+    {
+        http_begun = http.begin(plain, AI_VOICE_ENDPOINT);
+    }
+    if (!http_begun)
     {
         audio_release_recording_lease(&lease);
-        set_error("Cannot open AI HTTPS endpoint");
+        set_error("Cannot open AI endpoint");
         return false;
     }
     http.setConnectTimeout(10000);
@@ -438,9 +459,20 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
     if (!text || !*text || !wifi_manager_is_connected()) return false;
     const uint32_t deadline_ms = millis() + kRequestDeadlineMs;
     WiFiClientSecure tls;
-    tls.setCACert(AI_VOICE_CA_CERT);
+    WiFiClient plain;
     HTTPClient http;
-    if (!http.begin(tls, AI_VOICE_TTS_ENDPOINT)) return false;
+    const bool is_https = (strncmp(AI_VOICE_TTS_ENDPOINT, "https://", 8) == 0);
+    bool http_begun = false;
+    if (is_https)
+    {
+        tls.setCACert(AI_VOICE_CA_CERT);
+        http_begun = http.begin(tls, AI_VOICE_TTS_ENDPOINT);
+    }
+    else
+    {
+        http_begun = http.begin(plain, AI_VOICE_TTS_ENDPOINT);
+    }
+    if (!http_begun) return false;
     http.setConnectTimeout(10000);
     http.setTimeout(30000);
     http.addHeader("Content-Type", "application/json");

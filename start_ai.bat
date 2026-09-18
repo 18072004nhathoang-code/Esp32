@@ -2,22 +2,15 @@
 chcp 65001 > nul
 title ESP32 Mini OS - AI Assistant Service
 echo ========================================================
-echo   ESP32 Mini OS - AI Backend & Cloudflare Tunnel
+echo   ESP32 Mini OS - AI Backend Service (Local LAN)
 echo ========================================================
+echo.
+echo Địa chỉ máy chủ nội bộ: http://192.168.1.28:8787
 echo.
 
 cd /d "%~dp0backend"
 
-echo [1/2] Đang khởi chạy AI Backend Server trên cổng 8787...
-start "AI Backend Server" cmd /k "node server.js"
+echo Đang khởi chạy AI Backend...
+node server.js
 
-echo [2/2] Đang khởi chạy Cloudflare Tunnel HTTPS...
-start "Cloudflare Tunnel" cmd /k "npx -y cloudflared tunnel --url http://127.0.0.1:8787"
-
-echo.
-echo ========================================================
-echo Backend đã được bật tại: http://127.0.0.1:8787
-echo Cửa sổ Cloudflare Tunnel sẽ cung cấp đường link HTTPS.
-echo ========================================================
-echo.
 pause
