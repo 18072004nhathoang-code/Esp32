@@ -26,6 +26,10 @@
 /* 1: Enable 1-bit transparency (chroma keying) */
 #define LV_COLOR_CHROMA_KEY lv_color_hex(0x00FF00)
 
+/* 1: Enable screen transparency / layer alpha rendering for transform angles (rotating vinyl).
+ * Màn hình đầu ra thực tế vẫn là RGB565 (LV_COLOR_DEPTH 16). */
+#define LV_COLOR_SCREEN_TRANSP 1
+
 /*=========================
    MEMORY SETTINGS
  *=========================*/

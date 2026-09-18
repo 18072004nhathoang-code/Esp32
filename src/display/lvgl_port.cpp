@@ -35,6 +35,7 @@ static DisplayDiagnosticState display_diagnostic = {
 static const char *display_color_config_source = "BOARD_PROFILE";
 
 static_assert(LV_COLOR_DEPTH == 16, "LVGL flush requires RGB565");
+static_assert(LV_COLOR_SCREEN_TRANSP == 1, "LVGL transform requires LV_COLOR_SCREEN_TRANSP 1");
 static_assert(LV_COLOR_16_SWAP == 0, "LVGL RGB565 must use native byte order");
 static_assert(sizeof(lv_color_t) == sizeof(lgfx::rgb565_t), "LVGL/LovyanGFX RGB565 size mismatch");
 static_assert(alignof(lv_color_t) >= alignof(lgfx::rgb565_t), "LVGL/LovyanGFX RGB565 alignment mismatch");
@@ -258,13 +259,16 @@ bool lvgl_port_init(void)
     // Khởi tạo Draw Buffer (Hỗ trợ Double-Buffering nếu có disp_buf2)
     lv_disp_draw_buf_init(&draw_buf, disp_buf1, disp_buf2, DISP_HOR_RES * DISP_BUF_LINES);
 
-    // Cấu hình Display Driver
+    // Cấu hình Display Driver (Giữ đầu ra RGB565, không bật screen_transp trên display driver)
     lv_disp_drv_init(&disp_drv);
     disp_drv.hor_res = DISP_HOR_RES;
     disp_drv.ver_res = DISP_VER_RES;
     disp_drv.flush_cb = disp_flush_cb;
     disp_drv.draw_buf = &draw_buf;
+    disp_drv.screen_transp = 0;
     lv_disp_t *display = lv_disp_drv_register(&disp_drv);
+    lv_disp_set_bg_opa(display, LV_OPA_COVER);
+    lv_disp_set_bg_color(display, lv_color_hex(COLOR_OS_BG));
 
     // Be Vietnam Pro is the default UI font. Its descriptor falls back to
     // Montserrat only for LVGL symbols absent from the Vietnamese font.

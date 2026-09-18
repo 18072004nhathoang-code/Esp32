@@ -44,8 +44,8 @@ static void anim_vinyl_rotate_cb(void *var, int32_t v)
 {
     if (vinyl_disc)
     {
-        current_vinyl_angle = v;
-        lv_obj_set_style_transform_angle(vinyl_disc, (int16_t)v, 0);
+        current_vinyl_angle = v % 3600;
+        lv_obj_set_style_transform_angle(vinyl_disc, (int16_t)current_vinyl_angle, 0);
     }
 }
 
@@ -58,24 +58,28 @@ static void track_item_click_cb(lv_event_t *e)
     {
         lv_obj_add_flag(playlist_modal, LV_OBJ_FLAG_HIDDEN);
     }
+    music_app_update();
 }
 
 /* Callback bấm nút Play / Pause */
 static void play_btn_click_cb(lv_event_t *e)
 {
     if (!music_player_toggle_play()) show_command_error();
+    music_app_update();
 }
 
 /* Callback bấm nút Next */
 static void next_btn_click_cb(lv_event_t *e)
 {
     if (!music_player_next()) show_command_error();
+    music_app_update();
 }
 
 /* Callback bấm nút Previous */
 static void prev_btn_click_cb(lv_event_t *e)
 {
     if (!music_player_prev()) show_command_error();
+    music_app_update();
 }
 
 /* Callback mở / đóng danh sách phát nhạc */
@@ -147,16 +151,21 @@ void music_app_open(lv_obj_t *parent)
     lv_obj_set_style_pad_all(player_card, 6, 0);
     lv_obj_clear_flag(player_card, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 1. ARTWORK ĐĨA THAN QUAY BÊN TRÁI (Size 88x88)
+    // 1. ARTWORK ĐĨA THAN QUAY BÊN TRÁI (Size 88x88 hoặc 76x76)
+    const lv_coord_t disc_size = portrait ? 76 : 88;
     vinyl_disc = lv_obj_create(player_card);
-    lv_obj_set_size(vinyl_disc, portrait ? 76 : 88, portrait ? 76 : 88);
+    lv_obj_set_size(vinyl_disc, disc_size, disc_size);
     lv_obj_align(vinyl_disc, portrait ? LV_ALIGN_TOP_MID : LV_ALIGN_LEFT_MID,
                  portrait ? 0 : 8, portrait ? 2 : 0);
-    lv_obj_set_style_radius(vinyl_disc, portrait ? 38 : 44, 0);
+    lv_obj_set_style_radius(vinyl_disc, disc_size / 2, 0);
     lv_obj_set_style_bg_color(vinyl_disc, lv_color_hex(0x0C0E14), 0);
     lv_obj_set_style_border_color(vinyl_disc, lv_color_hex(0x2A3346), 0);
     lv_obj_set_style_border_width(vinyl_disc, 3, 0);
     lv_obj_clear_flag(vinyl_disc, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Đặt pivot xoay đúng tâm vinyl_disc theo kích thước 76/88 px
+    lv_obj_set_style_transform_pivot_x(vinyl_disc, disc_size / 2, 0);
+    lv_obj_set_style_transform_pivot_y(vinyl_disc, disc_size / 2, 0);
 
     // Vòng rãnh đĩa than
     lv_obj_t *groove = lv_obj_create(vinyl_disc);
@@ -435,6 +444,8 @@ void music_app_open(lv_obj_t *parent)
         lv_obj_set_style_text_font(btn, UI_FONT_12, 0);
         lv_obj_add_event_cb(btn, track_item_click_cb, LV_EVENT_CLICKED, (void *)(uintptr_t)i);
     }
+
+    music_app_update();
 }
 
 /* Đóng và giải phóng tài nguyên ứng dụng Music Player */
@@ -446,6 +457,7 @@ void music_app_close(void)
         lv_anim_del(vinyl_disc, anim_vinyl_rotate_cb);
         vinyl_anim_running = false;
     }
+    current_vinyl_angle = 0;
     main_container = nullptr;
     player_card = nullptr;
     playlist_modal = nullptr;
@@ -475,6 +487,7 @@ void music_app_update(void)
     {
         if (!vinyl_anim_running && vinyl_disc)
         {
+            lv_anim_set_values(&vinyl_anim, current_vinyl_angle, current_vinyl_angle + 3600);
             lv_anim_start(&vinyl_anim);
             vinyl_anim_running = true;
         }
@@ -485,6 +498,7 @@ void music_app_update(void)
         {
             lv_anim_del(vinyl_disc, anim_vinyl_rotate_cb);
             vinyl_anim_running = false;
+            current_vinyl_angle = current_vinyl_angle % 3600;
         }
     }
 
