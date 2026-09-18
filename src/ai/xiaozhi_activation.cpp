@@ -5,7 +5,11 @@
 #include <Preferences.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
+#include <esp_app_format.h>
+#include <esp_chip_info.h>
 #include <esp_mac.h>
+#include <esp_ota_ops.h>
+#include <esp_partition.h>
 #include <esp_system.h>
 
 #if __has_include("secrets.h")
@@ -164,15 +168,30 @@ bool xiaozhi_provision_once(XiaozhiProvisionResult *result,
         return false;
     }
 
-    StaticJsonDocument<512> info;
+    // Keep this request schema aligned with the official Ota::CheckVersion /
+    // Board::GetSystemInfoJson contract at the pinned Xiaozhi upstream commit.
+    // The service rejects the former abbreviated payload with HTTP 400.
+    DynamicJsonDocument info(8192);
     info["version"] = 2;
     info["language"] = "vi-VN";
     info["flash_size"] = ESP.getFlashChipSize();
-    info["psram_size"] = ESP.getPsramSize();
-    info["minimum_free_heap_size"] = ESP.getMinFreeHeap();
+    char minimum_heap[16] = {};
+    snprintf(minimum_heap, sizeof(minimum_heap), "%u",
+             static_cast<unsigned>(ESP.getMinFreeHeap()));
+    info["minimum_free_heap_size"] = minimum_heap;
     info["mac_address"] = device_id;
     info["uuid"] = client_id;
     info["chip_model_name"] = ESP.getChipModel();
+
+    esp_chip_info_t chip = {};
+    esp_chip_info(&chip);
+    JsonObject chip_info = info.createNestedObject("chip_info");
+    chip_info["model"] = static_cast<int>(chip.model);
+    chip_info["cores"] = chip.cores;
+    chip_info["revision"] = chip.revision;
+    chip_info["features"] = chip.features;
+
+    const esp_app_desc_t *app_desc = esp_ota_get_app_description();
     JsonObject application = info.createNestedObject("application");
     application["name"] = "esp32-mini-os";
 #ifdef FW_GIT_SHA
@@ -180,6 +199,48 @@ bool xiaozhi_provision_once(XiaozhiProvisionResult *result,
 #else
     application["version"] = "unknown";
 #endif
+    application["compile_time"] = String(app_desc->date) + "T" + app_desc->time + "Z";
+    application["idf_version"] = app_desc->idf_ver;
+    char elf_sha256[65] = {};
+    for (size_t i = 0; i < sizeof(app_desc->app_elf_sha256); ++i)
+        snprintf(elf_sha256 + i * 2, sizeof(elf_sha256) - i * 2,
+                 "%02x", app_desc->app_elf_sha256[i]);
+    application["elf_sha256"] = elf_sha256;
+
+    JsonArray partitions = info.createNestedArray("partition_table");
+    esp_partition_iterator_t iterator = esp_partition_find(
+        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, nullptr);
+    while (iterator)
+    {
+        const esp_partition_t *partition = esp_partition_get(iterator);
+        if (!partition) break;
+        JsonObject item = partitions.createNestedObject();
+        item["label"] = partition->label;
+        item["type"] = partition->type;
+        item["subtype"] = partition->subtype;
+        item["address"] = partition->address;
+        item["size"] = partition->size;
+        iterator = esp_partition_next(iterator);
+    }
+    if (iterator) esp_partition_iterator_release(iterator);
+
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    info.createNestedObject("ota")["label"] = running ? running->label : "";
+    JsonObject display = info.createNestedObject("display");
+    display["monochrome"] = false;
+    display["width"] = 240;
+    display["height"] = 320;
+    JsonObject board = info.createNestedObject("board");
+    board["type"] = "esp32-s3";
+    board["name"] = "es3c28p-mini-os";
+    board["manufacturer"] = "LCDWIKI";
+    board["mac"] = device_id;
+
+    if (info.overflowed())
+    {
+        if (error && error_size) strlcpy(error, "Thiếu RAM tạo Xiaozhi system info", error_size);
+        return false;
+    }
     String request_body;
     serializeJson(info, request_body);
 

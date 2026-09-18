@@ -571,9 +571,11 @@ bool start_session(uint32_t generation)
 
 void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
 {
+    static char last_logged_activation_code[24] = {};
     if (s_configured || s_activation_cancelled || !wifi_manager_is_connected() ||
         !elapsed(next_poll_ms) || s_active_generation) return;
     set_state(AI_STATE_NEEDS_USER_INPUT);
+    log_i("Xiaozhi provisioning request: HTTPS OTA discovery");
     XiaozhiProvisionResult result = {};
     char error[160] = {};
     if (xiaozhi_provision_once(&result, error, sizeof(error)))
@@ -590,9 +592,19 @@ void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
                 s_activation_code[0] = '\0';
                 s_activation_message[0] = '\0';
                 s_state = AI_STATE_IDLE;
+                last_logged_activation_code[0] = '\0';
+                log_i("Xiaozhi WSS provisioned: protocol=%u MCP=enabled",
+                      static_cast<unsigned>(s_ws_config.version));
             }
             else s_state = AI_STATE_NEEDS_USER_INPUT;
             xSemaphoreGive(s_mutex);
+        }
+        if (result.activation_required && result.activation_code[0] &&
+            strcmp(last_logged_activation_code, result.activation_code) != 0)
+        {
+            strlcpy(last_logged_activation_code, result.activation_code,
+                    sizeof(last_logged_activation_code));
+            log_i("Xiaozhi activation required: code=%s", result.activation_code);
         }
         next_poll_ms = millis() + result.poll_after_ms;
     }
@@ -600,6 +612,8 @@ void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
     {
         if (error[0])
         {
+            log_w("Xiaozhi provisioning failed: %s; retry_ms=%u",
+                  error, static_cast<unsigned>(backoff_ms));
             if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 strlcpy(s_last_error, error, sizeof(s_last_error));
@@ -740,6 +754,8 @@ bool ai_voice_init(void)
     }
     add_message(false, s_configured ? "Xiaozhi đã sẵn sàng. Giữ nút để nói."
                                     : "Đang kết nối dịch vụ kích hoạt Xiaozhi...");
+    log_i("Xiaozhi service ready: provisioned=%s MCP=enabled",
+          s_configured ? "yes" : "no");
     return true;
 }
 
