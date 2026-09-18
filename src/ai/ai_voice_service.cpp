@@ -509,6 +509,16 @@ bool stream_tts_wav(uint32_t request_id, const char *text)
     bool ok = audio_codec_configure_for_stream(AUDIO_SAMPLE_RATE, 256);
     ok = ok && audio_session != 0 &&
          audio_set_pa_for_session(AUDIO_OWNER_AI_VOICE, audio_session, true);
+    if (ok)
+    {
+        ai_voice_add_message(false, text);
+        if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            if (request_response_is_current(request_id, s_active_request_id, s_cancelled_through))
+                s_state = AI_STATE_SPEAKING;
+            xSemaphoreGive(s_mutex);
+        }
+    }
     size_t offset = 0;
     while (ok && offset < wav.sample_count)
     {
@@ -776,16 +786,16 @@ void ai_task(void *)
             if (response_ok && !request_cancelled(request_id))
             {
                 ai_voice_add_message(true, response.transcript);
-                ai_voice_add_message(false, response.reply);
-                if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+                bool tts_ok = false;
+                if (!request_cancelled(request_id))
                 {
-                    if (request_response_is_current(request_id, s_active_request_id, s_cancelled_through))
-                        s_state = AI_STATE_SPEAKING;
-                    xSemaphoreGive(s_mutex);
+                    tts_ok = stream_tts_wav(request_id, response.reply);
                 }
-                if (!request_cancelled(request_id) && !stream_tts_wav(request_id, response.reply) &&
-                    !request_cancelled(request_id))
-                    set_error("TTS HTTPS/WAV playback failed");
+                if (!tts_ok && !request_cancelled(request_id))
+                {
+                    ai_voice_add_message(false, response.reply);
+                    set_error("TTS playback failed");
+                }
                 if (!request_cancelled(request_id))
                 {
                     for (size_t i = 0; i < response.action_count; ++i)

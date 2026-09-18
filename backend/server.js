@@ -65,6 +65,23 @@ function sendJson(res, status, value) {
   res.end(body);
 }
 
+const ttsCache = new Map();
+
+function prewarmTts(text, config, ttsFn) {
+  if (!text || typeof text !== "string") return;
+  const trimmed = text.trim();
+  if (!trimmed || ttsCache.has(trimmed)) return;
+  const promise = Promise.resolve(ttsFn(trimmed, config)).catch(() => {
+    ttsCache.delete(trimmed);
+    return null;
+  });
+  ttsCache.set(trimmed, promise);
+  if (ttsCache.size > 20) {
+    const oldestKey = ttsCache.keys().next().value;
+    ttsCache.delete(oldestKey);
+  }
+}
+
 export function createServer(config, dependencies = {}) {
   const query = dependencies.query || queryGemini;
   const tts = dependencies.tts || ttsGemini;
@@ -77,14 +94,26 @@ export function createServer(config, dependencies = {}) {
         if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("audio/wav")) return sendJson(res, 415, { error: "content-type must be audio/wav" });
         const wav = await readBody(req, config.maxQueryBytes, config.timeoutMs);
         parsePcm16Mono16kWav(wav);
-        return sendJson(res, 200, await query(wav, config));
+        const result = await query(wav, config);
+        if (result && typeof result.reply === "string") {
+          prewarmTts(result.reply, config, tts);
+        }
+        return sendJson(res, 200, result);
       }
       if (!String(req.headers["content-type"] || "").toLowerCase().startsWith("application/json")) return sendJson(res, 415, { error: "content-type must be application/json" });
       const raw = await readBody(req, 4096, config.timeoutMs);
       let input;
       try { input = JSON.parse(raw.toString("utf8")); } catch { return sendJson(res, 400, { error: "invalid JSON" }); }
       if (!input || Object.keys(input).length !== 1 || typeof input.text !== "string") return sendJson(res, 400, { error: "expected {text}" });
-      const wav = await tts(input.text, config);
+      let wav;
+      const key = input.text.trim();
+      if (ttsCache.has(key)) {
+        wav = await ttsCache.get(key);
+        ttsCache.delete(key);
+      }
+      if (!wav) {
+        wav = await tts(input.text, config);
+      }
       res.writeHead(200, { "content-type": "audio/wav", "content-length": wav.length, "cache-control": "no-store" });
       res.end(wav);
     } catch (error) {

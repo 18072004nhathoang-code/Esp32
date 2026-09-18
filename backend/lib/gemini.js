@@ -64,7 +64,7 @@ async function geminiFetch(url, body, config, fetchImpl) {
 export async function queryGemini(wav, config, fetchImpl = fetch) {
   const sourceSummary = config.musicSources.map(({ id, label }) => ({ id, label }));
   const prompt = [
-    "Bạn là trợ lý tiếng Việt trên ESP32. Hãy nghe âm thanh, chép lại chính xác và trả lời cực kỳ ngắn gọn (tối đa 1-2 câu ngắn) để phản hồi nhanh nhất.",
+    "Bạn là trợ lý tiếng Việt trên ESP32. Hãy nghe âm thanh, chép lại chính xác và trả lời cực kỳ ngắn gọn (chỉ 1 câu ngắn, súc tích) để phát âm thanh tức thì.",
     "Chỉ phát lệnh nhạc khi người dùng yêu cầu rõ ràng. Action cho phép: music.play, music.pause, music.resume, music.stop, music.volume.",
     "music.play không source_id nghĩa là bài SD đang chọn/đầu tiên. Chỉ dùng source_id có trong danh sách cấu hình; không tạo URL.",
     `Nguồn stream cấu hình: ${JSON.stringify(sourceSummary)}.`,
