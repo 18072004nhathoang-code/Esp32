@@ -4,35 +4,17 @@
 #include <assert.h>
 #include <string.h>
 
-struct FakeScanDriver
-{
-    bool accept = true;
-    uint32_t starts = 0;
-    uint32_t active_request = 0;
-
-    bool start(uint32_t request)
-    {
-        ++starts;
-        if (!accept) return false;
-        active_request = request;
-        return true;
-    }
-};
-
 int main()
 {
     WifiScanCoordinator scan;
-    FakeScanDriver driver;
 
     // CONNECT -> SCAN: enqueue does not touch the driver and remains QUEUED.
     const uint32_t first = scan.queue(100);
     assert(first != 0 && scan.phase == WifiScanPhase::QUEUED);
-    assert(driver.starts == 0);
     assert(scan.worker_received(first));
     assert(scan.phase == WifiScanPhase::WAITING_FOR_RADIO);
     assert(!wifi_scan_may_start(true, 4099, 100, 4000));
     assert(wifi_scan_may_start(true, 4100, 100, 4000));
-    assert(driver.start(first));
     assert(scan.driver_accepted(first, 4100, 15000));
     assert(scan.finish(first, WifiScanPhase::FAILED)); // failed before UI poll
     const uint32_t failed_revision = scan.result_revision;

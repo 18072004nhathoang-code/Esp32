@@ -54,6 +54,7 @@ struct WiFiScanSnapshot {
     uint32_t queued_at_ms;
     uint32_t started_at_ms;
     WifiScanPhase state;
+    int32_t driver_error;
     char error[96];
     size_t result_count;
     WiFiNetworkInfo results[WIFI_SCAN_MAX_RESULTS];

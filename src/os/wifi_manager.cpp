@@ -14,6 +14,7 @@
 #include "freertos/semphr.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
+#include "wifi_scan_adapter.h"
 
 static Preferences prefs;
 static WiFiState current_state = WIFI_STATE_DISCONNECTED;
@@ -54,11 +55,18 @@ static WifiScanCoordinator scan_control;
 static WiFiNetworkInfo scan_results[WIFI_SCAN_MAX_RESULTS] = {};
 static size_t scan_result_count = 0;
 static char scan_error[96] = "";
+static int32_t scan_driver_error = ESP_OK;
+static WifiScanDriverAdapter scan_driver;
 static uint32_t scan_driver_request_id = 0;
-static bool scan_driver_draining = false;
-static uint32_t scan_drain_deadline_ms = 0;
-static constexpr uint32_t WIFI_SCAN_TIMEOUT_MS = 15000;
+static uint8_t scan_start_attempts = 0;
+static uint32_t scan_retry_at_ms = 0;
+static WiFiNetworkInfo scan_copy_buffer[WIFI_SCAN_MAX_RESULTS] = {};
+static constexpr uint32_t WIFI_SCAN_TIMEOUT_MS = 10000;
+static constexpr uint32_t WIFI_SCAN_TOTAL_BUDGET_MS = 20000;
 static constexpr uint32_t WIFI_SCAN_CONNECT_WAIT_MS = 4000;
+static constexpr uint32_t WIFI_SCAN_DRAIN_TIMEOUT_MS = 2000;
+static constexpr uint32_t WIFI_SCAN_RETRY_BACKOFF_MS = 300;
+static constexpr uint8_t WIFI_SCAN_MAX_START_ATTEMPTS = 3;
 
 // Thông tin mạng yêu cầu kết nối
 static char target_ssid[33] = {0};
@@ -92,6 +100,14 @@ static void set_scan_error_locked(const char *message)
     strlcpy(scan_error, message ? message : "Unknown WiFi scan error", sizeof(scan_error));
 }
 
+static void set_scan_driver_error_locked(const char *context, esp_err_t error)
+{
+    scan_driver_error = static_cast<int32_t>(error);
+    snprintf(scan_error, sizeof(scan_error), "%s: %d (%s)",
+             context ? context : "WiFi scan driver error",
+             static_cast<int>(error), esp_err_to_name(error));
+}
+
 static const char *scan_phase_text(WifiScanPhase phase)
 {
     switch (phase)
@@ -109,9 +125,25 @@ static const char *scan_phase_text(WifiScanPhase phase)
 
 static void log_scan_transition_locked(const char *event)
 {
-    log_i("WiFi scan request=%u event=%s state=%s queued=%u start=%u conn=%d",
+    log_i("WiFi scan request=%u event=%s state=%s queued=%u start=%u conn=%d heap=%u largest=%u",
           scan_control.request_id, event, scan_phase_text(scan_control.phase),
-          scan_control.queued_at_ms, scan_control.started_at_ms, static_cast<int>(current_state));
+          scan_control.queued_at_ms, scan_control.started_at_ms, static_cast<int>(current_state),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+}
+
+static void log_scan_driver_event(uint32_t request_id, const char *event, esp_err_t error)
+{
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    const esp_err_t mode_error = esp_wifi_get_mode(&mode);
+    const UBaseType_t stack_words = uxTaskGetStackHighWaterMark(nullptr);
+    log_i("WiFi scan request=%u driver=%s err=%d/%s mode=%d mode_err=%d status=%d heap=%u largest=%u stack_free=%uB stale=%u",
+          request_id, event, static_cast<int>(error), esp_err_to_name(error),
+          static_cast<int>(mode), static_cast<int>(mode_error), static_cast<int>(WiFi.status()),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(stack_words * sizeof(StackType_t)),
+          static_cast<unsigned>(scan_driver.stale_event_count()));
 }
 
 static void lock_wifi()
@@ -227,6 +259,31 @@ static bool worker_start_connect(const WiFiCommand &command)
     lock_wifi();
     current = service_generation_current(
         command.generation, request_generation, manual_disconnect);
+    unlock_wifi();
+    if (!current)
+    {
+        WiFi.disconnect();
+        return false;
+    }
+    log_i("WiFi connect generation=%u SSID=%s", command.generation, command.ssid);
+    const wl_status_t begin_status = WiFi.begin(command.ssid, command.pass);
+    if (begin_status == WL_CONNECT_FAILED)
+    {
+        lock_wifi();
+        if (service_generation_current(command.generation, request_generation, manual_disconnect))
+        {
+            current_state = WIFI_STATE_FAILED;
+            active_connect_generation = 0;
+            last_disconnect_time = millis();
+            set_error_locked("WiFi driver rejected connect");
+        }
+        unlock_wifi();
+        return false;
+    }
+
+    lock_wifi();
+    current = service_generation_current(
+        command.generation, request_generation, manual_disconnect);
     if (current)
     {
         active_connect_generation = command.generation;
@@ -240,8 +297,6 @@ static bool worker_start_connect(const WiFiCommand &command)
         WiFi.disconnect();
         return false;
     }
-    log_i("WiFi connect generation=%u SSID=%s", command.generation, command.ssid);
-    WiFi.begin(command.ssid, command.pass);
     return true;
 }
 
@@ -257,6 +312,14 @@ static void wifi_service_task(void *pvParameters)
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(true);
     delay(100);
+    if (!WiFi.mode(WIFI_STA) || !scan_driver.begin())
+    {
+        lock_wifi();
+        current_state = WIFI_STATE_FAILED;
+        set_error_locked("Cannot initialize WiFi scan adapter");
+        unlock_wifi();
+        log_e("WiFi scan adapter initialization failed");
+    }
 
     // 1. Kiểm tra xem có cấu hình WiFi lưu trong NVS hoặc cấu hình mặc định không
     String saved_ssid, saved_pass;
@@ -307,10 +370,8 @@ static void wifi_service_task(void *pvParameters)
             unlock_wifi();
             if (scan_driver_request_id)
             {
-                const esp_err_t stop_err = esp_wifi_scan_stop();
-                scan_driver_draining = true;
-                scan_drain_deadline_ms = millis() + 2000;
-                log_i("WiFi scan request=%u stop=%d", scan_driver_request_id, static_cast<int>(stop_err));
+                const esp_err_t stop_err = scan_driver.stop(scan_driver_request_id, millis());
+                log_scan_driver_event(scan_driver_request_id, "control-stop", stop_err);
             }
             const bool disconnect_called = WiFi.disconnect();
             const bool radio_ok = disconnect_called || WiFi.status() != WL_CONNECTED;
@@ -340,7 +401,8 @@ static void wifi_service_task(void *pvParameters)
                 lock_wifi();
                 const bool current = service_generation_current(
                     command.generation, request_generation, manual_disconnect);
-                const bool scan_busy = scan_control.busy() || scan_driver_draining;
+                const bool scan_busy = scan_control.busy() ||
+                    scan_driver.phase() != WifiScanDriverPhase::IDLE;
                 unlock_wifi();
                 if (!current) continue;
                 if (scan_busy)
@@ -382,7 +444,7 @@ static void wifi_service_task(void *pvParameters)
 
         lock_wifi();
         const bool can_run_deferred = have_deferred_connect && !scan_control.busy() &&
-                                      !scan_driver_draining;
+                                      scan_driver.phase() == WifiScanDriverPhase::IDLE;
         unlock_wifi();
         if (can_run_deferred)
         {
@@ -489,7 +551,8 @@ static void wifi_service_task(void *pvParameters)
             WiFiCommand retry_cmd = {};
             bool enqueue_retry = false;
             lock_wifi();
-            const bool scan_blocks_reconnect = scan_control.busy() || scan_driver_draining;
+            const bool scan_blocks_reconnect = scan_control.busy() ||
+                scan_driver.phase() != WifiScanDriverPhase::IDLE;
             const bool retry = !scan_blocks_reconnect && auto_reconnect_enabled &&
                                !manual_disconnect && strlen(target_ssid) > 0 &&
                                (millis() - last_disconnect_time >= reconnect_backoff_ms);
@@ -517,45 +580,44 @@ static void wifi_service_task(void *pvParameters)
             }
         }
 
-        // Drain a stopped driver's late completion before another request is
-        // allowed to own the radio. scanDelete() is cleanup only, never cancel.
-        if (scan_driver_draining)
+        // Completion events, rather than scanComplete(), are authoritative.
+        // Arduino's _scanDone() remains the only consumer of the IDF AP list.
+        if (scan_driver.take_drained_event())
         {
-            const int late = WiFi.scanComplete();
-            if (late != WIFI_SCAN_RUNNING)
+            log_scan_driver_event(scan_driver_request_id, "drained", ESP_OK);
+            scan_driver_request_id = 0;
+        }
+
+        const uint32_t now = millis();
+        if (scan_driver.drain_expired(now, WIFI_SCAN_DRAIN_TIMEOUT_MS))
+        {
+            esp_err_t stop_error = ESP_FAIL;
+            esp_err_t start_error = ESP_FAIL;
+            const bool recovered = scan_driver.recover_radio(now, stop_error, start_error);
+            log_scan_driver_event(scan_driver_request_id,
+                                  recovered ? "recovered" : "recovery-failed",
+                                  recovered ? ESP_OK : start_error);
+            lock_wifi();
+            if (current_state == WIFI_STATE_CONNECTED ||
+                current_state == WIFI_STATE_CONNECTING)
             {
-                WiFi.scanDelete();
-                log_i("WiFi scan request=%u late-completion=%d discarded",
-                      scan_driver_request_id, late);
-                scan_driver_request_id = 0;
-                scan_driver_draining = false;
-                scan_drain_deadline_ms = 0;
+                current_state = WIFI_STATE_DISCONNECTED;
+                active_connect_generation = 0;
+                clear_connected_cache_locked();
+                last_disconnect_time = now;
             }
-            else if (static_cast<int32_t>(millis() - scan_drain_deadline_ms) >= 0)
+            if (!recovered && scan_control.busy())
             {
-                // A wedged late scan must not starve every later manual scan.
-                // Reset only the STA radio under its sole worker owner.
-                log_e("WiFi scan request=%u drain timeout; resetting STA radio",
-                      scan_driver_request_id);
-                WiFi.disconnect();
-                WiFi.mode(WIFI_OFF);
-                vTaskDelay(pdMS_TO_TICKS(50));
-                WiFi.mode(WIFI_STA);
-                WiFi.setAutoReconnect(false);
-                WiFi.scanDelete();
-                lock_wifi();
-                if (current_state == WIFI_STATE_CONNECTED ||
-                    current_state == WIFI_STATE_CONNECTING)
+                const uint32_t failed_id = scan_control.request_id;
+                if (scan_control.finish(failed_id, WifiScanPhase::FAILED))
                 {
-                    current_state = WIFI_STATE_DISCONNECTED;
-                    clear_connected_cache_locked();
-                    last_disconnect_time = millis();
+                    set_scan_driver_error_locked("WiFi scan radio recovery failed", start_error);
+                    log_scan_transition_locked("recovery-failed");
                 }
-                unlock_wifi();
-                scan_driver_request_id = 0;
-                scan_driver_draining = false;
-                scan_drain_deadline_ms = 0;
             }
+            unlock_wifi();
+            scan_driver_request_id = 0;
+            scan_retry_at_ms = now + WIFI_SCAN_RETRY_BACKOFF_MS;
         }
 
         lock_wifi();
@@ -565,74 +627,104 @@ static void wifi_service_task(void *pvParameters)
         const WiFiState connection_state = current_state;
         unlock_wifi();
 
-        if (scan_phase == WifiScanPhase::WAITING_FOR_RADIO && !scan_driver_draining)
+        if (scan_phase == WifiScanPhase::WAITING_FOR_RADIO)
         {
-            const uint32_t now = millis();
-            const bool connecting = connection_state == WIFI_STATE_CONNECTING;
-            if (wifi_scan_may_start(connecting, now, scan_queued_at,
-                                    WIFI_SCAN_CONNECT_WAIT_MS))
+            if (wifi_scan_total_expired(now, scan_queued_at, WIFI_SCAN_TOTAL_BUDGET_MS))
             {
-                if (connecting)
+                lock_wifi();
+                if (scan_control.finish(scan_id, WifiScanPhase::FAILED))
                 {
-                    WiFi.disconnect();
-                    lock_wifi();
-                    if (scan_id == scan_control.request_id &&
-                        scan_control.phase == WifiScanPhase::WAITING_FOR_RADIO)
+                    set_scan_error_locked("WiFi scan exceeded total deadline");
+                    scan_driver_error = ESP_ERR_TIMEOUT;
+                    log_scan_transition_locked("total-timeout");
+                }
+                unlock_wifi();
+            }
+            else if (scan_driver.phase() == WifiScanDriverPhase::IDLE &&
+                     static_cast<int32_t>(now - scan_retry_at_ms) >= 0 &&
+                     wifi_scan_may_start(connection_state == WIFI_STATE_CONNECTING,
+                                         now, scan_queued_at, WIFI_SCAN_CONNECT_WAIT_MS))
+            {
+                bool radio_ready = true;
+                if (connection_state == WIFI_STATE_CONNECTING)
+                {
+                    radio_ready = WiFi.disconnect() || WiFi.status() != WL_CONNECTED;
+                    if (radio_ready)
                     {
-                        active_connect_generation = 0;
-                        current_state = WIFI_STATE_DISCONNECTED;
-                        last_disconnect_time = now;
+                        lock_wifi();
+                        if (scan_id == scan_control.request_id &&
+                            scan_control.phase == WifiScanPhase::WAITING_FOR_RADIO)
+                        {
+                            active_connect_generation = 0;
+                            current_state = WIFI_STATE_DISCONNECTED;
+                            last_disconnect_time = now;
+                        }
+                        unlock_wifi();
+                    }
+                }
+
+                if (!radio_ready)
+                {
+                    lock_wifi();
+                    if (scan_control.finish(scan_id, WifiScanPhase::FAILED))
+                    {
+                        set_scan_error_locked("Cannot stop WiFi connection attempt for scan");
+                        scan_driver_error = ESP_ERR_WIFI_STATE;
+                        log_scan_transition_locked("connect-cancel-failed");
                     }
                     unlock_wifi();
                 }
-
-                if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < 8192)
+                else if (heap_caps_get_free_size(MALLOC_CAP_8BIT) < 8192 ||
+                         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < 4096)
                 {
                     lock_wifi();
                     if (scan_control.finish(scan_id, WifiScanPhase::FAILED))
                     {
                         set_scan_error_locked("Not enough memory for WiFi scan results");
+                        scan_driver_error = ESP_ERR_NO_MEM;
                         log_scan_transition_locked("oom");
                     }
                     unlock_wifi();
                 }
                 else
                 {
-                    // Background scan keeps an established STA connection up.
-                    const int accepted = WiFi.scanNetworks(true, true);
-                    if (accepted == WIFI_SCAN_FAILED)
+                    ++scan_start_attempts;
+                    const WifiScanStartResult started = scan_driver.start(scan_id, now);
+                    log_scan_driver_event(scan_id, started.accepted ? "accepted" : "start-failed",
+                                          started.error);
+                    if (started.accepted)
                     {
-                        lock_wifi();
-                        if (scan_control.finish(scan_id, WifiScanPhase::FAILED))
-                        {
-                            set_scan_error_locked("WiFi driver rejected scan");
-                            log_scan_transition_locked("driver-rejected");
-                        }
-                        unlock_wifi();
-                    }
-                    else
-                    {
-                        bool accepted_is_current = false;
+                        bool current = false;
                         lock_wifi();
                         if (scan_control.driver_accepted(scan_id, now, WIFI_SCAN_TIMEOUT_MS))
                         {
                             scan_driver_request_id = scan_id;
-                            accepted_is_current = true;
+                            scan_driver_error = ESP_OK;
+                            current = true;
                             log_scan_transition_locked("driver-accepted");
                         }
                         unlock_wifi();
-                        if (!accepted_is_current)
+                        if (!current)
                         {
-                            // Cancellation may race the async driver call. The
-                            // accepted scan is now an old request and must be
-                            // stopped/drained before a newer scan can start.
                             scan_driver_request_id = scan_id;
-                            const esp_err_t stop_err = esp_wifi_scan_stop();
-                            scan_driver_draining = true;
-                            scan_drain_deadline_ms = millis() + 2000;
-                            log_i("WiFi scan request=%u stale-after-accept stop=%d",
-                                  scan_id, static_cast<int>(stop_err));
+                            const esp_err_t stop_error = scan_driver.stop(scan_id, millis());
+                            log_scan_driver_event(scan_id, "stale-after-accept", stop_error);
                         }
+                    }
+                    else if (started.error == ESP_ERR_WIFI_STATE &&
+                             scan_start_attempts < WIFI_SCAN_MAX_START_ATTEMPTS)
+                    {
+                        scan_retry_at_ms = now + WIFI_SCAN_RETRY_BACKOFF_MS;
+                    }
+                    else
+                    {
+                        lock_wifi();
+                        if (scan_control.finish(scan_id, WifiScanPhase::FAILED))
+                        {
+                            set_scan_driver_error_locked("WiFi scan start failed", started.error);
+                            log_scan_transition_locked("driver-rejected");
+                        }
+                        unlock_wifi();
                     }
                 }
             }
@@ -643,74 +735,102 @@ static void wifi_service_task(void *pvParameters)
             scan_driver_request_id, scan_control);
         const bool timed_out = scan_control.expired(scan_driver_request_id, millis());
         unlock_wifi();
-        if (scan_driver_request_id && !current_driver_scan && !scan_driver_draining)
+
+        if (scan_driver_request_id && !current_driver_scan)
         {
-            const esp_err_t stop_err = esp_wifi_scan_stop();
-            scan_driver_draining = true;
-            scan_drain_deadline_ms = millis() + 2000;
-            log_i("WiFi scan request=%u canceled stop=%d",
-                  scan_driver_request_id, static_cast<int>(stop_err));
+            WifiScanDriverCompletion discarded = {};
+            if (scan_driver.take_completion(scan_driver_request_id, discarded))
+            {
+                scan_driver.release_results(scan_driver_request_id);
+                log_scan_driver_event(scan_driver_request_id, "stale-completion", ESP_OK);
+                scan_driver_request_id = 0;
+            }
+            else if (scan_driver.phase() == WifiScanDriverPhase::RUNNING ||
+                     scan_driver.phase() == WifiScanDriverPhase::STARTING)
+            {
+                const esp_err_t stop_error = scan_driver.stop(scan_driver_request_id, millis());
+                log_scan_driver_event(scan_driver_request_id, "cancel-stop", stop_error);
+            }
         }
         else if (current_driver_scan && timed_out)
         {
-            const esp_err_t stop_err = esp_wifi_scan_stop();
+            const esp_err_t stop_error = scan_driver.stop(scan_driver_request_id, millis());
             lock_wifi();
             if (scan_control.finish(scan_driver_request_id, WifiScanPhase::FAILED))
             {
-                set_scan_error_locked("WiFi scan timed out");
+                set_scan_driver_error_locked("WiFi scan timed out", stop_error);
                 log_scan_transition_locked("timeout");
             }
             unlock_wifi();
-            scan_driver_draining = true;
-            scan_drain_deadline_ms = millis() + 2000;
-            log_w("WiFi scan request=%u timeout stop=%d",
-                  scan_driver_request_id, static_cast<int>(stop_err));
+            log_scan_driver_event(scan_driver_request_id, "timeout-stop", stop_error);
         }
         else if (current_driver_scan)
         {
-            const int n = WiFi.scanComplete();
-            if (n >= 0)
+            WifiScanDriverCompletion completion = {};
+            if (scan_driver.take_completion(scan_driver_request_id, completion))
             {
-                const size_t count = static_cast<size_t>(n) > WIFI_SCAN_MAX_RESULTS
-                    ? WIFI_SCAN_MAX_RESULTS : static_cast<size_t>(n);
-                WiFiNetworkInfo completed[WIFI_SCAN_MAX_RESULTS] = {};
-                for (size_t i = 0; i < count; ++i)
+                bool result_ok = completion.status == 0;
+                size_t copied = 0;
+                const size_t requested = wifi_scan_bounded_result_count(
+                    completion.result_count, WIFI_SCAN_MAX_RESULTS);
+                memset(scan_copy_buffer, 0, sizeof(scan_copy_buffer));
+                for (size_t i = 0; result_ok && i < requested; ++i)
                 {
-                    strlcpy(completed[i].ssid, WiFi.SSID(static_cast<int>(i)).c_str(),
-                            sizeof(completed[i].ssid));
-                    completed[i].rssi = WiFi.RSSI(static_cast<int>(i));
-                    completed[i].channel = WiFi.channel(static_cast<int>(i));
-                    completed[i].is_encrypted =
-                        WiFi.encryptionType(static_cast<int>(i)) != WIFI_AUTH_OPEN;
+                    String ssid;
+                    uint8_t encryption = WIFI_AUTH_OPEN;
+                    int32_t rssi = 0;
+                    uint8_t *bssid = nullptr;
+                    int32_t channel = 0;
+                    if (!WiFi.getNetworkInfo(static_cast<uint8_t>(i), ssid, encryption,
+                                             rssi, bssid, channel))
+                    {
+                        result_ok = false;
+                        break;
+                    }
+                    strlcpy(scan_copy_buffer[copied].ssid, ssid.c_str(),
+                            sizeof(scan_copy_buffer[copied].ssid));
+                    scan_copy_buffer[copied].rssi = rssi;
+                    scan_copy_buffer[copied].channel = static_cast<uint8_t>(channel);
+                    scan_copy_buffer[copied].is_encrypted = encryption != WIFI_AUTH_OPEN;
+                    ++copied;
                 }
-                WiFi.scanDelete();
+                scan_driver.release_results(scan_driver_request_id);
+
                 lock_wifi();
                 if (wifi_scan_result_belongs_to(scan_driver_request_id, scan_control))
                 {
-                    memcpy(scan_results, completed, count * sizeof(WiFiNetworkInfo));
-                    scan_result_count = count;
-                    scan_error[0] = '\0';
-                    scan_control.finish(scan_driver_request_id, WifiScanPhase::DONE);
-                    log_scan_transition_locked("done");
-                    log_i("WiFi scan request=%u copied=%u driver_results=%d",
-                          scan_driver_request_id, static_cast<unsigned>(count), n);
+                    if (result_ok)
+                    {
+                        memcpy(scan_results, scan_copy_buffer,
+                               copied * sizeof(WiFiNetworkInfo));
+                        scan_result_count = copied;
+                        scan_error[0] = '\0';
+                        scan_driver_error = ESP_OK;
+                        scan_control.finish(scan_driver_request_id, WifiScanPhase::DONE);
+                        log_scan_transition_locked("done");
+                    }
+                    else
+                    {
+                        scan_result_count = 0;
+                        scan_driver_error = completion.status == 0 ? ESP_ERR_NO_MEM : ESP_FAIL;
+                        if (completion.status == 0)
+                            set_scan_error_locked("WiFi scan result buffer unavailable");
+                        else
+                            snprintf(scan_error, sizeof(scan_error),
+                                     "WiFi scan event failed: status=%u", completion.status);
+                        scan_control.finish(scan_driver_request_id, WifiScanPhase::FAILED);
+                        log_scan_transition_locked("event-failed");
+                    }
                 }
                 unlock_wifi();
+                log_i("WiFi scan request=%u scan_id=%u status=%u reported=%u copied=%u elapsed=%u ms",
+                      scan_driver_request_id, completion.scan_id,
+                      static_cast<unsigned>(completion.status),
+                      static_cast<unsigned>(completion.result_count),
+                      static_cast<unsigned>(copied),
+                      static_cast<unsigned>(millis() - scan_control.started_at_ms));
                 scan_driver_request_id = 0;
-            }
-            else if (n == WIFI_SCAN_FAILED)
-            {
-                WiFi.scanDelete();
-                lock_wifi();
-                if (scan_control.finish(scan_driver_request_id, WifiScanPhase::FAILED))
-                {
-                    set_scan_error_locked("WiFi scan failed");
-                    log_scan_transition_locked("failed");
-                    log_e("WiFi scan request=%u driver_result=%d",
-                          scan_driver_request_id, n);
-                }
-                unlock_wifi();
-                scan_driver_request_id = 0;
+                scan_start_attempts = 0;
             }
         }
 
@@ -767,6 +887,9 @@ bool wifi_manager_scan_async(void)
     cmd.generation = scan_control.queue(millis());
     scan_result_count = 0;
     scan_error[0] = '\0';
+    scan_driver_error = ESP_OK;
+    scan_start_attempts = 0;
+    scan_retry_at_ms = 0;
     log_scan_transition_locked("queued");
     unlock_wifi();
     if (!enqueue_wifi_command(cmd))
@@ -809,6 +932,7 @@ WiFiScanSnapshot wifi_manager_get_scan_snapshot(void)
     snapshot.queued_at_ms = scan_control.queued_at_ms;
     snapshot.started_at_ms = scan_control.started_at_ms;
     snapshot.state = scan_control.phase;
+    snapshot.driver_error = scan_driver_error;
     strlcpy(snapshot.error, scan_error, sizeof(snapshot.error));
     snapshot.result_count = scan_result_count;
     memcpy(snapshot.results, scan_results,
@@ -892,7 +1016,6 @@ bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
         target_pass[0] = '\0';
     }
 
-    current_state = WIFI_STATE_CONNECTING;
     should_save_credentials = save_to_nvs; // Chỉ lưu NVS khi người dùng chủ động cấu hình
     pending_save_generation = save_to_nvs ? generation : 0;
     connection_error[0] = '\0';
