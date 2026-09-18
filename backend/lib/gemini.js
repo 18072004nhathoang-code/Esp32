@@ -73,13 +73,25 @@ export async function queryGemini(wav, config, fetchImpl = fetch) {
     generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
   };
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(config.queryModel)}:generateContent`;
-  const provider = await geminiFetch(url, body, config, fetchImpl);
+  let provider;
+  let searchUsed = true;
+  try {
+    provider = await geminiFetch(url, body, config, fetchImpl);
+  } catch (error) {
+    if (body.tools) {
+      delete body.tools;
+      searchUsed = false;
+      provider = await geminiFetch(url, body, config, fetchImpl);
+    } else {
+      throw error;
+    }
+  }
   const parsed = extractJson(responseText(provider));
   const sources = citations(provider);
   const transcript = boundedText(parsed.transcript, config.maxTextBytes);
   const reply = boundedText(parsed.reply, config.maxTextBytes);
   const actions = sanitizeActions(parsed.actions, config.musicSources);
-  if (parsed.needs_current_info === true && sources.length === 0) {
+  if (searchUsed && parsed.needs_current_info === true && sources.length === 0) {
     throw new Error("current-information answer was not grounded by Google Search");
   }
   return { transcript, reply, actions, sources };
