@@ -1,7 +1,9 @@
 #include "ai_voice_service.h"
 
 #include "../audio/audio_manager.h"
+#include "../audio/music_player.h"
 #include "../os/wifi_manager.h"
+#include "ai_voice_protocol.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
 #include <HTTPClient.h>
@@ -51,12 +53,23 @@ uint32_t s_audio_control_request_id = 0;
 bool s_waiting_record_start = false;
 bool s_waiting_record_commit = false;
 bool s_cancel_enqueue_pending = false;
+bool s_begin_capture_pending = false;
+bool s_release_requested = false;
+bool s_music_paused_for_voice = false;
 uint32_t s_cancel_retry_after_ms = 0;
 uint32_t s_cancel_deadline_ms = 0;
 char s_last_error[128] = "AI endpoint is not configured";
 static constexpr size_t kJsonBodyLimit = 16U * 1024U;
 static constexpr size_t kTtsBodyLimit = 2U * 1024U * 1024U;
 static constexpr uint32_t kRequestDeadlineMs = 45000;
+
+struct AiQueryResponse
+{
+    char transcript[AI_MAX_TEXT_LEN];
+    char reply[AI_MAX_TEXT_LEN];
+    AiMusicAction actions[2];
+    size_t action_count;
+};
 
 bool request_cancelled(uint32_t request_id)
 {
@@ -241,10 +254,9 @@ private:
     bool failed_;
 };
 
-bool parse_ai_response_json(const uint8_t *data, size_t size, char *transcript,
-                            size_t transcript_size, char *reply, size_t reply_size)
+bool parse_ai_response_json(const uint8_t *data, size_t size, AiQueryResponse *response)
 {
-    if (!data || size == 0 || !transcript || transcript_size < 2 || !reply || reply_size < 2)
+    if (!data || size == 0 || !response)
         return false;
     size_t first = 0;
     while (first < size && isspace(data[first])) ++first;
@@ -275,22 +287,80 @@ bool parse_ai_response_json(const uint8_t *data, size_t size, char *transcript,
     for (size_t i = document_end; i < size; ++i)
         if (!isspace(data[i])) return false;
 
-    DynamicJsonDocument document(4096);
+    DynamicJsonDocument document(8192);
     const DeserializationError error = deserializeJson(
         document, data, size, DeserializationOption::NestingLimit(4));
     if (error || !document.is<JsonObject>()) return false;
     JsonObject root = document.as<JsonObject>();
-    if (root.size() != 2 || !root.containsKey("transcript") || !root.containsKey("reply") ||
+    for (JsonPair field : root)
+        if (strcmp(field.key().c_str(), "transcript") != 0 && strcmp(field.key().c_str(), "reply") != 0 &&
+            strcmp(field.key().c_str(), "actions") != 0 && strcmp(field.key().c_str(), "sources") != 0) return false;
+    if (!root.containsKey("transcript") || !root.containsKey("reply") ||
         !root["transcript"].is<const char *>() || !root["reply"].is<const char *>()) return false;
     const char *transcript_value = root["transcript"].as<const char *>();
     const char *reply_value = root["reply"].as<const char *>();
     const size_t transcript_length = transcript_value ? strlen(transcript_value) : 0;
     const size_t reply_length = reply_value ? strlen(reply_value) : 0;
-    if (transcript_length == 0 || reply_length == 0 || transcript_length >= transcript_size ||
-        reply_length >= reply_size || !valid_utf8_text(transcript_value, transcript_length) ||
+    if (transcript_length == 0 || reply_length == 0 || transcript_length >= sizeof(response->transcript) ||
+        reply_length >= sizeof(response->reply) || !valid_utf8_text(transcript_value, transcript_length) ||
         !valid_utf8_text(reply_value, reply_length)) return false;
-    memcpy(transcript, transcript_value, transcript_length + 1);
-    memcpy(reply, reply_value, reply_length + 1);
+    memset(response, 0, sizeof(*response));
+    memcpy(response->transcript, transcript_value, transcript_length + 1);
+    memcpy(response->reply, reply_value, reply_length + 1);
+
+    if (root.containsKey("actions"))
+    {
+        if (!root["actions"].is<JsonArray>()) return false;
+        JsonArray actions = root["actions"].as<JsonArray>();
+        if (actions.size() > 2) return false;
+        for (JsonObject item : actions)
+        {
+            if (item.isNull() || !item["type"].is<const char *>()) return false;
+            for (JsonPair field : item)
+                if (strcmp(field.key().c_str(), "type") != 0 && strcmp(field.key().c_str(), "source_id") != 0 &&
+                    strcmp(field.key().c_str(), "value") != 0) return false;
+            AiMusicAction &action = response->actions[response->action_count];
+            action.type = ai_music_action_type(item["type"].as<const char *>());
+            if (action.type == AI_MUSIC_ACTION_PLAY && item.containsKey("source_id"))
+            {
+                if (!item["source_id"].is<const char *>()) return false;
+                const char *source = item["source_id"].as<const char *>();
+                if (!source || strlen(source) >= sizeof(action.source_id)) return false;
+                strlcpy(action.source_id, source, sizeof(action.source_id));
+            }
+            if (action.type == AI_MUSIC_ACTION_VOLUME)
+            {
+                if (!item["value"].is<int>()) return false;
+                const int value = item["value"].as<int>();
+                if (value < 0 || value > 100) return false;
+                action.volume = static_cast<uint8_t>(value);
+            }
+            if (!ai_music_action_valid(action)) return false;
+            ++response->action_count;
+        }
+    }
+    if (root.containsKey("sources"))
+    {
+        if (!root["sources"].is<JsonArray>()) return false;
+        JsonArray sources = root["sources"].as<JsonArray>();
+        if (sources.size() > 3) return false;
+        for (JsonObject source : sources)
+        {
+            if (source.isNull() || source.size() != 2 || !source["title"].is<const char *>() ||
+                !source["url"].is<const char *>()) return false;
+            const char *title = source["title"].as<const char *>();
+            const char *url = source["url"].as<const char *>();
+            if (!title || !url || (strncmp(url, "https://", 8) != 0 && strncmp(url, "http://", 7) != 0) ||
+                !valid_utf8_text(title, strlen(title))) return false;
+            const char prefix[] = "\nNguồn: ";
+            const size_t remaining = sizeof(response->reply) - strlen(response->reply) - 1;
+            if (remaining > sizeof(prefix) + strlen(title))
+            {
+                strlcat(response->reply, prefix, sizeof(response->reply));
+                strlcat(response->reply, title, sizeof(response->reply));
+            }
+        }
+    }
     return true;
 }
 
@@ -303,8 +373,7 @@ bool serialize_tts_request_json(const char *text, String &body)
     return serializeJson(request_json, body) > 0;
 }
 
-bool post_recording(uint32_t request_id, char *transcript, size_t transcript_size,
-                    char *reply, size_t reply_size)
+bool post_recording(uint32_t request_id, AiQueryResponse *response)
 {
     if (!wifi_manager_is_connected()) { set_error("WiFi is not connected"); return false; }
     AudioRecordingLease lease = {};
@@ -356,8 +425,7 @@ bool post_recording(uint32_t request_id, char *transcript, size_t transcript_siz
         set_error("AI response is truncated, cancelled or oversized");
         return false;
     }
-    if (!parse_ai_response_json(sink.data(), sink.size(), transcript, transcript_size,
-                                reply, reply_size))
+    if (!parse_ai_response_json(sink.data(), sink.size(), response))
     {
         set_error("AI response JSON is invalid");
         return false;
@@ -428,6 +496,7 @@ void ai_task(void *)
 {
     for (;;)
     {
+        bool begin_capture = false;
         uint32_t request_id = 0;
         bool wait_start = false;
         bool wait_commit = false;
@@ -451,6 +520,11 @@ void ai_task(void *)
             cancel_retry_after = s_cancel_retry_after_ms;
             cancel_deadline = s_cancel_deadline_ms;
             state_snapshot = s_state;
+            if (s_begin_capture_pending)
+            {
+                begin_capture = true;
+                s_begin_capture_pending = false;
+            }
             if (s_pending_request_id != 0)
             {
                 request_id = s_pending_request_id;
@@ -459,6 +533,57 @@ void ai_task(void *)
                 s_state = AI_STATE_PROCESSING;
             }
             xSemaphoreGive(s_mutex);
+        }
+        if (begin_capture)
+        {
+            bool music_was_playing = music_player_is_playing();
+            bool music_paused = false;
+            if (music_was_playing)
+            {
+                AiMusicAction pause = {};
+                pause.type = AI_MUSIC_ACTION_PAUSE;
+                char music_error[80] = {};
+                music_paused = music_player_execute_ai_action(&pause, 1500, music_error, sizeof(music_error));
+                if (!music_paused)
+                {
+                    set_error(music_error[0] ? music_error : "Không thể tạm dừng nhạc để thu âm");
+                    if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                    {
+                        s_recording_started = false;
+                        xSemaphoreGive(s_mutex);
+                    }
+                }
+            }
+            if (!music_was_playing || music_paused)
+            {
+                uint32_t audio_request_id = 0;
+                const bool queued = audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &audio_request_id);
+                if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                {
+                    s_music_paused_for_voice = music_paused;
+                    if (queued && s_state == AI_STATE_STARTING)
+                    {
+                        s_audio_start_request_id = audio_request_id;
+                        s_recording_deadline_ms = millis() + 1500;
+                        s_waiting_record_start = true;
+                        s_state = AI_STATE_LISTENING;
+                    }
+                    else if (!queued)
+                    {
+                        s_recording_started = false;
+                        strlcpy(s_last_error, "Audio command queue is busy", sizeof(s_last_error));
+                        s_state = AI_STATE_ERROR;
+                    }
+                    xSemaphoreGive(s_mutex);
+                }
+                if (!queued && music_paused) (void)music_player_resume();
+                else if (queued && ai_voice_get_state() != AI_STATE_LISTENING)
+                {
+                    uint32_t cancel_id = 0;
+                    (void)audio_cancel_recording_async(&cancel_id);
+                    if (music_paused) (void)music_player_resume();
+                }
+            }
         }
         if (state_snapshot == AI_STATE_CANCELING && ai_cancel_retry_due(
                 cancel_enqueue_pending, audio_control_request, millis(),
@@ -497,9 +622,11 @@ void ai_task(void *)
         {
             const bool started = start_acked && start_ok && audio_is_recording();
             bool cancel_stale_start = false;
+            bool stop_after_start = false;
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 s_waiting_record_start = false;
+                stop_after_start = started && s_release_requested;
                 if (!started && s_state == AI_STATE_LISTENING)
                 {
                     s_recording_started = false;
@@ -509,6 +636,7 @@ void ai_task(void *)
                 }
                 xSemaphoreGive(s_mutex);
             }
+            if (stop_after_start) (void)ai_voice_stop_and_process();
             // Invalidates the queued audio generation as well as stopping a
             // start that raced the timeout. It cannot retain RECORDER I2S.
             if (cancel_stale_start)
@@ -610,26 +738,50 @@ void ai_task(void *)
         }
         if (request_id != 0)
         {
-            char transcript[AI_MAX_TEXT_LEN] = {};
-            char reply[AI_MAX_TEXT_LEN] = {};
-            const bool response_ok = post_recording(
-                request_id, transcript, sizeof(transcript), reply, sizeof(reply));
+            AiQueryResponse response = {};
+            bool suppress_resume = false;
+            const bool response_ok = post_recording(request_id, &response);
             if (response_ok && !request_cancelled(request_id))
             {
-                ai_voice_add_message(true, transcript);
-                ai_voice_add_message(false, reply);
+                ai_voice_add_message(true, response.transcript);
+                ai_voice_add_message(false, response.reply);
                 if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
                 {
                     if (request_response_is_current(request_id, s_active_request_id, s_cancelled_through))
                         s_state = AI_STATE_SPEAKING;
                     xSemaphoreGive(s_mutex);
                 }
-                if (!request_cancelled(request_id) && !stream_tts_wav(request_id, reply) &&
+                if (!request_cancelled(request_id) && !stream_tts_wav(request_id, response.reply) &&
                     !request_cancelled(request_id))
                     set_error("TTS HTTPS/WAV playback failed");
+                if (!request_cancelled(request_id))
+                {
+                    for (size_t i = 0; i < response.action_count; ++i)
+                    {
+                        char action_error[96] = {};
+                        const bool action_ok = music_player_execute_ai_action(
+                            &response.actions[i], 5000, action_error, sizeof(action_error));
+                        if (action_ok)
+                        {
+                            suppress_resume = suppress_resume ||
+                                ai_music_action_suppresses_auto_resume(response.actions[i].type);
+                            ai_voice_add_message(false, "Thiết bị đã thực hiện lệnh nhạc.");
+                        }
+                        else
+                        {
+                            char message[AI_MAX_TEXT_LEN] = "Không thể thực hiện lệnh nhạc: ";
+                            strlcat(message, action_error, sizeof(message));
+                            ai_voice_add_message(false, message);
+                        }
+                    }
+                }
             }
+            bool resume_music = false;
             if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
+                resume_music = s_music_paused_for_voice && !suppress_resume;
+                s_music_paused_for_voice = false;
+                s_release_requested = false;
                 if (ai_cleanup_must_clear(request_id, s_active_request_id))
                     s_active_request_id = 0;
                 s_completed_request_id = request_id;
@@ -645,6 +797,7 @@ void ai_task(void *)
                     s_state = AI_STATE_IDLE;
                 xSemaphoreGive(s_mutex);
             }
+            if (resume_music && !request_cancelled(request_id)) (void)music_player_resume();
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -695,41 +848,31 @@ bool ai_voice_start_recording(void)
     }
     s_recording_started = true;
     s_recording_base_generation = base_generation;
-    s_recording_deadline_ms = millis() + 1000;
-    s_waiting_record_start = true;
+    s_recording_deadline_ms = 0;
+    s_waiting_record_start = false;
     s_waiting_record_commit = false;
+    s_begin_capture_pending = true;
+    s_release_requested = false;
     s_audio_start_request_id = 0;
     s_audio_control_request_id = 0;
-    s_state = AI_STATE_LISTENING;
+    s_state = AI_STATE_STARTING;
     xSemaphoreGive(s_mutex);
-    uint32_t audio_request_id = 0;
-    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &audio_request_id))
-    {
-        if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
-        {
-            s_recording_started = false;
-            s_waiting_record_start = false;
-            strlcpy(s_last_error, "Audio command queue is busy", sizeof(s_last_error));
-            s_state = AI_STATE_ERROR;
-            xSemaphoreGive(s_mutex);
-        }
-        return false;
-    }
-    if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
-    {
-        if (s_state == AI_STATE_LISTENING) s_audio_start_request_id = audio_request_id;
-        xSemaphoreGive(s_mutex);
-    }
     return true;
 }
 
 bool ai_voice_stop_and_process(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
-    if (s_state != AI_STATE_LISTENING || !s_recording_started)
+    if ((s_state != AI_STATE_LISTENING && s_state != AI_STATE_STARTING) || !s_recording_started)
     {
         xSemaphoreGive(s_mutex);
         return false;
+    }
+    if (s_state == AI_STATE_STARTING)
+    {
+        s_release_requested = true;
+        xSemaphoreGive(s_mutex);
+        return true;
     }
     s_recording_started = false;
     s_waiting_record_start = false;
@@ -760,9 +903,13 @@ bool ai_voice_stop_and_process(void)
 void ai_voice_cancel(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    const bool resume_music = s_music_paused_for_voice;
+    s_music_paused_for_voice = false;
     const bool cancel_recording = s_recording_started || s_waiting_record_start ||
                                   s_waiting_record_commit || audio_is_recording();
     s_recording_started = false;
+    s_begin_capture_pending = false;
+    s_release_requested = false;
     s_waiting_record_start = false;
     s_waiting_record_commit = false;
     s_state = AI_STATE_CANCELING;
@@ -793,6 +940,7 @@ void ai_voice_cancel(void)
             (configuration_ready() ? AI_STATE_ERROR : AI_STATE_NEEDS_USER_INPUT);
         xSemaphoreGive(s_mutex);
     }
+    if (resume_music) (void)music_player_resume();
 }
 
 AIVoiceState ai_voice_get_state(void)
@@ -807,6 +955,7 @@ const char *ai_voice_get_state_text(void)
 {
     switch (ai_voice_get_state())
     {
+        case AI_STATE_STARTING: return "Đang chuẩn bị microphone...";
         case AI_STATE_LISTENING: return "Đang thu âm từ microphone...";
         case AI_STATE_PROCESSING: return "Đang gửi HTTPS và xử lý...";
         case AI_STATE_SPEAKING: return "Đang phát TTS WAV...";
@@ -895,17 +1044,16 @@ bool ai_voice_play_tts(const char *text)
 
 bool ai_voice_json_regression_test(void)
 {
-    char transcript[64] = {};
-    char reply[64] = {};
-    const char valid[] = "{\"transcript\":\"xin ch\\u00e0o\",\"reply\":\"d\\u00f2ng 1\\n\\t2\"}";
+    AiQueryResponse response = {};
+    const char valid[] = "{\"transcript\":\"xin ch\\u00e0o\",\"reply\":\"d\\u00f2ng 1\\n\\t2\",\"actions\":[{\"type\":\"music.volume\",\"value\":42}],\"sources\":[{\"title\":\"Nguon\",\"url\":\"https://example.com\"}]}";
     const char trailing[] = "{\"transcript\":\"a\",\"reply\":\"b\"} garbage";
     const char wrong_type[] = "{\"transcript\":1,\"reply\":\"b\"}";
-    if (!parse_ai_response_json(reinterpret_cast<const uint8_t *>(valid), strlen(valid),
-                                transcript, sizeof(transcript), reply, sizeof(reply)) ||
-        parse_ai_response_json(reinterpret_cast<const uint8_t *>(trailing), strlen(trailing),
-                               transcript, sizeof(transcript), reply, sizeof(reply)) ||
-        parse_ai_response_json(reinterpret_cast<const uint8_t *>(wrong_type), strlen(wrong_type),
-                               transcript, sizeof(transcript), reply, sizeof(reply))) return false;
+    const char forbidden[] = "{\"transcript\":\"a\",\"reply\":\"b\",\"actions\":[{\"type\":\"device.restart\"}]}";
+    if (!parse_ai_response_json(reinterpret_cast<const uint8_t *>(valid), strlen(valid), &response) ||
+        response.action_count != 1 || response.actions[0].type != AI_MUSIC_ACTION_VOLUME ||
+        parse_ai_response_json(reinterpret_cast<const uint8_t *>(trailing), strlen(trailing), &response) ||
+        parse_ai_response_json(reinterpret_cast<const uint8_t *>(wrong_type), strlen(wrong_type), &response) ||
+        parse_ai_response_json(reinterpret_cast<const uint8_t *>(forbidden), strlen(forbidden), &response)) return false;
     String encoded;
     if (!serialize_tts_request_json("tab\tnewline\nquote\"", encoded)) return false;
     StaticJsonDocument<128> decoded;

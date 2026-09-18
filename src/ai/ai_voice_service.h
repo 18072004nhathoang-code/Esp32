@@ -14,6 +14,7 @@
 enum AIVoiceState
 {
     AI_STATE_IDLE = 0,         // Sẵn sàng chờ lệnh
+    AI_STATE_STARTING,         // Đang tạm dừng nhạc và chuẩn bị microphone
     AI_STATE_LISTENING,        // Đang thu âm từ Micro MEMS
     AI_STATE_PROCESSING,       // Đang gửi dữ liệu và đợi Gemini AI suy nghĩ
     AI_STATE_SPEAKING,         // Đang phát giọng nói phản hồi ra Loa ngoài

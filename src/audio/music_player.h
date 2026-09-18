@@ -7,6 +7,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "ai_voice_protocol.h"
 
 #define MUSIC_DIR           "/music"
 #define MUSIC_MAX_TRACKS    64
@@ -105,6 +106,11 @@ uint8_t music_player_get_volume(void);
  * @brief Kiểm tra trạng thái đang phát nhạc
  */
 bool music_player_is_playing(void);
+bool music_player_is_paused(void);
+
+/** Execute an allowlisted AI action and wait for the decoder task ACK. */
+bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,
+                                    char *error, size_t error_size);
 
 /**
  * @brief Lấy thời gian phát hiện tại (giây)

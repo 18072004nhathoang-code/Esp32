@@ -11,8 +11,19 @@
 #include <Audio.h>
 #include <FS.h>
 #include <new>
+#include <ArduinoJson.h>
 #include "service_state_logic.h"
 #include "music_decoder_lifecycle.h"
+
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef AI_MUSIC_STREAM_SOURCES_JSON
+#define AI_MUSIC_STREAM_SOURCES_JSON "[]"
+#endif
+#ifndef AI_MUSIC_STREAM_CA_CERT
+#define AI_MUSIC_STREAM_CA_CERT ""
+#endif
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
@@ -41,7 +52,9 @@ enum MusicCmdType
     MUSIC_CMD_NEXT,
     MUSIC_CMD_PREV,
     MUSIC_CMD_SEEK,
-    MUSIC_CMD_SET_VOLUME
+    MUSIC_CMD_SET_VOLUME,
+    MUSIC_CMD_STOP,
+    MUSIC_CMD_PLAY_STREAM
 };
 
 struct MusicCommand
@@ -49,10 +62,29 @@ struct MusicCommand
     MusicCmdType type;
     int track_idx;
     uint32_t param;
-    char filepath[128];
+    uint32_t request_id;
+    char filepath[256];
+    char source_id[32];
+};
+
+struct MusicCommandAck
+{
+    uint32_t request_id;
+    bool ok;
+};
+
+struct MusicStreamSource
+{
+    char id[32];
+    char url[256];
 };
 
 static QueueHandle_t music_cmd_queue = nullptr;
+static QueueHandle_t music_ack_queue = nullptr;
+static SemaphoreHandle_t music_ai_action_mutex = nullptr;
+static MusicStreamSource stream_sources[8] = {};
+static size_t stream_source_count = 0;
+static uint32_t next_music_request_id = 0;
 static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
 static uint32_t codec_sample_rate = 0;
@@ -64,6 +96,53 @@ static bool music_stop_pending = false;
 static uint32_t music_stop_session = 0;
 static uint32_t music_stop_generation = 0;
 static bool internal_stop_audio_locked(void);
+
+static void complete_music_command(const MusicCommand &cmd, bool ok)
+{
+    if (!cmd.request_id || !music_ack_queue) return;
+    const MusicCommandAck ack = {cmd.request_id, ok};
+    if (xQueueSend(music_ack_queue, &ack, 0) != pdTRUE)
+        Serial.println("[MUSIC_PLAYER] ACK queue full");
+}
+
+static void load_stream_sources(void)
+{
+    stream_source_count = 0;
+    StaticJsonDocument<3072> document;
+    if (deserializeJson(document, AI_MUSIC_STREAM_SOURCES_JSON) || !document.is<JsonArray>())
+    {
+        Serial.println("[MUSIC_PLAYER] Invalid AI_MUSIC_STREAM_SOURCES_JSON");
+        return;
+    }
+    for (JsonObject source : document.as<JsonArray>())
+    {
+        if (stream_source_count >= 8) break;
+        const char *id = source["id"] | "";
+        const char *url = source["url"] | "";
+        const size_t id_length = strlen(id);
+        if (id_length == 0 || id_length >= sizeof(stream_sources[0].id) ||
+            strncmp(url, "https://", 8) != 0 || strlen(url) >= sizeof(stream_sources[0].url))
+        {
+            Serial.println("[MUSIC_PLAYER] Ignoring invalid/non-HTTPS stream source");
+            continue;
+        }
+        bool duplicate = false;
+        for (size_t i = 0; i < stream_source_count; ++i)
+            if (strcmp(stream_sources[i].id, id) == 0) duplicate = true;
+        if (duplicate) continue;
+        strlcpy(stream_sources[stream_source_count].id, id, sizeof(stream_sources[0].id));
+        strlcpy(stream_sources[stream_source_count].url, url, sizeof(stream_sources[0].url));
+        ++stream_source_count;
+    }
+}
+
+static const MusicStreamSource *find_stream_source(const char *id)
+{
+    if (!id || !*id) return nullptr;
+    for (size_t i = 0; i < stream_source_count; ++i)
+        if (strcmp(stream_sources[i].id, id) == 0) return &stream_sources[i];
+    return nullptr;
+}
 
 static bool enqueue_music_command(const MusicCommand &cmd)
 {
@@ -226,6 +305,7 @@ static void music_audio_task(void *pvParameters)
         MusicCommand cmd;
         while (music_cmd_queue && xQueueReceive(music_cmd_queue, &cmd, 0) == pdTRUE)
         {
+            bool command_ok = false;
             switch (cmd.type)
             {
                 case MUSIC_CMD_PLAY_INDEX:
@@ -306,6 +386,7 @@ static void music_audio_task(void *pvParameters)
                                         (void)decoder_lifecycle.finish_start(starting_generation, true);
                                         audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                                         Serial.printf("[MUSIC_AUDIO] ▶ Bắt đầu phát nhạc: %s\n", cmd.filepath);
+                                        command_ok = true;
                                     }
                                     else
                                     {
@@ -341,19 +422,25 @@ static void music_audio_task(void *pvParameters)
 
                 case MUSIC_CMD_PAUSE:
                 {
+                    bool release_after_pause = false;
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
-                            if (audio && player_state.is_playing && !player_state.is_paused)
+                        if (audio && player_state.is_playing && player_state.is_paused)
+                            command_ok = true;
+                        else if (audio && player_state.is_playing && !player_state.is_paused)
                         {
                             if (audio->pauseResume())
                             {
                                 player_state.is_paused = true;
                                 audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
+                                release_after_pause = true;
+                                command_ok = true;
                                 Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng phát nhạc");
                             }
                         }
                         xSemaphoreGive(audio_mutex);
                     }
+                    if (release_after_pause) command_ok = release_music_audio();
                 }
                 break;
 
@@ -376,12 +463,14 @@ static void music_audio_task(void *pvParameters)
                                     Serial.println("[MUSIC_AUDIO] ▶ Đã tiếp tục phát nhạc");
                                 }
                             }
+                            else if (audio && player_state.is_playing) resumed = true;
                             xSemaphoreGive(audio_mutex);
                         }
                         if (acquired_for_resume && !resumed)
                         {
                             release_music_audio();
                         }
+                        command_ok = resumed;
                     }
                 }
                 break;
@@ -403,6 +492,7 @@ static void music_audio_task(void *pvParameters)
                         {
                             player_state.current_time_sec = cmd.param;
                         }
+                        command_ok = seeked;
                         xSemaphoreGive(audio_mutex);
                     }
                 }
@@ -416,14 +506,74 @@ static void music_audio_task(void *pvParameters)
                         audio_set_volume(player_state.volume);
                         if (audio && player_state.is_playing && !player_state.is_paused)
                             audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
+                        command_ok = true;
                         xSemaphoreGive(audio_mutex);
                     }
+                }
+                break;
+
+                case MUSIC_CMD_STOP:
+                {
+                    bool stopped = false;
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(1000)) == pdTRUE)
+                    {
+                        stopped = internal_stop_audio_locked();
+                        xSemaphoreGive(audio_mutex);
+                    }
+                    command_ok = stopped && release_music_audio();
+                }
+                break;
+
+                case MUSIC_CMD_PLAY_STREAM:
+                {
+                    if (AI_MUSIC_STREAM_CA_CERT[0] == '\0' || strncmp(cmd.filepath, "https://", 8) != 0)
+                        break;
+                    const bool newly_acquired = !music_owns_audio;
+                    if (!acquire_music_audio()) break;
+                    if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
+                    {
+                        if (internal_stop_audio_locked())
+                        {
+                            const uint32_t generation = decoder_lifecycle.begin_start();
+                            audio = new(std::nothrow) Audio();
+                            if (generation && audio && audio->isInitialized())
+                            {
+                                const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
+                                                                     AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
+                                audio->setCACert(AI_MUSIC_STREAM_CA_CERT);
+                                audio->setVolume(21);
+                                audio_set_volume(player_state.volume);
+                                if (pins_ok && audio_codec_configure_for_stream(44100, 128) &&
+                                    audio->connecttohost(cmd.filepath))
+                                {
+                                    player_state.current_track_idx = -1;
+                                    player_state.current_time_sec = 0;
+                                    player_state.total_duration_sec = 0;
+                                    player_state.is_playing = true;
+                                    player_state.is_paused = false;
+                                    codec_sample_rate = 44100;
+                                    (void)decoder_lifecycle.finish_start(generation, true);
+                                    audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
+                                    command_ok = true;
+                                    Serial.printf("[MUSIC_AUDIO] ▶ HTTPS stream source: %s\n", cmd.source_id);
+                                }
+                            }
+                            if (!command_ok)
+                            {
+                                if (audio) { delete audio; audio = nullptr; }
+                                (void)decoder_lifecycle.finish_start(generation, false);
+                            }
+                        }
+                        xSemaphoreGive(audio_mutex);
+                    }
+                    if (!command_ok && newly_acquired) release_music_audio();
                 }
                 break;
 
                 default:
                     break;
             }
+            complete_music_command(cmd, command_ok);
         }
 
         // 2. Vòng lặp giải mã stream I2S liên tục khi đang phát nhạc
@@ -520,7 +670,10 @@ bool music_player_init(void)
         music_cmd_queue = xQueueCreate(16, sizeof(MusicCommand));
     }
 
-    if (!audio_mutex || !music_cmd_queue)
+    if (!music_ack_queue) music_ack_queue = xQueueCreate(8, sizeof(MusicCommandAck));
+    if (!music_ai_action_mutex) music_ai_action_mutex = xSemaphoreCreateMutex();
+
+    if (!audio_mutex || !music_cmd_queue || !music_ack_queue || !music_ai_action_mutex)
     {
         Serial.println("[MUSIC_PLAYER] ❌ Chế độ suy giảm: không tạo được mutex/queue");
         return false;
@@ -530,6 +683,7 @@ bool music_player_init(void)
     // PA remains owned by AudioManager and is only enabled by an active session.
 
     // Quét thẻ nhớ MicroSD để tìm bài hát (có khóa SPI bus)
+    load_stream_sources();
     music_player_scan_sd();
 
     // Khởi tạo FreeRTOS Task trên Core 0 (Priority 3: Audio Realtime)
@@ -836,4 +990,78 @@ void audio_eof_mp3(const char *info)
     portEXIT_CRITICAL(&music_control_mux);
     if (audio_task_handle)
         xTaskNotify(audio_task_handle, MUSIC_EVENT_EOF, eSetBits);
+}
+
+bool music_player_is_paused(void)
+{
+    if (!audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool value = player_state.is_playing && player_state.is_paused;
+    xSemaphoreGive(audio_mutex);
+    return value;
+}
+
+bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,
+                                    char *error, size_t error_size)
+{
+    if (error && error_size) error[0] = '\0';
+    if (!action || !ai_music_action_valid(*action) || !music_ai_action_mutex ||
+        xSemaphoreTake(music_ai_action_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    {
+        if (error && error_size) strlcpy(error, "Lệnh nhạc không hợp lệ hoặc đang bận", error_size);
+        return false;
+    }
+    MusicCommand cmd = {};
+    cmd.request_id = ++next_music_request_id;
+    switch (action->type)
+    {
+        case AI_MUSIC_ACTION_PLAY:
+            if (action->source_id[0])
+            {
+                const MusicStreamSource *source = find_stream_source(action->source_id);
+                if (!source)
+                {
+                    if (error && error_size) strlcpy(error, "Nguồn nhạc chưa được cấu hình trên thiết bị", error_size);
+                    xSemaphoreGive(music_ai_action_mutex);
+                    return false;
+                }
+                cmd.type = MUSIC_CMD_PLAY_STREAM;
+                strlcpy(cmd.filepath, source->url, sizeof(cmd.filepath));
+                strlcpy(cmd.source_id, source->id, sizeof(cmd.source_id));
+            }
+            else
+            {
+                const int index = music_player_get_current_index() >= 0 ? music_player_get_current_index() : 0;
+                if (index < 0 || index >= total_tracks_found)
+                {
+                    if (error && error_size) strlcpy(error, "Không có bài hát trên thẻ SD", error_size);
+                    xSemaphoreGive(music_ai_action_mutex);
+                    return false;
+                }
+                cmd.type = MUSIC_CMD_PLAY_INDEX;
+                cmd.track_idx = index;
+                strlcpy(cmd.filepath, playlist[index].filepath, sizeof(cmd.filepath));
+            }
+            break;
+        case AI_MUSIC_ACTION_PAUSE: cmd.type = MUSIC_CMD_PAUSE; break;
+        case AI_MUSIC_ACTION_RESUME: cmd.type = MUSIC_CMD_RESUME; break;
+        case AI_MUSIC_ACTION_STOP: cmd.type = MUSIC_CMD_STOP; break;
+        case AI_MUSIC_ACTION_VOLUME: cmd.type = MUSIC_CMD_SET_VOLUME; cmd.param = action->volume; break;
+        default: break;
+    }
+    bool ok = false;
+    if (cmd.type != MUSIC_CMD_NONE && enqueue_music_command(cmd))
+    {
+        const TickType_t started = xTaskGetTickCount();
+        const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+        MusicCommandAck ack = {};
+        while (xQueueReceive(music_ack_queue, &ack, timeout) == pdTRUE)
+        {
+            if (ack.request_id == cmd.request_id) { ok = ack.ok; break; }
+            if (xTaskGetTickCount() - started >= timeout) break;
+        }
+    }
+    if (!ok && error && error_size && error[0] == '\0')
+        strlcpy(error, "Thiết bị không thực hiện được lệnh nhạc", error_size);
+    xSemaphoreGive(music_ai_action_mutex);
+    return ok;
 }

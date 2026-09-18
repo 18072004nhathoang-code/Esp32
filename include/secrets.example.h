@@ -15,13 +15,19 @@
 // Lấy key tại: https://console.cloud.google.com/
 #define GOOGLE_MAPS_STATIC_API_KEY ""
 
-// Secure voice gateway contract:
-// AI_VOICE_ENDPOINT accepts POST audio/wav and returns JSON containing
-// "transcript" and "reply". The TTS endpoint returns mono PCM16 16kHz WAV.
-#define AI_VOICE_ENDPOINT       ""
-#define AI_VOICE_TTS_ENDPOINT   ""
+// Secure voice gateway contract. Point these at the supplied backend.
+// Query may also return allowlisted music actions and grounded source links.
+#define AI_VOICE_ENDPOINT       "https://assistant.example.com/v1/query"
+#define AI_VOICE_TTS_ENDPOINT   "https://assistant.example.com/v1/tts"
 #define AI_VOICE_BEARER_TOKEN   ""
 #define AI_VOICE_CA_CERT        ""
+
+// Internet music is resolved locally by source ID. The backend must have the
+// same IDs in MUSIC_SOURCES_JSON. Gemini never supplies a URL to the device.
+// Keep this on one line and use HTTPS sources only (maximum 8 entries).
+#define AI_MUSIC_STREAM_SOURCES_JSON "[]"
+// PEM trust anchor (or concatenated PEM roots) for the configured streams.
+#define AI_MUSIC_STREAM_CA_CERT ""
 
 // PEM CA certificate used to verify HTTPS IP-camera endpoints. Keep empty until
 // a trusted CA for the camera has been provisioned; verified TLS then fails closed.

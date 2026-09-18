@@ -277,7 +277,7 @@ void ai_voice_app_update(void)
     {
         lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
         AIVoiceState state = ai_voice_get_state();
-        if (state == AI_STATE_LISTENING)
+        if (state == AI_STATE_STARTING || state == AI_STATE_LISTENING)
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
         else if (state == AI_STATE_PROCESSING)
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);

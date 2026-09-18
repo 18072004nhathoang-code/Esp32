@@ -205,7 +205,6 @@ Audio::Audio(bool internalDAC /* = false */, uint8_t channelEnabled /* = I2S_SLO
         if(audio_info) audio_info(m_ibuff); \
     }
 
-    clientsecure.setInsecure();
     m_f_channelEnabled = channelEnabled;
     m_f_internalDAC = internalDAC;
     m_i2s_num = i2sPort;  // i2s port number
@@ -297,6 +296,10 @@ Audio::Audio(bool internalDAC /* = false */, uint8_t channelEnabled /* = I2S_SLO
     }
     computeLimit();  // first init, vol = 21, vol_steps = 21
     m_f_initialized = startAudioTask();
+}
+
+void Audio::setCACert(const char* root_ca) {
+    if(root_ca && root_ca[0]) clientsecure.setCACert(root_ca);
 }
 //------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Audio::~Audio() {
