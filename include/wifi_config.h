@@ -31,3 +31,7 @@
 #define WIFI_PREFS_NAMESPACE "minios_wifi"
 #define WIFI_PREFS_KEY_SSID  "ssid"
 #define WIFI_PREFS_KEY_PASS  "pass"
+#define WIFI_PREFS_KEY_CHK   "chk"
+#define WIFI_PREFS_KEY_BAK_SSID "b_ssid"
+#define WIFI_PREFS_KEY_BAK_PASS "b_pass"
+#define WIFI_PREFS_KEY_BAK_CHK  "b_chk"

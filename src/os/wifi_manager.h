@@ -137,6 +137,11 @@ int8_t wifi_manager_get_rssi(void);
 bool wifi_manager_has_saved_credentials(void);
 
 /**
+ * @brief Kiểm tra xem mạng WiFi hiện tại đã được lưu thành công vào NVS chưa
+ */
+bool wifi_manager_is_credentials_saved(void);
+
+/**
  * @brief Lưu thông tin WiFi vào bộ nhớ Flash NVS (Preferences)
  */
 bool wifi_manager_save_credentials(const char *ssid, const char *pass);

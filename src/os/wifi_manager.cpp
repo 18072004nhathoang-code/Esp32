@@ -15,6 +15,7 @@
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
 #include "wifi_scan_adapter.h"
+#include "wifi_storage_logic.h"
 
 static Preferences prefs;
 static WiFiState current_state = WIFI_STATE_DISCONNECTED;
@@ -173,6 +174,55 @@ static uint32_t next_generation_locked()
     return request_generation;
 }
 
+static bool commit_credentials_to_nvs(const char *ssid, const char *pass)
+{
+    if (!ssid || !*ssid) return false;
+    const char *safe_pass = pass ? pass : "";
+    const uint32_t new_chk = wifi_credentials_checksum(ssid, safe_pass);
+
+    if (!prefs.begin(WIFI_PREFS_NAMESPACE, false)) return false;
+
+    // 1. Nếu cấu hình hiện tại trong NVS đang hợp lệ, sao lưu sang backup slot
+    String cur_ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
+    String cur_pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
+    uint32_t cur_chk = prefs.getUInt(WIFI_PREFS_KEY_CHK, 0);
+    if (cur_ssid.length() > 0 && cur_chk != 0 &&
+        cur_chk == wifi_credentials_checksum(cur_ssid.c_str(), cur_pass.c_str()))
+    {
+        prefs.putString(WIFI_PREFS_KEY_BAK_SSID, cur_ssid);
+        prefs.putString(WIFI_PREFS_KEY_BAK_PASS, cur_pass);
+        prefs.putUInt(WIFI_PREFS_KEY_BAK_CHK, cur_chk);
+    }
+
+    // 2. Vô hiệu hóa checksum của primary slot để chống rách dữ liệu nếu mất nguồn
+    prefs.putUInt(WIFI_PREFS_KEY_CHK, 0);
+
+    // 3. Ghi mật khẩu mới
+    const size_t pass_len = strlen(safe_pass);
+    const bool pass_ok = (prefs.putString(WIFI_PREFS_KEY_PASS, safe_pass) == pass_len);
+
+    // 4. Ghi SSID mới
+    const size_t ssid_len = strlen(ssid);
+    const bool ssid_ok = (prefs.putString(WIFI_PREFS_KEY_SSID, ssid) == ssid_len);
+
+    // 5. Ghi Checksum mới
+    const bool chk_ok = (prefs.putUInt(WIFI_PREFS_KEY_CHK, new_chk) > 0);
+
+    prefs.end();
+
+    if (!pass_ok || !ssid_ok || !chk_ok) return false;
+
+    // 6. Kiểm tra lại dữ liệu vừa ghi
+    if (prefs.begin(WIFI_PREFS_NAMESPACE, true))
+    {
+        const uint32_t read_chk = prefs.getUInt(WIFI_PREFS_KEY_CHK, 0);
+        String read_ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
+        prefs.end();
+        return (read_chk == new_chk && read_ssid == ssid);
+    }
+    return false;
+}
+
 static bool save_credentials_for_generation(uint32_t generation, const char *ssid, const char *pass)
 {
     if (!prefs_mutex || !wifi_mutex || !ssid || !*ssid) return false;
@@ -184,17 +234,14 @@ static bool save_credentials_for_generation(uint32_t generation, const char *ssi
         generation, request_generation, pending_save_generation, manual_disconnect);
     unlock_wifi();
     bool ok = false;
-    if (current && prefs.begin(WIFI_PREFS_NAMESPACE, false))
+    if (current)
     {
-        ok = prefs.putString(WIFI_PREFS_KEY_SSID, ssid) == strlen(ssid);
-        const char *safe_pass = pass ? pass : "";
-        ok = prefs.putString(WIFI_PREFS_KEY_PASS, safe_pass) == strlen(safe_pass) && ok;
-        prefs.end();
+        ok = commit_credentials_to_nvs(ssid, pass);
     }
     unlock_prefs();
 
     lock_wifi();
-    if (generation == request_generation && generation == pending_save_generation)
+    if (ok && generation == request_generation && generation == pending_save_generation)
     {
         should_save_credentials = false;
         pending_save_generation = 0;
@@ -208,15 +255,12 @@ static bool save_credentials_direct(uint32_t generation, const char *ssid, const
     if (!prefs_mutex || !wifi_mutex || generation == 0 || !ssid || !*ssid) return false;
     lock_prefs();
     lock_wifi();
-    const bool current = generation == request_generation;
+    const bool current = (generation == request_generation);
     unlock_wifi();
-    bool ok = current && prefs.begin(WIFI_PREFS_NAMESPACE, false);
-    if (ok)
+    bool ok = false;
+    if (current)
     {
-        ok = prefs.putString(WIFI_PREFS_KEY_SSID, ssid) == strlen(ssid);
-        const char *safe_pass = pass ? pass : "";
-        ok = prefs.putString(WIFI_PREFS_KEY_PASS, safe_pass) == strlen(safe_pass) && ok;
-        prefs.end();
+        ok = commit_credentials_to_nvs(ssid, pass);
     }
     unlock_prefs();
     return ok;
@@ -229,9 +273,12 @@ static bool clear_credentials_direct(void)
     bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
     if (ok)
     {
-        const bool ssid_ok = !prefs.isKey(WIFI_PREFS_KEY_SSID) || prefs.remove(WIFI_PREFS_KEY_SSID);
-        const bool pass_ok = !prefs.isKey(WIFI_PREFS_KEY_PASS) || prefs.remove(WIFI_PREFS_KEY_PASS);
-        ok = ssid_ok && pass_ok;
+        if (prefs.isKey(WIFI_PREFS_KEY_SSID)) prefs.remove(WIFI_PREFS_KEY_SSID);
+        if (prefs.isKey(WIFI_PREFS_KEY_PASS)) prefs.remove(WIFI_PREFS_KEY_PASS);
+        if (prefs.isKey(WIFI_PREFS_KEY_CHK)) prefs.remove(WIFI_PREFS_KEY_CHK);
+        if (prefs.isKey(WIFI_PREFS_KEY_BAK_SSID)) prefs.remove(WIFI_PREFS_KEY_BAK_SSID);
+        if (prefs.isKey(WIFI_PREFS_KEY_BAK_PASS)) prefs.remove(WIFI_PREFS_KEY_BAK_PASS);
+        if (prefs.isKey(WIFI_PREFS_KEY_BAK_CHK)) prefs.remove(WIFI_PREFS_KEY_BAK_CHK);
         prefs.end();
     }
     unlock_prefs();
@@ -328,7 +375,7 @@ static void wifi_service_task(void *pvParameters)
         log_i("Tìm thấy thông tin WiFi trong NVS: %s, tiến hành tự động kết nối...", saved_ssid.c_str());
         wifi_manager_connect(saved_ssid.c_str(), saved_pass.c_str(), false); // false: Đã có trong NVS, không ghi lại
     }
-    else if (strlen(DEFAULT_WIFI_SSID) > 0)
+    else if (strlen(DEFAULT_WIFI_SSID) > 0 && !wifi_is_sample_ssid(DEFAULT_WIFI_SSID))
     {
         log_i("Tìm thấy DEFAULT_WIFI_SSID: %s, tiến hành kết nối...", DEFAULT_WIFI_SSID);
         wifi_manager_connect(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS, false);
@@ -461,7 +508,11 @@ static void wifi_service_task(void *pvParameters)
         unlock_wifi();
         if (state_snapshot == WIFI_STATE_CONNECTING)
         {
-            if (WiFi.status() == WL_CONNECTED)
+            const bool is_connected = (WiFi.status() == WL_CONNECTED);
+            const IPAddress local_ip = WiFi.localIP();
+            const bool has_valid_ip = (local_ip != IPAddress(0, 0, 0, 0));
+
+            if (is_connected && has_valid_ip)
             {
                 bool need_save = false;
                 char save_s[33] = {0};
@@ -477,7 +528,7 @@ static void wifi_service_task(void *pvParameters)
                     reconnect_backoff_ms = 2000;
                     connection_error[0] = '\0';
                     strlcpy(connected_ssid, WiFi.SSID().c_str(), sizeof(connected_ssid));
-                    strlcpy(connected_ip, WiFi.localIP().toString().c_str(), sizeof(connected_ip));
+                    strlcpy(connected_ip, local_ip.toString().c_str(), sizeof(connected_ip));
                     connected_rssi = WiFi.RSSI();
                 }
 
@@ -496,13 +547,19 @@ static void wifi_service_task(void *pvParameters)
                     continue;
                 }
                 log_i("Kết nối WiFi thành công generation=%u IP=%s RSSI=%d dBm",
-                      active_generation_snapshot, WiFi.localIP().toString().c_str(), WiFi.RSSI());
+                      active_generation_snapshot, local_ip.toString().c_str(), WiFi.RSSI());
 
                 // Lưu NVS Flash ngoài lock_wifi() -> Tuyệt đối không bao giờ deadlock giữa wifi_mutex và prefs_mutex
                 if (need_save)
                 {
-                    if (!save_credentials_for_generation(active_generation_snapshot, save_s, save_p))
+                    if (save_credentials_for_generation(active_generation_snapshot, save_s, save_p))
+                    {
+                        log_i("Đã lưu WiFi [%s] vào NVS Flash thành công", save_s);
+                    }
+                    else
+                    {
                         log_e("WiFi connected but credentials could not be saved");
+                    }
                 }
             }
             else if (millis() - connect_started_snapshot > WIFI_CONNECT_TIMEOUT_MS)
@@ -515,11 +572,30 @@ static void wifi_service_task(void *pvParameters)
                     current_state = WIFI_STATE_FAILED;
                     clear_connected_cache_locked();
                     last_disconnect_time = millis();
+                    const bool was_attempting_new_save = should_save_credentials;
                     should_save_credentials = false;
                     pending_save_generation = 0;
-                    set_error_locked("Connection timed out");
+                    set_error_locked("Kết nối thất bại (sai mật khẩu hoặc timeout)");
                     log_w("Kết nối WiFi thất bại: Hết thời gian chờ (Timeout)!");
                     disconnect_timed_out = true;
+
+                    // Nếu kết nối mạng mới thất bại, không ghi đè và phục hồi mạng tốt từ NVS nếu có
+                    if (was_attempting_new_save)
+                    {
+                        String nvs_ssid, nvs_pass;
+                        unlock_wifi();
+                        if (wifi_manager_load_credentials(nvs_ssid, nvs_pass) && nvs_ssid.length() > 0)
+                        {
+                            lock_wifi();
+                            strlcpy(target_ssid, nvs_ssid.c_str(), sizeof(target_ssid));
+                            strlcpy(target_pass, nvs_pass.c_str(), sizeof(target_pass));
+                            log_i("Phục hồi mạng đã lưu [%s] sau khi kết nối mạng mới thất bại", target_ssid);
+                        }
+                        else
+                        {
+                            lock_wifi();
+                        }
+                    }
                 }
                 unlock_wifi();
                 if (disconnect_timed_out) WiFi.disconnect();
@@ -562,12 +638,20 @@ static void wifi_service_task(void *pvParameters)
                 reconnect_backoff_ms = (reconnect_backoff_ms * 2 > 60000) ? 60000 : (reconnect_backoff_ms * 2);
                 last_disconnect_time = millis();
 
-                should_save_credentials = false; // Không spam ghi NVS khi reconnect
-                pending_save_generation = 0;
                 retry_cmd.type = WIFI_CMD_CONNECT;
                 retry_cmd.generation = next_generation_locked();
                 strlcpy(retry_cmd.ssid, target_ssid, sizeof(retry_cmd.ssid));
                 strlcpy(retry_cmd.pass, target_pass, sizeof(retry_cmd.pass));
+                if (wifi_retry_preserves_save(should_save_credentials, manual_disconnect, false))
+                {
+                    pending_save_generation = retry_cmd.generation;
+                    retry_cmd.save_to_nvs = true;
+                }
+                else
+                {
+                    pending_save_generation = 0;
+                    retry_cmd.save_to_nvs = false;
+                }
                 enqueue_retry = true;
             }
             unlock_wifi();
@@ -1083,18 +1167,87 @@ int8_t wifi_manager_get_rssi(void)
     return value;
 }
 
-bool wifi_manager_has_saved_credentials(void)
+bool wifi_manager_load_credentials(String &ssid, String &pass)
 {
     if (!prefs_mutex) return false;
     lock_prefs();
-    String ssid;
-    if (prefs.begin(WIFI_PREFS_NAMESPACE, true))
+    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
+    if (ok)
     {
         ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
+        pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
+        if (ssid.length() > 0)
+        {
+            const uint32_t calc_chk = wifi_credentials_checksum(ssid.c_str(), pass.c_str());
+            if (prefs.isKey(WIFI_PREFS_KEY_CHK))
+            {
+                const uint32_t chk = prefs.getUInt(WIFI_PREFS_KEY_CHK, 0);
+                if (chk != 0 && chk == calc_chk)
+                {
+                    prefs.end();
+                    unlock_prefs();
+                    return true;
+                }
+                // Checksum không khớp hoặc bằng 0 -> Phát hiện ghi dở / mất nguồn giữa chừng!
+                log_w("[WIFI] Checksum NVS chính không khớp. Kiểm tra bản sao lưu...");
+                String bak_ssid = prefs.getString(WIFI_PREFS_KEY_BAK_SSID, "");
+                String bak_pass = prefs.getString(WIFI_PREFS_KEY_BAK_PASS, "");
+                uint32_t bak_chk = prefs.getUInt(WIFI_PREFS_KEY_BAK_CHK, 0);
+                if (bak_ssid.length() > 0 && bak_chk != 0 &&
+                    bak_chk == wifi_credentials_checksum(bak_ssid.c_str(), bak_pass.c_str()))
+                {
+                    log_i("[WIFI] Phục hồi cấu hình WiFi từ bản sao lưu: %s", bak_ssid.c_str());
+                    prefs.putString(WIFI_PREFS_KEY_SSID, bak_ssid);
+                    prefs.putString(WIFI_PREFS_KEY_PASS, bak_pass);
+                    prefs.putUInt(WIFI_PREFS_KEY_CHK, bak_chk);
+                    ssid = bak_ssid;
+                    pass = bak_pass;
+                    prefs.end();
+                    unlock_prefs();
+                    return true;
+                }
+                // Cả 2 slot đều không hợp lệ
+                prefs.end();
+                unlock_prefs();
+                return false;
+            }
+            else
+            {
+                // Cấu hình cũ (legacy) chưa có key chk -> Tự động migrate có kiểm tra
+                prefs.putUInt(WIFI_PREFS_KEY_CHK, calc_chk);
+                prefs.end();
+                unlock_prefs();
+                return true;
+            }
+        }
         prefs.end();
     }
     unlock_prefs();
-    return (ssid.length() > 0);
+    return false;
+}
+
+bool wifi_manager_has_saved_credentials(void)
+{
+    String s, p;
+    return wifi_manager_load_credentials(s, p);
+}
+
+bool wifi_manager_is_credentials_saved(void)
+{
+    lock_wifi();
+    const bool connected = (current_state == WIFI_STATE_CONNECTED);
+    char cur_ssid[33] = {0};
+    strlcpy(cur_ssid, connected_ssid, sizeof(cur_ssid));
+    unlock_wifi();
+
+    if (!connected || strlen(cur_ssid) == 0) return false;
+
+    String saved_s, saved_p;
+    if (wifi_manager_load_credentials(saved_s, saved_p))
+    {
+        return (saved_s == cur_ssid);
+    }
+    return false;
 }
 
 bool wifi_manager_save_credentials(const char *ssid, const char *pass)
@@ -1109,21 +1262,6 @@ bool wifi_manager_save_credentials(const char *ssid, const char *pass)
     cmd.generation = request_generation;
     unlock_wifi();
     return enqueue_wifi_command(cmd);
-}
-
-bool wifi_manager_load_credentials(String &ssid, String &pass)
-{
-    if (!prefs_mutex) return false;
-    lock_prefs();
-    bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, true);
-    if (ok)
-    {
-        ssid = prefs.getString(WIFI_PREFS_KEY_SSID, "");
-        pass = prefs.getString(WIFI_PREFS_KEY_PASS, "");
-        prefs.end();
-    }
-    unlock_prefs();
-    return ok && ssid.length() > 0;
 }
 
 bool wifi_manager_clear_credentials(void)

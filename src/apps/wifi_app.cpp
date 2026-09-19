@@ -631,8 +631,18 @@ void wifi_app_update(void)
         WiFiState state = wifi_manager_get_state();
         if (state == WIFI_STATE_CONNECTED)
         {
-            char buf[64];
-            snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Đã kết nối: %s", wifi_manager_get_ip().c_str());
+            char buf[96];
+            const bool saved = wifi_manager_is_credentials_saved();
+            if (saved)
+            {
+                snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Đã kết nối: %s\n" LV_SYMBOL_SAVE " Đã lưu WiFi",
+                         wifi_manager_get_ip().c_str());
+            }
+            else
+            {
+                snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Đã kết nối: %s",
+                         wifi_manager_get_ip().c_str());
+            }
             lv_label_set_text(lbl_status, buf);
             lv_obj_set_style_text_color(lbl_status, lv_color_hex(COLOR_ACCENT_GREEN), 0);
         }

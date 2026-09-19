@@ -264,17 +264,18 @@ void loop()
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)
         ui_update_periodic(current_stats);
 
-        // Kiểm tra sau khi khởi động 10s: nếu kết nối thất bại và chưa có Internet, tự động mở WiFi Settings App
+        // Kiểm tra sau khi khởi động 10s: chỉ tự động mở WiFi Settings App nếu CHƯA CÓ cấu hình mạng trong NVS
         static bool boot_wifi_prompted = false;
         if (!boot_wifi_prompted && millis() > 10000)
         {
             if (wifi_manager_is_connected())
                 boot_wifi_prompted = true;
-            else if (wifi_startup_may_open(true, false, ui_is_home_active(),
-                                           ui_wifi_app_was_opened()))
+            else if (!wifi_manager_has_saved_credentials() &&
+                     wifi_startup_may_open(true, false, ui_is_home_active(),
+                                            ui_wifi_app_was_opened()))
             {
                 boot_wifi_prompted = true;
-                Serial.println("[SYSTEM] Kết nối WiFi thất bại sau thời gian chờ. Tự động mở WiFi Settings App...");
+                Serial.println("[SYSTEM] Chưa có WiFi lưu trong NVS. Mở WiFi Settings App...");
                 ui_open_wifi_app();
             }
         }
