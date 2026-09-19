@@ -23,6 +23,8 @@ static lv_obj_t *lbl_activation = nullptr;
 static lv_obj_t *wave_bars[NUM_WAVE_BARS] = {nullptr};
 
 static int last_msg_count = 0;
+static uint32_t last_rendered_msg_id = 0;
+static uint32_t last_history_revision = 0;
 static bool is_button_held = false;
 
 static void activation_button_cb(lv_event_t *e)
@@ -169,12 +171,18 @@ void ai_voice_app_open(lv_obj_t *parent)
 
     // Nạp tất cả tin nhắn hiện có trong lịch sử
     int count = ai_voice_get_message_count();
+    last_rendered_msg_id = 0;
     for (int i = 0; i < count; i++)
     {
         ChatMessage msg;
-        if (ai_voice_get_message_copy(i, &msg)) add_chat_bubble(&msg);
+        if (ai_voice_get_message_copy(i, &msg))
+        {
+            add_chat_bubble(&msg);
+            if (msg.id > last_rendered_msg_id) last_rendered_msg_id = msg.id;
+        }
     }
     last_msg_count = count;
+    last_history_revision = ai_voice_get_history_revision();
 
     activation_panel = lv_obj_create(chat_container);
     lv_obj_set_width(activation_panel, 208);
@@ -308,19 +316,41 @@ void ai_voice_app_update(void)
 {
     if (!main_container) return;
 
-    // 1. Kiểm tra và thêm tin nhắn mới vào khung chat nếu có
-    int current_count = ai_voice_get_message_count();
-    if (current_count > last_msg_count)
+    // 1. Kiểm tra và thêm tin nhắn mới vào khung chat nếu có (hỗ trợ ring buffer > 32 tin nhắn và clear history)
+    const uint32_t current_rev = ai_voice_get_history_revision();
+    const int current_count = ai_voice_get_message_count();
+    if (current_rev != last_history_revision || current_count != last_msg_count)
     {
-        for (int i = last_msg_count; i < current_count; i++)
+        if (current_count == 0 && last_rendered_msg_id != 0)
         {
-            ChatMessage msg;
-            if (ai_voice_get_message_copy(i, &msg))
+            uint32_t child_cnt = lv_obj_get_child_cnt(chat_container);
+            for (int i = static_cast<int>(child_cnt) - 1; i >= 0; i--)
             {
-                add_chat_bubble(&msg);
+                lv_obj_t *child = lv_obj_get_child(chat_container, i);
+                if (child != activation_panel)
+                {
+                    lv_obj_del(child);
+                }
+            }
+            last_rendered_msg_id = 0;
+        }
+        else
+        {
+            for (int i = 0; i < current_count; i++)
+            {
+                ChatMessage msg;
+                if (ai_voice_get_message_copy(i, &msg))
+                {
+                    if (msg.id > last_rendered_msg_id)
+                    {
+                        add_chat_bubble(&msg);
+                        last_rendered_msg_id = msg.id;
+                    }
+                }
             }
         }
         last_msg_count = current_count;
+        last_history_revision = current_rev;
     }
 
     // 2. Cập nhật nhãn trạng thái AI

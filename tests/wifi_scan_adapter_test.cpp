@@ -186,6 +186,44 @@ static void test_recovery_and_stale_events()
     assert(driver.logic.stale_event_count == 1);
 }
 
+static void test_recovery_failure_bounded_retry()
+{
+    FakeScanDriver driver;
+    driver.start_error = 0x3006;
+    driver.start_may_be_busy = true;
+    assert(!driver.start(60, 10));
+    assert(driver.logic.begin_recovery(100));
+
+    // First recovery failure puts driver into DRAINING (retry backoff), not permanent lockup
+    driver.logic.recovery_finished(false, 110);
+    assert(driver.logic.phase == WifiScanDriverPhase::DRAINING);
+    assert(driver.logic.recovery_retries == 1);
+
+    // Second recovery failure
+    assert(driver.logic.begin_recovery(200));
+    driver.logic.recovery_finished(false, 210);
+    assert(driver.logic.phase == WifiScanDriverPhase::DRAINING);
+    assert(driver.logic.recovery_retries == 2);
+
+    // Third recovery failure reaches kMaxRecoveryRetries: enters RECOVERY_FAILED (not fake IDLE)
+    assert(driver.logic.begin_recovery(300));
+    driver.logic.recovery_finished(false, 310);
+    assert(driver.logic.phase == WifiScanDriverPhase::RECOVERY_FAILED);
+    assert(!driver.logic.prepare_start(61, 350)); // Cannot start scan while in RECOVERY_FAILED
+
+    // Retrying recovery from RECOVERY_FAILED
+    assert(driver.logic.retry_failed_recovery(360));
+    driver.logic.recovery_finished(true, 370);
+    assert(driver.logic.phase == WifiScanDriverPhase::IDLE);
+    assert(driver.logic.take_drained_event());
+
+    // Subsequent scan can now be started normally
+    driver.start_error = 0;
+    driver.start_may_be_busy = false;
+    assert(driver.start(61, 400));
+    assert(driver.logic.phase == WifiScanDriverPhase::RUNNING);
+}
+
 int main()
 {
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -207,6 +245,8 @@ int main()
     test_stop_failure_is_terminal_or_drained();
     puts("recovery_and_stale_events");
     test_recovery_and_stale_events();
+    puts("recovery_failure_bounded_retry");
+    test_recovery_failure_bounded_retry();
     puts("wifi_scan_adapter_test PASS");
     return 0;
 }

@@ -12,6 +12,7 @@
 #include "xiaozhi_audio_codec.h"
 #include "xiaozhi_mcp.h"
 #include "xiaozhi_transport.h"
+#include "xiaozhi_session_logic.h"
 #include "../audio/audio_manager.h"
 #include "../audio/music_player.h"
 #include "../os/wifi_manager.h"
@@ -38,6 +39,8 @@ static TaskHandle_t s_task = nullptr;
 static AIVoiceState s_state = AI_STATE_ERROR;
 static ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
 static int s_message_count = 0;
+static uint32_t s_history_revision = 0;
+static uint32_t s_message_seq_id = 0;
 static char s_last_error[160] = "Xiaozhi chưa khởi tạo";
 static char s_activation_code[32] = {};
 static char s_activation_message[160] = {};
@@ -64,14 +67,38 @@ static size_t s_capture_frame_fill = 0;
 static MusicVoiceHandoff s_music_handoff = {};
 static bool s_music_resume_suppressed = false;
 static uint32_t s_audio_output_session = 0;
+static uint32_t s_record_control_request = 0;
 static uint8_t *s_inbound = nullptr;
 static int16_t *s_capture_frame = nullptr;
 static int16_t *s_decoded = nullptr;
 static int16_t *s_resampled = nullptr;
+static int16_t *s_capture_chunk = nullptr;
+static uint8_t *s_opus_packet = nullptr;
+static uint8_t *s_framed_packet = nullptr;
+static AudioRecordingLease s_flush_lease = {};
+static bool s_flush_active = false;
+static bool s_flush_source_done = false;
+static bool s_cleanup_pending = false;
+static bool s_cleanup_resume_music = false;
+static bool s_cleanup_preserve_error = false;
+static bool s_cleanup_timeout_reported = false;
+static uint32_t s_cleanup_generation = 0;
+static uint32_t s_cleanup_deadline_ms = 0;
+static uint32_t s_cleanup_recorder_request = 0;
+static uint32_t s_last_diagnostic_ms = 0;
+static xiaozhi::BackpressureWindow s_backpressure;
 
 static const size_t kDecodedCapacity = 5760;
 static const size_t kResampledCapacity = 1920;
 static const uint32_t kSessionTimeoutMs = 60000;
+static const uint32_t kBackpressureTimeoutMs = 1200;
+static const uint32_t kCleanupTimeoutMs = 5000;
+static const size_t kCaptureFrameSamples = 960;
+static const size_t kCaptureChunkSamples = 256;
+static const size_t kFramesPerWorkerPass = 2;
+
+enum class EncodeResult : uint8_t { QUEUED, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
+enum class PumpResult : uint8_t { PROGRESS, IDLE, COMPLETE, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
 
 bool elapsed(uint32_t deadline) { return xiaozhi::deadline_reached(millis(), deadline); }
 
@@ -103,6 +130,32 @@ bool current_generation(uint32_t generation)
     return current;
 }
 
+bool cancellation_requested(uint32_t generation)
+{
+    if (!generation || !s_mutex ||
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool cancelled = xiaozhi::cancellation_applies(generation, s_cancelled_through);
+    xSemaphoreGive(s_mutex);
+    return cancelled;
+}
+
+bool active_generation_matches(uint32_t generation)
+{
+    if (!generation || !s_mutex ||
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    const bool matches = xiaozhi::cleanup_may_mutate(generation, s_active_generation);
+    xSemaphoreGive(s_mutex);
+    return matches;
+}
+
+uint32_t active_generation_snapshot()
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t generation = s_active_generation;
+    xSemaphoreGive(s_mutex);
+    return generation;
+}
+
 void add_message(bool user, const char *text)
 {
     if (!text || !*text || !s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return;
@@ -115,6 +168,8 @@ void add_message(bool user, const char *text)
     message.is_user = user;
     strlcpy(message.text, text, sizeof(message.text));
     message.timestamp_sec = millis() / 1000U;
+    message.id = ++s_message_seq_id;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
 }
 
@@ -149,43 +204,172 @@ void resume_music_if_needed()
     s_music_resume_suppressed = false;
 }
 
-void finish_session(bool resume_music, bool drain_output = true)
+void release_flush_lease()
 {
-    const bool preserve_error = ai_voice_get_state() == AI_STATE_ERROR;
-    stop_output(drain_output);
-    if (audio_is_recording())
-    {
-        uint32_t request = 0;
-        if (audio_cancel_recording_async(&request))
-        {
-            bool applied = false;
-            (void)audio_wait_recording_command_ack(request, 1200, &applied);
-        }
-    }
-    s_transport.close();
-    s_codec.end();
-    s_mcp.resetSession();
-    s_server_hello = false;
-    s_session_id[0] = '\0';
-    s_capture_offset = 0;
-    s_capture_frame_fill = 0;
-    if (resume_music) resume_music_if_needed();
+    if (s_flush_lease.token) audio_release_recording_lease(&s_flush_lease);
+    s_flush_lease = {};
+    s_flush_active = false;
+    s_flush_source_done = false;
+}
+
+void finalize_cleanup(uint32_t generation)
+{
+    if (!active_generation_matches(generation)) return;
+    release_flush_lease();
+    if (s_cleanup_resume_music) resume_music_if_needed();
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
-        s_active_generation = 0;
-        s_state = preserve_error ? AI_STATE_ERROR
-                                 : (s_configured ? AI_STATE_IDLE : AI_STATE_NEEDS_USER_INPUT);
+        if (xiaozhi::cleanup_may_mutate(generation, s_active_generation))
+        {
+            s_active_generation = 0;
+            s_state = s_cleanup_preserve_error ? AI_STATE_ERROR
+                                               : (s_configured ? AI_STATE_IDLE
+                                                               : AI_STATE_NEEDS_USER_INPUT);
+        }
         xSemaphoreGive(s_mutex);
     }
+    s_cleanup_pending = false;
+    s_cleanup_generation = 0;
+    s_cleanup_recorder_request = 0;
+    s_record_control_request = 0;
+    s_cleanup_timeout_reported = false;
+}
+
+void service_cleanup()
+{
+    if (!s_cleanup_pending || !active_generation_matches(s_cleanup_generation)) return;
+    bool recorder_stopped = (s_record_control_request == 0 && s_cleanup_recorder_request == 0);
+    if (!recorder_stopped && s_cleanup_recorder_request == 0)
+    {
+        uint32_t request = 0;
+        if (audio_cancel_recording_request_async(s_record_control_request, &request))
+        {
+            s_cleanup_recorder_request = request;
+        }
+        else if (!audio_is_recording() &&
+                 audio_get_current_owner() != AUDIO_OWNER_RECORDER)
+        {
+            // The exact request was already stopped and ownership was returned.
+            s_record_control_request = 0;
+            recorder_stopped = true;
+        }
+        else
+        {
+            // The active recording command in audio_manager does not match our request
+            const uint32_t active_cmd = audio_get_active_recording_command();
+            if (active_cmd != s_record_control_request)
+            {
+                s_record_control_request = 0;
+                recorder_stopped = true;
+            }
+        }
+    }
+    if (s_cleanup_recorder_request)
+    {
+        bool applied = false;
+        if (audio_wait_recording_command_ack(s_cleanup_recorder_request, 0, &applied))
+        {
+            recorder_stopped = applied && !audio_is_recording() &&
+                               audio_get_current_owner() != AUDIO_OWNER_RECORDER;
+            if (recorder_stopped)
+            {
+                s_cleanup_recorder_request = 0;
+                s_record_control_request = 0;
+            }
+        }
+    }
+    if (recorder_stopped)
+    {
+        finalize_cleanup(s_cleanup_generation);
+        return;
+    }
+    if (elapsed(s_cleanup_deadline_ms))
+    {
+        static uint8_t s_cleanup_retries = 0;
+        if (!audio_is_recording() && audio_get_current_owner() != AUDIO_OWNER_RECORDER)
+        {
+            s_cleanup_recorder_request = 0;
+            s_record_control_request = 0;
+            s_cleanup_retries = 0;
+            finalize_cleanup(s_cleanup_generation);
+            return;
+        }
+        if (s_cleanup_retries < 3)
+        {
+            ++s_cleanup_retries;
+            s_cleanup_deadline_ms = millis() + 1500U;
+            log_w("Xiaozhi cleanup retry %u generation=%u", s_cleanup_retries, s_cleanup_generation);
+            uint32_t retry_req = 0;
+            if (audio_cancel_recording_async(&retry_req))
+            {
+                s_cleanup_recorder_request = retry_req;
+            }
+        }
+        else
+        {
+            s_cleanup_retries = 0;
+            audio_cancel_recording();
+            s_cleanup_preserve_error = true;
+            set_error("Recorder timeout sau nhiều lần thử hủy");
+            s_cleanup_recorder_request = 0;
+            s_record_control_request = 0;
+            finalize_cleanup(s_cleanup_generation);
+        }
+    }
+}
+
+void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = true)
+{
+    if (!active_generation_matches(generation)) return;
+    const bool preserve_error = ai_voice_get_state() == AI_STATE_ERROR;
+    if (!s_cleanup_pending)
+    {
+        s_cleanup_pending = true;
+        s_cleanup_generation = generation;
+        s_cleanup_resume_music = resume_music;
+        s_cleanup_preserve_error = preserve_error;
+        s_cleanup_deadline_ms = millis() + kCleanupTimeoutMs;
+        s_cleanup_timeout_reported = false;
+        stop_output(drain_output);
+        release_flush_lease();
+        s_transport.close();
+        s_codec.end();
+        s_mcp.resetSession();
+        s_server_hello = false;
+        s_session_id[0] = '\0';
+        s_capture_offset = 0;
+        s_capture_frame_fill = 0;
+        s_backpressure.reset();
+    }
+    else
+    {
+        s_cleanup_resume_music = s_cleanup_resume_music || resume_music;
+        s_cleanup_preserve_error = s_cleanup_preserve_error || preserve_error;
+    }
+    service_cleanup();
 }
 
 void cancel_session(uint32_t generation)
 {
+    if (!active_generation_matches(generation)) return;
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (generation > s_cancelled_through) s_cancelled_through = generation;
         s_state = AI_STATE_CANCELING;
         xSemaphoreGive(s_mutex);
+    }
+    stop_output(false);
+    release_flush_lease();
+    s_capture_offset = 0;
+    s_capture_frame_fill = 0;
+    s_transport.purgeUplink();
+    if (s_record_control_request != 0 && s_cleanup_recorder_request == 0)
+    {
+        uint32_t request = 0;
+        if (audio_cancel_recording_request_async(s_record_control_request, &request))
+        {
+            s_cleanup_recorder_request = request;
+        }
     }
     if (s_transport.connected() && s_session_id[0])
     {
@@ -196,9 +380,10 @@ void cancel_session(uint32_t generation)
         String body;
         serializeJson(doc, body);
         (void)s_transport.sendText(body.c_str());
-        for (int i = 0; i < 3; ++i) s_transport.loop();
     }
-    finish_session(true, false);
+    // Never call transport.loop() after abort: queued audio belongs to the
+    // cancelled generation and close() discards it.
+    begin_cleanup(generation, true, false);
 }
 
 bool queue_command(CommandType type, uint32_t generation)
@@ -302,7 +487,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         }
         else if (strcmp(state, "stop") == 0)
         {
-            finish_session(true);
+            begin_cleanup(generation, true);
         }
     }
     else if (strcmp(type, "mcp") == 0)
@@ -357,6 +542,8 @@ void process_inbound()
         if (!ok && kind == XiaozhiInboundKind::BINARY &&
             ai_voice_get_state() == AI_STATE_SPEAKING)
             set_error("Gói Opus Xiaozhi lỗi hoặc phát I2S thất bại");
+        if (current_generation(generation) && ai_voice_get_state() == AI_STATE_ERROR)
+            begin_cleanup(generation, true, false);
     }
 }
 
@@ -421,7 +608,8 @@ bool connect_session(uint32_t generation)
         const uint32_t until = millis() + backoff;
         while (!elapsed(until) && current_generation(generation)) vTaskDelay(pdMS_TO_TICKS(20));
     }
-    set_error("Không kết nối/nhận hello WSS Xiaozhi");
+    if (!cancellation_requested(generation))
+        set_error("Không kết nối/nhận hello WSS Xiaozhi");
     return false;
 }
 
@@ -437,101 +625,160 @@ bool send_listen_state(const char *state)
     return s_transport.sendText(body.c_str());
 }
 
-bool encode_capture_frame(uint32_t generation)
+EncodeResult encode_capture_frame(uint32_t generation)
 {
-    uint8_t opus[xiaozhi::kMaxOpusPacketBytes] = {};
-    const int encoded = s_codec.encode60ms(s_capture_frame, opus, sizeof(opus));
-    if (encoded <= 0) return false;
-    uint8_t framed[xiaozhi::kMaxOpusPacketBytes + 16] = {};
+    if (!current_generation(generation) || cancellation_requested(generation))
+        return EncodeResult::CANCELLED;
+    s_transport.loop();
+    const bool capacity = s_transport.audioQueueHasCapacity(generation);
+    const xiaozhi::BackpressureDecision pressure = s_backpressure.observe(
+        capacity, millis(), kBackpressureTimeoutMs);
+    if (pressure == xiaozhi::BackpressureDecision::WAIT)
+        return EncodeResult::BACKPRESSURE;
+    if (pressure == xiaozhi::BackpressureDecision::TIMED_OUT)
+        return EncodeResult::TIMEOUT;
+    const int encoded = s_codec.encode60ms(
+        s_capture_frame, s_opus_packet, xiaozhi::kMaxOpusPacketBytes);
+    if (encoded <= 0) return EncodeResult::ERROR;
     const size_t framed_size = xiaozhi::wrap_opus_packet(
-        s_ws_config.version, millis(), opus, static_cast<size_t>(encoded),
-        framed, sizeof(framed));
-    return framed_size > 0 && s_transport.queueAudio(framed, framed_size, generation);
+        s_ws_config.version, millis(), s_opus_packet, static_cast<size_t>(encoded),
+        s_framed_packet, xiaozhi::kMaxOpusPacketBytes + 16U);
+    if (!framed_size) return EncodeResult::ERROR;
+    if (!current_generation(generation) || cancellation_requested(generation))
+        return EncodeResult::CANCELLED;
+    if (!s_transport.queueAudio(s_framed_packet, framed_size, generation))
+        return s_transport.audioQueueHasCapacity(generation)
+            ? EncodeResult::ERROR : EncodeResult::BACKPRESSURE;
+    s_backpressure.reset();
+    return EncodeResult::QUEUED;
 }
 
-bool pump_capture(uint32_t generation)
+PumpResult pump_capture(uint32_t generation)
 {
-    int16_t chunk[256];
-    size_t total = 0;
-    do
+    size_t encoded_frames = 0;
+    bool made_progress = false;
+    while (encoded_frames < kFramesPerWorkerPass)
     {
-        const size_t wanted = sizeof(chunk) / sizeof(chunk[0]);
+        if (cancellation_requested(generation)) return PumpResult::CANCELLED;
+        if (s_capture_frame_fill == kCaptureFrameSamples)
+        {
+            const EncodeResult result = encode_capture_frame(generation);
+            if (result == EncodeResult::BACKPRESSURE) return PumpResult::BACKPRESSURE;
+            if (result == EncodeResult::TIMEOUT) return PumpResult::TIMEOUT;
+            if (result == EncodeResult::CANCELLED) return PumpResult::CANCELLED;
+            if (result != EncodeResult::QUEUED) return PumpResult::ERROR;
+            s_capture_frame_fill = 0;
+            ++encoded_frames;
+            made_progress = true;
+            continue;
+        }
+        size_t total = 0;
+        size_t wanted = kCaptureFrameSamples - s_capture_frame_fill;
+        if (wanted > kCaptureChunkSamples) wanted = kCaptureChunkSamples;
         const size_t copied = audio_copy_live_recording_samples(
-            s_capture_offset, chunk, wanted, &total);
+            s_capture_offset, s_capture_chunk, wanted, &total);
         if (copied == 0) break;
         s_capture_offset += copied;
         size_t consumed = 0;
         while (consumed < copied)
         {
-            size_t amount = 960 - s_capture_frame_fill;
+            size_t amount = kCaptureFrameSamples - s_capture_frame_fill;
             if (amount > copied - consumed) amount = copied - consumed;
-            memcpy(s_capture_frame + s_capture_frame_fill, chunk + consumed,
+            memcpy(s_capture_frame + s_capture_frame_fill, s_capture_chunk + consumed,
                    amount * sizeof(int16_t));
             s_capture_frame_fill += amount;
             consumed += amount;
-            if (s_capture_frame_fill == 960)
-            {
-                if (!encode_capture_frame(generation)) return false;
-                s_capture_frame_fill = 0;
-            }
+            made_progress = true;
+            if (s_capture_frame_fill == kCaptureFrameSamples) break;
         }
-    } while (s_capture_offset < total);
-    return true;
+    }
+    return made_progress ? PumpResult::PROGRESS : PumpResult::IDLE;
 }
 
-bool stop_capture_and_send(uint32_t generation, bool cancel)
+PumpResult begin_capture_flush(uint32_t generation)
 {
     uint32_t request = 0;
-    const bool queued = cancel ? audio_cancel_recording_async(&request)
-                               : audio_stop_recording_async(&request);
+    if (!audio_stop_recording_async(&request)) return PumpResult::ERROR;
+    s_record_control_request = request;
+    const uint32_t deadline = millis() + 1500U;
     bool applied = false;
-    if (!queued || !audio_wait_recording_command_ack(request, 1500, &applied) || !applied)
-        return false;
-    if (!cancel)
+    while (!audio_wait_recording_command_ack(request, 0, &applied))
     {
-        AudioRecordingLease lease = {};
-        if (audio_acquire_recording_lease(&lease))
+        if (cancellation_requested(generation)) return PumpResult::CANCELLED;
+        if (elapsed(deadline)) return PumpResult::ERROR;
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (!applied) return PumpResult::ERROR;
+    s_record_control_request = 0;
+    release_flush_lease();
+    s_flush_active = true;
+    s_flush_source_done = !audio_acquire_recording_lease(&s_flush_lease);
+    set_state(AI_STATE_PROCESSING);
+    return PumpResult::PROGRESS;
+}
+
+PumpResult pump_capture_flush(uint32_t generation)
+{
+    if (!s_flush_active) return PumpResult::IDLE;
+    size_t encoded_frames = 0;
+    while (encoded_frames < kFramesPerWorkerPass)
+    {
+        if (cancellation_requested(generation)) return PumpResult::CANCELLED;
+        if (s_capture_frame_fill == kCaptureFrameSamples)
         {
-            while (s_capture_offset < lease.sample_count)
-            {
-                size_t amount = lease.sample_count - s_capture_offset;
-                if (amount > 960 - s_capture_frame_fill) amount = 960 - s_capture_frame_fill;
-                const size_t copied = audio_copy_recording_lease(
-                    &lease, s_capture_offset, s_capture_frame + s_capture_frame_fill, amount);
-                if (copied == 0) break;
-                s_capture_offset += copied;
-                s_capture_frame_fill += copied;
-                if (s_capture_frame_fill == 960)
-                {
-                    if (!encode_capture_frame(generation))
-                    {
-                        audio_release_recording_lease(&lease);
-                        return false;
-                    }
-                    s_capture_frame_fill = 0;
-                }
-            }
-            audio_release_recording_lease(&lease);
+            const EncodeResult result = encode_capture_frame(generation);
+            if (result == EncodeResult::BACKPRESSURE) return PumpResult::BACKPRESSURE;
+            if (result == EncodeResult::TIMEOUT) return PumpResult::TIMEOUT;
+            if (result == EncodeResult::CANCELLED) return PumpResult::CANCELLED;
+            if (result != EncodeResult::QUEUED) return PumpResult::ERROR;
+            s_capture_frame_fill = 0;
+            ++encoded_frames;
+            continue;
         }
+        if (!s_flush_source_done && s_capture_offset < s_flush_lease.sample_count)
+        {
+            size_t amount = s_flush_lease.sample_count - s_capture_offset;
+            const size_t room = kCaptureFrameSamples - s_capture_frame_fill;
+            if (amount > room) amount = room;
+            const size_t copied = audio_copy_recording_lease(
+                &s_flush_lease, s_capture_offset,
+                s_capture_frame + s_capture_frame_fill, amount);
+            if (copied == 0) return PumpResult::ERROR;
+            s_capture_offset += copied;
+            s_capture_frame_fill += copied;
+            continue;
+        }
+        s_flush_source_done = true;
         if (s_capture_frame_fill > 0)
         {
             memset(s_capture_frame + s_capture_frame_fill, 0,
-                   (960 - s_capture_frame_fill) * sizeof(int16_t));
-            if (!encode_capture_frame(generation)) return false;
-            s_capture_frame_fill = 0;
+                   (kCaptureFrameSamples - s_capture_frame_fill) * sizeof(int16_t));
+            s_capture_frame_fill = kCaptureFrameSamples;
+            continue;
         }
-        for (int i = 0; i < 12; ++i) { s_transport.loop(); vTaskDelay(pdMS_TO_TICKS(1)); }
-        if (!send_listen_state("stop")) return false;
-        set_state(AI_STATE_PROCESSING);
+        if (s_flush_lease.token) audio_release_recording_lease(&s_flush_lease);
+        s_flush_lease = {};
+        break;
     }
-    return true;
+    if (xiaozhi::flush_ready_for_listen_stop(
+            s_flush_source_done && s_capture_frame_fill == 0,
+            s_transport.uplinkPending(),
+            s_transport.droppedUplink() != s_seen_uplink_drops))
+    {
+        if (!send_listen_state("stop")) return PumpResult::ERROR;
+        s_flush_active = false;
+        return PumpResult::COMPLETE;
+    }
+    return PumpResult::PROGRESS;
 }
 
 bool start_session(uint32_t generation)
 {
+    if (!current_generation(generation)) return false;
     if (!s_configured || !wifi_manager_is_connected())
     {
         set_error(!s_configured ? "Xiaozhi chưa kích hoạt" : "WiFi chưa kết nối");
+        begin_cleanup(generation, true, false);
         return false;
     }
     memset(&s_music_handoff, 0, sizeof(s_music_handoff));
@@ -543,27 +790,71 @@ bool start_session(uint32_t generation)
                                             error, sizeof(error)))
         {
             set_error(error[0] ? error : "Không giải phóng được nhạc để thu giọng nói");
+            begin_cleanup(generation, true, false);
             return false;
         }
     }
-    if (!connect_session(generation)) { finish_session(true); return false; }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
+    if (!connect_session(generation)) { begin_cleanup(generation, true); return false; }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     if (!send_listen_state("start"))
     {
         set_error("Không gửi được trạng thái listen/start");
-        finish_session(true);
+        begin_cleanup(generation, true);
         return false;
     }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     uint32_t request = 0;
     bool applied = false;
-    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &request) ||
-        !audio_wait_recording_command_ack(request, 1500, &applied) || !applied)
+    if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &request))
     {
         set_error("Không khởi động được microphone");
-        finish_session(true);
+        begin_cleanup(generation, true);
+        return false;
+    }
+    s_record_control_request = request;
+    const uint32_t ack_deadline = millis() + 1500U;
+    while (!audio_wait_recording_command_ack(request, 0, &applied))
+    {
+        if (cancellation_requested(generation))
+        {
+            uint32_t cancel_req = 0;
+            if (audio_cancel_recording_request_async(request, &cancel_req))
+            {
+                s_cleanup_recorder_request = cancel_req;
+            }
+            cancel_session(generation);
+            return false;
+        }
+        if (elapsed(ack_deadline))
+        {
+            set_error("Microphone Start không ACK đúng hạn");
+            uint32_t cancel_req = 0;
+            if (audio_cancel_recording_request_async(request, &cancel_req))
+            {
+                s_cleanup_recorder_request = cancel_req;
+            }
+            begin_cleanup(generation, true);
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    if (!applied || !current_generation(generation))
+    {
+        if (!cancellation_requested(generation)) set_error("Không khởi động được microphone");
+        uint32_t cancel_req = 0;
+        if (audio_cancel_recording_request_async(request, &cancel_req))
+        {
+            s_cleanup_recorder_request = cancel_req;
+        }
+        begin_cleanup(generation, true);
         return false;
     }
     s_capture_offset = 0;
     s_capture_frame_fill = 0;
+    s_flush_active = false;
+    s_flush_source_done = false;
+    s_backpressure.reset();
     s_session_deadline_ms = millis() + kSessionTimeoutMs;
     set_state(AI_STATE_LISTENING);
     return true;
@@ -573,7 +864,7 @@ void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
 {
     static char last_logged_activation_code[24] = {};
     if (s_configured || s_activation_cancelled || !wifi_manager_is_connected() ||
-        !elapsed(next_poll_ms) || s_active_generation) return;
+        !elapsed(next_poll_ms) || active_generation_snapshot()) return;
     set_state(AI_STATE_NEEDS_USER_INPUT);
     log_i("Xiaozhi provisioning request: HTTPS OTA discovery");
     XiaozhiProvisionResult result = {};
@@ -627,13 +918,89 @@ void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
     }
 }
 
+void log_runtime_diagnostics(uint32_t generation)
+{
+    if (!generation || millis() - s_last_diagnostic_ms < 15000U) return;
+    s_last_diagnostic_ms = millis();
+    const size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internal_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_min = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr)) *
+                              sizeof(StackType_t);
+    log_i("Xiaozhi diag state=%u gen=%u recorder=%u owner=%u cmdq=%u upq=%u/8 drops=%u/%u stack_free=%uB int=%u/%u/%u psram=%u/%u/%u cleanup=%u",
+          static_cast<unsigned>(ai_voice_get_state()), static_cast<unsigned>(generation),
+          static_cast<unsigned>(s_record_control_request),
+          static_cast<unsigned>(audio_get_current_owner()),
+          static_cast<unsigned>(s_commands ? uxQueueMessagesWaiting(s_commands) : 0),
+          static_cast<unsigned>(s_transport.uplinkPending()),
+          static_cast<unsigned>(s_transport.droppedUplink()),
+          static_cast<unsigned>(s_transport.droppedDownlink()),
+          static_cast<unsigned>(stack_free),
+          static_cast<unsigned>(internal_free), static_cast<unsigned>(internal_min),
+          static_cast<unsigned>(internal_largest), static_cast<unsigned>(psram_free),
+          static_cast<unsigned>(psram_min), static_cast<unsigned>(psram_largest),
+          s_cleanup_pending ? 1U : 0U);
+}
+
+bool handle_pump_fault(PumpResult result, uint32_t generation, const char *context)
+{
+    if (result == PumpResult::CANCELLED)
+    {
+        cancel_session(generation);
+        return true;
+    }
+    if (result == PumpResult::TIMEOUT || result == PumpResult::ERROR)
+    {
+        set_error(result == PumpResult::TIMEOUT
+                      ? "Uplink Xiaozhi nghẽn quá thời hạn"
+                      : context);
+        begin_cleanup(generation, true, false);
+        return true;
+    }
+    return false;
+}
+
+bool run_codec_self_test()
+{
+    memset(s_capture_frame, 0, kCaptureFrameSamples * sizeof(int16_t));
+    char error[96] = {};
+    if (!s_codec.begin(16000, error, sizeof(error)))
+    {
+        log_e("Xiaozhi Opus self-test init failed: %s", error);
+        return false;
+    }
+    const int encoded = s_codec.encode60ms(
+        s_capture_frame, s_opus_packet, xiaozhi::kMaxOpusPacketBytes);
+    const int decoded = encoded > 0
+        ? s_codec.decode(s_opus_packet, static_cast<size_t>(encoded),
+                         s_decoded, kDecodedCapacity)
+        : encoded;
+    s_codec.end();
+    const bool ok = encoded > 0 && decoded == static_cast<int>(kCaptureFrameSamples);
+    log_i("Xiaozhi Opus self-test=%s encoded=%d decoded=%d stack_free=%uB",
+          ok ? "PASS" : "FAIL", encoded, decoded,
+          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+    return ok;
+}
+
 void worker(void *)
 {
     uint32_t next_poll_ms = 0;
     uint32_t backoff_ms = 3000;
+    if (!run_codec_self_test()) set_error("Opus encode/decode self-test thất bại");
     while (true)
     {
         run_provisioning(next_poll_ms, backoff_ms);
+        service_cleanup();
+        uint32_t generation = active_generation_snapshot();
+        if (generation && cancellation_requested(generation))
+        {
+            cancel_session(generation);
+            service_cleanup();
+        }
         Command command = {};
         while (s_commands && xQueueReceive(s_commands, &command, 0) == pdTRUE)
         {
@@ -648,69 +1015,101 @@ void worker(void *)
                 s_activation_cancelled = true;
                 set_state(AI_STATE_NEEDS_USER_INPUT);
             }
-            else if (command.type == CommandType::START)
+            else if (command.type == CommandType::START && current_generation(command.generation))
                 (void)start_session(command.generation);
             else if (command.type == CommandType::STOP && current_generation(command.generation))
             {
-                if (!stop_capture_and_send(command.generation, false))
-                {
-                    set_error("Không kết thúc/gửi được âm thanh Xiaozhi");
-                    finish_session(true);
-                }
+                const PumpResult result = begin_capture_flush(command.generation);
+                (void)handle_pump_fault(result, command.generation,
+                                        "Không dừng được recorder Xiaozhi");
             }
             else if (command.type == CommandType::CANCEL)
                 cancel_session(command.generation);
         }
 
-        const uint32_t generation = s_active_generation;
-        if (generation)
+        service_cleanup();
+        generation = active_generation_snapshot();
+        if (generation && !s_cleanup_pending)
         {
+            if (cancellation_requested(generation))
+            {
+                cancel_session(generation);
+                service_cleanup();
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
+                continue;
+            }
             s_transport.loop();
             process_inbound();
             if (s_transport.droppedUplink() != s_seen_uplink_drops ||
                 s_transport.droppedDownlink() != s_seen_downlink_drops)
             {
                 set_error("WebSocket Xiaozhi quá tải hoặc mất gói");
-                cancel_session(generation);
-                vTaskDelay(pdMS_TO_TICKS(2));
+                begin_cleanup(generation, true, false);
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
                 continue;
             }
             if (!current_generation(generation))
             {
-                vTaskDelay(pdMS_TO_TICKS(2));
+                cancel_session(generation);
+                ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
                 continue;
             }
             const AIVoiceState state = ai_voice_get_state();
             if (state == AI_STATE_LISTENING)
             {
-                if (!pump_capture(generation))
-                {
-                    set_error("Uplink Opus quá tải hoặc encode lỗi");
-                    cancel_session(generation);
-                }
+                const PumpResult result = pump_capture(generation);
+                if (handle_pump_fault(result, generation, "Opus encode/uplink lỗi"))
+                    continue;
                 else if (!audio_is_recording())
                 {
-                    if (!stop_capture_and_send(generation, false))
-                    {
-                        set_error("Microphone dừng ngoài dự kiến");
-                        cancel_session(generation);
-                    }
+                    const PumpResult stop_result = begin_capture_flush(generation);
+                    if (handle_pump_fault(stop_result, generation,
+                                          "Microphone dừng ngoài dự kiến")) continue;
                 }
             }
-            if (generation && elapsed(s_session_deadline_ms))
+            else if (state == AI_STATE_PROCESSING && s_flush_active)
+            {
+                const PumpResult result = pump_capture_flush(generation);
+                if (handle_pump_fault(result, generation,
+                                      "Không flush được audio cuối Xiaozhi")) continue;
+            }
+            if (elapsed(s_session_deadline_ms))
             {
                 set_error("Phiên Xiaozhi quá thời gian");
-                cancel_session(generation);
+                begin_cleanup(generation, true, false);
             }
-            else if (generation && !s_transport.connected() &&
-                     state != AI_STATE_STARTING && state != AI_STATE_CANCELING)
+            else if (!s_transport.connected() &&
+                      state != AI_STATE_STARTING && state != AI_STATE_CANCELING)
             {
                 set_error("WebSocket Xiaozhi đã ngắt");
-                cancel_session(generation);
+                begin_cleanup(generation, true, false);
             }
+            log_runtime_diagnostics(generation);
         }
-        vTaskDelay(pdMS_TO_TICKS(2));
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
     }
+}
+
+void release_service_allocations()
+{
+    if (s_commands) vQueueDelete(s_commands);
+    if (s_mutex) vSemaphoreDelete(s_mutex);
+    heap_caps_free(s_inbound);
+    heap_caps_free(s_capture_frame);
+    heap_caps_free(s_decoded);
+    heap_caps_free(s_resampled);
+    heap_caps_free(s_capture_chunk);
+    heap_caps_free(s_opus_packet);
+    heap_caps_free(s_framed_packet);
+    s_commands = nullptr;
+    s_mutex = nullptr;
+    s_inbound = nullptr;
+    s_capture_frame = nullptr;
+    s_decoded = nullptr;
+    s_resampled = nullptr;
+    s_capture_chunk = nullptr;
+    s_opus_packet = nullptr;
+    s_framed_packet = nullptr;
 }
 }
 
@@ -727,10 +1126,18 @@ bool ai_voice_init(void)
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_resampled = static_cast<int16_t *>(heap_caps_malloc(kResampledCapacity * sizeof(int16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!s_mutex || !s_commands || !s_inbound || !s_capture_frame || !s_decoded || !s_resampled)
+    s_capture_chunk = static_cast<int16_t *>(heap_caps_malloc(
+        kCaptureChunkSamples * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    s_opus_packet = static_cast<uint8_t *>(heap_caps_malloc(
+        xiaozhi::kMaxOpusPacketBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    s_framed_packet = static_cast<uint8_t *>(heap_caps_malloc(
+        xiaozhi::kMaxOpusPacketBytes + 16U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!s_mutex || !s_commands || !s_inbound || !s_capture_frame || !s_decoded ||
+        !s_resampled || !s_capture_chunk || !s_opus_packet || !s_framed_packet)
     {
         strlcpy(s_last_error, "Thiếu RAM/mutex/queue cho Xiaozhi", sizeof(s_last_error));
         s_state = AI_STATE_ERROR;
+        release_service_allocations();
         return false;
     }
     if (!xiaozhi_identity_init(s_device_id, sizeof(s_device_id),
@@ -738,18 +1145,20 @@ bool ai_voice_init(void)
     {
         strlcpy(s_last_error, "Không tạo được Device-Id/Client-Id Xiaozhi", sizeof(s_last_error));
         s_state = AI_STATE_ERROR;
+        release_service_allocations();
         return false;
     }
     s_configured = xiaozhi_load_websocket_config(&s_ws_config);
     s_state = s_configured ? AI_STATE_IDLE : AI_STATE_NEEDS_USER_INPUT;
     strlcpy(s_last_error, s_configured ? "" : "Đang chờ kích hoạt Xiaozhi",
             sizeof(s_last_error));
-    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", 18432, nullptr, 3,
+    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", 32768, nullptr, 3,
                                 &s_task, 0) != pdPASS)
     {
         s_task = nullptr;
         s_state = AI_STATE_ERROR;
         strlcpy(s_last_error, "Không tạo được Xiaozhi worker", sizeof(s_last_error));
+        release_service_allocations();
         return false;
     }
     add_message(false, s_configured ? "Xiaozhi đã sẵn sàng. Giữ nút để nói."
@@ -770,14 +1179,17 @@ bool ai_voice_start_recording(void)
         return false;
     }
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
-    if (s_state != AI_STATE_IDLE || s_active_generation != 0)
+    if ((s_state != AI_STATE_IDLE && s_state != AI_STATE_ERROR) ||
+        s_active_generation != 0)
     {
         xSemaphoreGive(s_mutex);
         return false;
     }
-    const uint32_t generation = ++s_next_generation;
+    uint32_t generation = ++s_next_generation;
+    if (generation == 0) generation = ++s_next_generation;
     s_active_generation = generation;
     s_state = AI_STATE_STARTING;
+    s_last_error[0] = '\0';
     xSemaphoreGive(s_mutex);
     if (!queue_command(CommandType::START, generation))
     {
@@ -790,6 +1202,7 @@ bool ai_voice_start_recording(void)
         }
         return false;
     }
+    xTaskNotifyGive(s_task);
     return true;
 }
 
@@ -797,14 +1210,38 @@ bool ai_voice_stop_and_process(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const uint32_t generation = s_active_generation;
+    const bool starting = generation && s_state == AI_STATE_STARTING;
     const bool allowed = generation && s_state == AI_STATE_LISTENING;
+    if (starting)
+    {
+        if (generation > s_cancelled_through) s_cancelled_through = generation;
+        s_state = AI_STATE_CANCELING;
+    }
     if (allowed) s_state = AI_STATE_PROCESSING;
     xSemaphoreGive(s_mutex);
+    if (starting)
+    {
+        (void)queue_command(CommandType::CANCEL, generation);
+        xTaskNotifyGive(s_task);
+        return true;
+    }
     if (!allowed || !queue_command(CommandType::STOP, generation))
     {
-        if (allowed) set_error("Queue Xiaozhi đầy khi dừng thu");
+        if (allowed)
+        {
+            if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (generation > s_cancelled_through) s_cancelled_through = generation;
+                s_state = AI_STATE_ERROR;
+                strlcpy(s_last_error, "Queue Xiaozhi đầy; hủy phiên an toàn",
+                        sizeof(s_last_error));
+                xSemaphoreGive(s_mutex);
+            }
+            xTaskNotifyGive(s_task);
+        }
         return false;
     }
+    xTaskNotifyGive(s_task);
     return true;
 }
 
@@ -815,8 +1252,13 @@ void ai_voice_cancel(void)
     if (generation > s_cancelled_through) s_cancelled_through = generation;
     if (generation) s_state = AI_STATE_CANCELING;
     xSemaphoreGive(s_mutex);
-    if (generation && !queue_command(CommandType::CANCEL, generation))
-        set_error("Queue Xiaozhi đầy khi hủy");
+    if (generation)
+    {
+        // The mutex-protected cancellation watermark is authoritative. The
+        // queue entry only reduces latency and may be dropped safely.
+        (void)queue_command(CommandType::CANCEL, generation);
+        xTaskNotifyGive(s_task);
+    }
 }
 
 AIVoiceState ai_voice_get_state(void)
@@ -862,11 +1304,20 @@ bool ai_voice_get_message_copy(int index, ChatMessage *message)
 
 void ai_voice_add_message(bool is_user, const char *text) { add_message(is_user, text); }
 
+uint32_t ai_voice_get_history_revision(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    const uint32_t rev = s_history_revision;
+    xSemaphoreGive(s_mutex);
+    return rev;
+}
+
 void ai_voice_clear_history(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     memset(s_history, 0, sizeof(s_history));
     s_message_count = 0;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
 }
 

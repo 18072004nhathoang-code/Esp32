@@ -74,6 +74,8 @@ jobs:
           /tmp/wifi_scan_adapter_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_protocol_test.cpp -o /tmp/xiaozhi_protocol_test
           /tmp/xiaozhi_protocol_test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_session_logic_test.cpp -o /tmp/xiaozhi_session_logic_test
+          /tmp/xiaozhi_session_logic_test
 
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p

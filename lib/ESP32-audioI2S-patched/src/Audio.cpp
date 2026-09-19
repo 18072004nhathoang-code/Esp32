@@ -324,6 +324,10 @@ Audio::~Audio() {
     if(m_ibuff)       {free(m_ibuff);        m_ibuff        = NULL;}
     if(m_lastM3U8host){free(m_lastM3U8host); m_lastM3U8host = NULL;}
 
+    if(m_taskSync) {
+        m_taskSync->release();
+        m_taskSync = nullptr;
+    }
     if(mutex_playAudioData) vSemaphoreDelete(mutex_playAudioData);
     if(m_audioTaskExitAck) vSemaphoreDelete(m_audioTaskExitAck);
 }
@@ -6349,32 +6353,105 @@ bool Audio::startAudioTask() {
     }
     if(!mutex_playAudioData || !m_audioTaskExitAck) return false;
     while(xSemaphoreTake(m_audioTaskExitAck, 0) == pdTRUE) {}
+
+    if(m_taskSync) {
+        m_taskSync->release();
+        m_taskSync = nullptr;
+    }
+
+    AudioTaskSync *sync = new (std::nothrow) AudioTaskSync();
+    if(!sync) return false;
+    sync->exit_sem = xSemaphoreCreateBinary();
+    if(!sync->exit_sem) {
+        delete sync;
+        return false;
+    }
+    sync->ref_count.store(2, std::memory_order_relaxed);
+    sync->worker_done.store(false, std::memory_order_relaxed);
+    sync->task_handle.store(nullptr, std::memory_order_relaxed);
+
     const uint32_t task_generation = m_audioTaskExit.begin();
+    sync->generation = task_generation;
+    m_taskSync = sync;
     m_f_audioTaskIsRunning = true;
-    if(xTaskCreate(&Audio::taskWrapper, "PeriodicTask", 3300, this, 4, &m_audioTaskHandle) != pdPASS) {
+
+    struct AudioTaskRunnerContext {
+        Audio *runner;
+        AudioTaskSync *sync;
+    };
+    AudioTaskRunnerContext *ctx = new (std::nothrow) AudioTaskRunnerContext{this, sync};
+    if(!ctx) {
+        m_f_audioTaskIsRunning = false;
+        m_audioTaskExit.acknowledge(task_generation);
+        m_taskSync = nullptr;
+        sync->release();
+        sync->release();
+        return false;
+    }
+
+    if(xTaskCreate(&Audio::taskWrapper, "PeriodicTask", 3300, ctx, 4, &m_audioTaskHandle) != pdPASS) {
+        delete ctx;
         m_f_audioTaskIsRunning = false;
         m_audioTaskHandle = nullptr;
         m_audioTaskExit.acknowledge(task_generation);
+        m_taskSync = nullptr;
+        sync->release();
+        sync->release();
         log_e("Audio initialization failed: PeriodicTask");
         return false;
     }
+    sync->task_handle.store(m_audioTaskHandle, std::memory_order_release);
     return true;
 }
 
 bool Audio::stopAudioTask(uint32_t timeout_ms)  {
-    const uint32_t stopping_generation = m_audioTaskExit.generation();
-    if(stopping_generation == 0 || m_audioTaskExit.confirmed(stopping_generation)) return true;
+    if (!m_taskSync) {
+        const uint32_t stopping_generation = m_audioTaskExit.generation();
+        return stopping_generation == 0 || m_audioTaskExit.confirmed(stopping_generation);
+    }
+    AudioTaskSync *sync = m_taskSync;
+    const uint32_t stopping_generation = sync->generation;
     m_f_audioTaskIsRunning = false;
+
+    if (sync->worker_done.load(std::memory_order_acquire)) {
+        m_audioTaskHandle = nullptr;
+        m_audioTaskExit.acknowledge(stopping_generation);
+        return true;
+    }
+
     const TickType_t wait_ticks = timeout_ms == portMAX_DELAY
                                     ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    const bool signaled = xSemaphoreTake(m_audioTaskExitAck, wait_ticks) == pdTRUE;
-    return signaled && m_audioTaskExit.confirmed(stopping_generation) &&
-           m_audioTaskHandle == nullptr;
+    if (sync->exit_sem) {
+        (void)xSemaphoreTake(sync->exit_sem, wait_ticks);
+    }
+    const bool done = sync->worker_done.load(std::memory_order_acquire);
+    if (done) {
+        m_audioTaskHandle = nullptr;
+        m_audioTaskExit.acknowledge(stopping_generation);
+        return true;
+    }
+    return false;
 }
 
 void Audio::taskWrapper(void *param) {
-    Audio *runner = static_cast<Audio*>(param);
+    struct AudioTaskRunnerContext {
+        Audio *runner;
+        AudioTaskSync *sync;
+    };
+    auto *ctx = static_cast<AudioTaskRunnerContext*>(param);
+    Audio *runner = ctx->runner;
+    AudioTaskSync *sync = ctx->sync;
+    delete ctx;
+
     runner->audioTask();
+
+    sync->task_handle.store(nullptr, std::memory_order_release);
+    sync->worker_done.store(true, std::memory_order_release);
+    if (sync->exit_sem) {
+        xSemaphoreGive(sync->exit_sem);
+    }
+    sync->release();
+    vTaskDelete(nullptr);
 }
 
 void Audio::audioTask() {
@@ -6385,8 +6462,7 @@ void Audio::audioTask() {
     const uint32_t exiting_generation = m_audioTaskExit.generation();
     m_audioTaskHandle = nullptr;
     m_audioTaskExit.acknowledge(exiting_generation);
-    xSemaphoreGive(m_audioTaskExitAck);
-    vTaskDelete(nullptr);  // Delete this task
+    if (m_audioTaskExitAck) xSemaphoreGive(m_audioTaskExitAck);
 }
 
 void Audio::performAudioTask() {
@@ -6399,8 +6475,7 @@ void Audio::performAudioTask() {
 
 bool Audio::shutdown(uint32_t timeout_ms) {
     if(!mutex_playAudioData)
-        return m_audioTaskExit.generation() == 0 ||
-               m_audioTaskExit.confirmed(m_audioTaskExit.generation());
+        return stopAudioTask(timeout_ms);
     const TickType_t lock_ticks = timeout_ms == portMAX_DELAY
                                    ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     if(xSemaphoreTake(mutex_playAudioData, lock_ticks) != pdTRUE) return false;

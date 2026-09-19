@@ -28,6 +28,7 @@ struct ChatMessage
     bool is_user;              // true: Người dùng, false: AI Assistant
     char text[AI_MAX_TEXT_LEN];
     uint32_t timestamp_sec;
+    uint32_t id;               // ID tin nhắn tuần tự duy nhất
 };
 
 /**
@@ -64,6 +65,7 @@ const char* ai_voice_get_state_text(void);
  * @brief Lấy số lượng tin nhắn trong lịch sử hội thoại
  */
 int ai_voice_get_message_count(void);
+uint32_t ai_voice_get_history_revision(void);
 
 /**
  * @brief Lấy bản sao an toàn của tin nhắn theo chỉ số index dưới khóa Mutex

@@ -47,6 +47,8 @@ namespace
 volatile AIVoiceState s_state = AI_STATE_ERROR;
 ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
 int s_message_count = 0;
+uint32_t s_history_revision = 0;
+uint32_t s_message_seq_id = 0;
 SemaphoreHandle_t s_mutex = nullptr;
 TaskHandle_t s_task = nullptr;
 bool s_recording_started = false;
@@ -1122,7 +1124,17 @@ void ai_voice_add_message(bool is_user, const char *text)
     message.is_user = is_user;
     strlcpy(message.text, text, sizeof(message.text));
     message.timestamp_sec = millis() / 1000;
+    message.id = ++s_message_seq_id;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
+}
+
+uint32_t ai_voice_get_history_revision(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    const uint32_t rev = s_history_revision;
+    xSemaphoreGive(s_mutex);
+    return rev;
 }
 
 void ai_voice_clear_history(void)
@@ -1130,6 +1142,7 @@ void ai_voice_clear_history(void)
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     memset(s_history, 0, sizeof(s_history));
     s_message_count = 0;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
 }
 

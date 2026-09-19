@@ -121,7 +121,7 @@ bool WifiScanDriverAdapter::recover_radio(
     WiFi.scanDelete();
 
     portENTER_CRITICAL(&mux_);
-    logic_.recovery_finished(success);
+    logic_.recovery_finished(success, now_ms);
     portEXIT_CRITICAL(&mux_);
     return success;
 }

@@ -537,8 +537,14 @@ static void music_audio_task(void *pvParameters)
                         if (internal_stop_audio_locked())
                         {
                             const uint32_t generation = decoder_lifecycle.begin_start();
+                            if (generation == 0)
+                            {
+                                Serial.println("[MUSIC_AUDIO] Stream play FAILED: lifecycle busy");
+                                xSemaphoreGive(audio_mutex);
+                                break;
+                            }
                             audio = new(std::nothrow) Audio();
-                            if (generation && audio && audio->isInitialized())
+                            if (audio && audio->isInitialized())
                             {
                                 const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                      AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
@@ -564,7 +570,12 @@ static void music_audio_task(void *pvParameters)
                             }
                             if (!command_ok)
                             {
-                                if (audio) { delete audio; audio = nullptr; }
+                                if (audio)
+                                {
+                                    audio->shutdown(500);
+                                    delete audio;
+                                    audio = nullptr;
+                                }
                                 (void)decoder_lifecycle.finish_start(generation, false);
                             }
                         }

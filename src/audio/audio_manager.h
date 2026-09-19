@@ -185,6 +185,11 @@ bool audio_start_recording_async(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SE
 void audio_stop_recording(void);
 bool audio_stop_recording_async(uint32_t *request_id = nullptr);
 bool audio_cancel_recording_async(uint32_t *request_id = nullptr);
+/** Cancel only the recorder command generation owned by the caller. The
+ * cancellation is delivered through a non-lossy control mailbox, so a full
+ * normal command queue cannot allow a timed-out Start to run later. */
+bool audio_cancel_recording_request_async(uint32_t expected_request_id,
+                                          uint32_t *request_id = nullptr);
 /** Wait for the exact start/stop/cancel request to be applied by Audio_Task. */
 bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
                                       bool *operation_ok = nullptr);
@@ -211,6 +216,7 @@ uint32_t audio_get_recorded_duration_ms(void);
 uint32_t audio_get_playback_progress_ms(void);
 size_t audio_get_recorded_sample_count(void);
 uint32_t audio_get_recording_generation(void);
+uint32_t audio_get_active_recording_command(void);
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples);
 /** Copy newly captured PCM while a recording is active. The caller advances
  * offset by the returned count; total_available is a point-in-time snapshot. */
