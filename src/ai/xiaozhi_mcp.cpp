@@ -21,6 +21,9 @@ bool only_fields(JsonObjectConst object, const char *const *allowed, size_t allo
     return true;
 }
 
+bool no_arguments(JsonObjectConst args) { return args.isNull() || args.size() == 0; }
+}
+
 void XiaozhiMcpServer::make_error(uint32_t id, int code, const char *message, const char *session_id, String &out)
 {
     DynamicJsonDocument response(768);
@@ -53,9 +56,6 @@ void XiaozhiMcpServer::make_text_result(uint32_t id, const char *text, bool is_e
     result["isError"] = is_error;
     out = "";
     serializeJson(response, out);
-}
-
-bool no_arguments(JsonObjectConst args) { return args.isNull() || args.size() == 0; }
 }
 
 XiaozhiMcpServer::XiaozhiMcpServer() : next_cache_(0) {}
