@@ -48,6 +48,7 @@ volatile AIVoiceState s_state = AI_STATE_ERROR;
 ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
 int s_message_count = 0;
 uint32_t s_history_revision = 0;
+uint32_t s_clear_count = 0;
 uint32_t s_message_seq_id = 0;
 SemaphoreHandle_t s_mutex = nullptr;
 TaskHandle_t s_task = nullptr;
@@ -1143,7 +1144,16 @@ void ai_voice_clear_history(void)
     memset(s_history, 0, sizeof(s_history));
     s_message_count = 0;
     ++s_history_revision;
+    ++s_clear_count;
     xSemaphoreGive(s_mutex);
+}
+
+uint32_t ai_voice_get_clear_count(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    const uint32_t count = s_clear_count;
+    xSemaphoreGive(s_mutex);
+    return count;
 }
 
 bool ai_voice_play_tts(const char *text)

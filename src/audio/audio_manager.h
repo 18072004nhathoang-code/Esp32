@@ -192,7 +192,9 @@ bool audio_cancel_recording_request_async(uint32_t expected_request_id,
                                           uint32_t *request_id = nullptr);
 /** Wait for the exact start/stop/cancel request to be applied by Audio_Task. */
 bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
-                                      bool *operation_ok = nullptr);
+                                      bool *operation_ok = nullptr,
+                                      uint32_t *snapshot_generation = nullptr,
+                                      size_t *sample_count = nullptr);
 /** Stop a recording and discard it without scheduling a WAV export. */
 void audio_cancel_recording(void);
 bool audio_is_recording(void);
@@ -221,8 +223,9 @@ size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samp
 /** Copy newly captured PCM while a recording is active. The caller advances
  * offset by the returned count; total_available is a point-in-time snapshot. */
 size_t audio_copy_live_recording_samples(size_t offset, int16_t *dest,
-                                         size_t max_samples, size_t *total_available);
-bool audio_acquire_recording_lease(AudioRecordingLease *lease);
+                                         size_t max_samples, size_t *total_available,
+                                         uint32_t expected_command = 0);
+bool audio_acquire_recording_lease(AudioRecordingLease *lease, uint32_t expected_generation = 0);
 size_t audio_copy_recording_lease(const AudioRecordingLease *lease, size_t offset,
                                   int16_t *dest, size_t max_samples);
 void audio_release_recording_lease(AudioRecordingLease *lease);

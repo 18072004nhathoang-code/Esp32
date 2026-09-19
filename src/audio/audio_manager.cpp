@@ -108,6 +108,9 @@ struct AudioCommandAck
 {
     uint32_t generation;
     bool ok;
+    bool snapshot_valid;
+    uint32_t snapshot_generation;
+    size_t sample_count;
 };
 static AudioCommandAck recording_acks[8] = {};
 
@@ -166,7 +169,10 @@ static bool command_generation_current(uint32_t expected, uint32_t &generation)
     return current;
 }
 
-static void acknowledge_recording_command(uint32_t generation, bool ok)
+static void acknowledge_recording_command(uint32_t generation, bool ok,
+                                          bool snapshot_valid = false,
+                                          uint32_t snapshot_generation = 0,
+                                          size_t sample_count = 0)
 {
     if (generation == 0) return;
     portENTER_CRITICAL(&audio_command_mux);
@@ -174,6 +180,9 @@ static void acknowledge_recording_command(uint32_t generation, bool ok)
                                             (sizeof(recording_acks) / sizeof(recording_acks[0]))];
     slot.ok = ok;
     slot.generation = generation;
+    slot.snapshot_valid = snapshot_valid;
+    slot.snapshot_generation = snapshot_generation;
+    slot.sample_count = sample_count;
     portEXIT_CRITICAL(&audio_command_mux);
 }
 
@@ -315,7 +324,10 @@ static uint16_t get_le16(const uint8_t *p)
 }
 
 static void stop_playback_sync(void);
-static bool stop_recording_for_generation(uint32_t cancel_through, bool discard);
+static bool stop_recording_for_generation(uint32_t cancel_through, bool discard,
+                                          bool *out_snapshot_valid = nullptr,
+                                          uint32_t *out_snapshot_generation = nullptr,
+                                          size_t *out_sample_count = nullptr);
 static bool stop_playback_for_generation(uint32_t cancel_through);
 static void play_sound_effect_sync(SoundEffect fx);
 static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expected_generation);
@@ -342,8 +354,9 @@ static void free_snapshot(RecordingSnapshot *snapshot)
     delete snapshot;
 }
 
-static bool publish_recording_snapshot(size_t count)
+static bool publish_recording_snapshot(size_t count, uint32_t *created_generation = nullptr)
 {
+    if (created_generation) *created_generation = 0;
     RecordingSnapshot *fresh = nullptr;
     if (count > 0)
     {
@@ -377,7 +390,7 @@ static bool publish_recording_snapshot(size_t count)
         {
             recording_state = RECORD_IDLE;
             active_recording_command_generation = 0;
-            recording_file_state = AUDIO_FILE_ERROR;
+            recording_file_state = (count > 0) ? AUDIO_FILE_ERROR : AUDIO_FILE_NONE;
             xSemaphoreGive(audio_state_mutex);
         }
         return false;
@@ -397,7 +410,11 @@ static bool publish_recording_snapshot(size_t count)
         if (old->refs == 0) discard = old;
     }
     current_recording = fresh;
-    if (fresh) fresh->generation = ++recording_generation;
+    if (fresh)
+    {
+        fresh->generation = ++recording_generation;
+        if (created_generation) *created_generation = fresh->generation;
+    }
     recording_state = RECORD_IDLE;
     active_recording_command_generation = 0;
     recording_file_state = AUDIO_FILE_NONE;
@@ -1291,10 +1308,15 @@ static void audio_background_task(void *pvParameters)
         {
             if (controls.recording_pending)
             {
+                bool snap_valid = false;
+                uint32_t snap_gen = 0;
+                size_t snap_samples = 0;
                 const bool applied = stop_recording_for_generation(
                     controls.recording_cancel_through,
-                    controls.recording_type == RECORD_CONTROL_CANCEL);
-                acknowledge_recording_command(controls.recording_request_id, applied);
+                    controls.recording_type == RECORD_CONTROL_CANCEL,
+                    &snap_valid, &snap_gen, &snap_samples);
+                acknowledge_recording_command(controls.recording_request_id, applied,
+                                              snap_valid, snap_gen, snap_samples);
             }
             if (controls.playback_stop_pending)
                 (void)stop_playback_for_generation(controls.playback_cancel_through);
@@ -1919,8 +1941,15 @@ bool audio_start_recording_async(uint32_t max_duration_sec, uint32_t *request_id
     return queued;
 }
 
-static bool stop_recording_for_generation(uint32_t cancel_through, bool discard)
+static bool stop_recording_for_generation(uint32_t cancel_through, bool discard,
+                                          bool *out_snapshot_valid,
+                                          uint32_t *out_snapshot_generation,
+                                          size_t *out_sample_count)
 {
+    if (out_snapshot_valid) *out_snapshot_valid = false;
+    if (out_snapshot_generation) *out_snapshot_generation = 0;
+    if (out_sample_count) *out_sample_count = 0;
+
     if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE)
         return false;
     const bool generation_matches = audio_control_applies_to_generation(
@@ -1951,8 +1980,15 @@ static bool stop_recording_for_generation(uint32_t cancel_through, bool discard)
     {
         Serial.printf("[AUDIO] Đã dừng ghi âm. Thu được %u mẫu (%.2f giây)\n",
                       sample_count, (float)sample_count / AUDIO_SAMPLE_RATE);
-        const bool snapshot_ok = publish_recording_snapshot(sample_count);
-        if (snapshot_ok) schedule_recording_export();
+        uint32_t created_gen = 0;
+        const bool snapshot_ok = publish_recording_snapshot(sample_count, &created_gen);
+        if (snapshot_ok)
+        {
+            schedule_recording_export();
+            if (out_snapshot_valid) *out_snapshot_valid = true;
+            if (out_snapshot_generation) *out_snapshot_generation = created_gen;
+            if (out_sample_count) *out_sample_count = sample_count;
+        }
         audio_release_ownership(AUDIO_OWNER_RECORDER);
     }
     else if (was_recording)
@@ -2038,7 +2074,9 @@ void audio_cancel_recording(void)
 }
 
 bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
-                                      bool *operation_ok)
+                                      bool *operation_ok,
+                                      uint32_t *snapshot_generation,
+                                      size_t *sample_count)
 {
     if (request_id == 0) return false;
     const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
@@ -2046,15 +2084,23 @@ bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
     {
         bool found = false;
         bool ok = false;
+        bool snap_valid = false;
+        uint32_t snap_gen = 0;
+        size_t samples = 0;
         portENTER_CRITICAL(&audio_command_mux);
         const AudioCommandAck &slot = recording_acks[request_id %
             (sizeof(recording_acks) / sizeof(recording_acks[0]))];
         found = slot.generation == request_id;
         ok = slot.ok;
+        snap_valid = slot.snapshot_valid;
+        snap_gen = slot.snapshot_generation;
+        samples = slot.sample_count;
         portEXIT_CRITICAL(&audio_command_mux);
         if (found)
         {
             if (operation_ok) *operation_ok = ok;
+            if (snapshot_generation) *snapshot_generation = snap_valid ? snap_gen : 0;
+            if (sample_count) *sample_count = snap_valid ? samples : 0;
             return true;
         }
         if (timeout_ms == 0) return false;
@@ -2309,12 +2355,16 @@ size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samp
 }
 
 size_t audio_copy_live_recording_samples(size_t offset, int16_t *dest,
-                                         size_t max_samples, size_t *total_available)
+                                         size_t max_samples, size_t *total_available,
+                                         uint32_t expected_command)
 {
     if (total_available) *total_available = 0;
     if (!dest || max_samples == 0 || !audio_state_mutex ||
         xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
-    const size_t available = recording_state == RECORD_ACTIVE ? recorded_samples_count : 0;
+    const bool command_matches = (expected_command == 0 ||
+                                  active_recording_command_generation == expected_command);
+    const size_t available = (recording_state == RECORD_ACTIVE && command_matches)
+        ? recorded_samples_count : 0;
     if (total_available) *total_available = available;
     size_t count = offset < available ? available - offset : 0;
     if (count > max_samples) count = max_samples;
@@ -2324,12 +2374,13 @@ size_t audio_copy_live_recording_samples(size_t offset, int16_t *dest,
     return count;
 }
 
-bool audio_acquire_recording_lease(AudioRecordingLease *lease)
+bool audio_acquire_recording_lease(AudioRecordingLease *lease, uint32_t expected_generation)
 {
     if (!lease || !audio_state_mutex ||
         xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
     RecordingSnapshot *snapshot = current_recording;
-    if (!snapshot || !snapshot->samples || snapshot->count == 0)
+    if (!snapshot || !snapshot->samples || snapshot->count == 0 ||
+        (expected_generation != 0 && snapshot->generation != expected_generation))
     {
         xSemaphoreGive(audio_state_mutex);
         *lease = {};

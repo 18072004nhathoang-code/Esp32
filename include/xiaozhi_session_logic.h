@@ -71,4 +71,19 @@ inline size_t bounded_frame_budget(size_t available_samples,
     const size_t frames = (available_samples + frame_samples - 1U) / frame_samples;
     return frames < max_frames ? frames : max_frames;
 }
+
+inline bool snapshot_lease_matches(uint32_t expected_gen, uint32_t snapshot_gen)
+{
+    return expected_gen == 0 || (snapshot_gen != 0 && snapshot_gen == expected_gen);
+}
+
+inline bool live_capture_matches(uint32_t expected_cmd, uint32_t active_cmd)
+{
+    return expected_cmd == 0 || (active_cmd != 0 && active_cmd == expected_cmd);
+}
+
+inline bool snapshot_flush_needed(uint32_t snapshot_gen, size_t sample_count)
+{
+    return snapshot_gen != 0 && sample_count > 0;
+}
 }

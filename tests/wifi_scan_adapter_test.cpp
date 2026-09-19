@@ -216,6 +216,7 @@ static void test_recovery_failure_bounded_retry()
     driver.logic.recovery_finished(true, 370);
     assert(driver.logic.phase == WifiScanDriverPhase::IDLE);
     assert(driver.logic.take_drained_event());
+    assert(!driver.logic.retry_failed_recovery(380));
 
     // Subsequent scan can now be started normally
     driver.start_error = 0;

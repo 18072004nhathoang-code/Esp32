@@ -81,6 +81,7 @@ void ai_voice_add_message(bool is_user, const char *text);
  * @brief Xóa toàn bộ lịch sử trò chuyện
  */
 void ai_voice_clear_history(void);
+uint32_t ai_voice_get_clear_count(void);
 
 /**
  * @brief Phát âm thanh phản hồi từ văn bản qua TTS ra Loa ngoài

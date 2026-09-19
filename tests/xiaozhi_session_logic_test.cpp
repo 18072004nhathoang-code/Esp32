@@ -34,5 +34,45 @@ int main()
     assert(!flush_ready_for_listen_stop(true, 1, false));
     assert(!flush_ready_for_listen_stop(true, 0, true));
     assert(flush_ready_for_listen_stop(true, 0, false));
+
+    // Snapshot generation isolation: lease matches expected generation strictly
+    assert(snapshot_lease_matches(0, 5));
+    assert(snapshot_lease_matches(5, 5));
+    assert(!snapshot_lease_matches(5, 4));
+    assert(!snapshot_lease_matches(5, 0));
+
+    // Live capture matches expected recording command generation
+    assert(live_capture_matches(0, 9));
+    assert(live_capture_matches(9, 9));
+    assert(!live_capture_matches(9, 8));
+    assert(!live_capture_matches(9, 0));
+
+    // Empty recording must not initiate audio flush
+    assert(!snapshot_flush_needed(0, 0));
+    assert(!snapshot_flush_needed(12, 0));
+    assert(!snapshot_flush_needed(0, 1024));
+    assert(snapshot_flush_needed(12, 1024));
+
+    // 500-message chat queue simulation (capping bubbles strictly at 32)
+    constexpr size_t MAX_BUBBLES = 32;
+    int rendered_bubbles[MAX_BUBBLES] = {0};
+    size_t bubble_count = 0;
+    for (int msg_id = 1; msg_id <= 500; ++msg_id)
+    {
+        if (bubble_count >= MAX_BUBBLES)
+        {
+            // Prune oldest (index 0)
+            for (size_t i = 1; i < MAX_BUBBLES; ++i)
+            {
+                rendered_bubbles[i - 1] = rendered_bubbles[i];
+            }
+            --bubble_count;
+        }
+        rendered_bubbles[bubble_count++] = msg_id;
+    }
+    assert(bubble_count == MAX_BUBBLES);
+    assert(rendered_bubbles[0] == (500 - 32 + 1));
+    assert(rendered_bubbles[MAX_BUBBLES - 1] == 500);
+
     return 0;
 }

@@ -21,6 +21,7 @@ public:
     bool take_drained_event();
     bool drain_expired(uint32_t now_ms, uint32_t timeout_ms);
     bool recover_radio(uint32_t now_ms, esp_err_t &stop_error, esp_err_t &start_error);
+    bool retry_recovery(uint32_t now_ms, esp_err_t &stop_error, esp_err_t &start_error);
     void release_results(uint32_t request_id);
     WifiScanDriverPhase phase();
     uint32_t stale_event_count();

@@ -115,8 +115,57 @@ bool WifiScanDriverAdapter::recover_radio(
     stop_error = esp_wifi_stop();
     start_error = (stop_error == ESP_OK || stop_error == ESP_ERR_WIFI_NOT_STARTED)
         ? esp_wifi_start() : ESP_ERR_INVALID_STATE;
+    bool radio_ready = false;
+    if (start_error == ESP_OK)
+    {
+        wifi_mode_t current_mode = WIFI_MODE_NULL;
+        const esp_err_t mode_err = esp_wifi_get_mode(&current_mode);
+        radio_ready = (mode_err == ESP_OK && (current_mode == WIFI_MODE_STA || current_mode == WIFI_MODE_APSTA));
+        if (!radio_ready && WiFi.mode(WIFI_STA))
+        {
+            radio_ready = (esp_wifi_get_mode(&current_mode) == ESP_OK && current_mode == WIFI_MODE_STA);
+        }
+    }
     const bool success = (stop_error == ESP_OK || stop_error == ESP_ERR_WIFI_NOT_STARTED) &&
-                         start_error == ESP_OK;
+                         start_error == ESP_OK && radio_ready;
+    if (success) WiFi.setAutoReconnect(false);
+    WiFi.scanDelete();
+
+    portENTER_CRITICAL(&mux_);
+    logic_.recovery_finished(success, now_ms);
+    portEXIT_CRITICAL(&mux_);
+    return success;
+}
+
+bool WifiScanDriverAdapter::retry_recovery(
+    uint32_t now_ms, esp_err_t &stop_error, esp_err_t &start_error)
+{
+    portENTER_CRITICAL(&mux_);
+    const bool retrying = logic_.retry_failed_recovery(now_ms);
+    portEXIT_CRITICAL(&mux_);
+    if (!retrying)
+    {
+        stop_error = ESP_ERR_INVALID_STATE;
+        start_error = ESP_ERR_INVALID_STATE;
+        return false;
+    }
+
+    stop_error = esp_wifi_stop();
+    start_error = (stop_error == ESP_OK || stop_error == ESP_ERR_WIFI_NOT_STARTED)
+        ? esp_wifi_start() : ESP_ERR_INVALID_STATE;
+    bool radio_ready = false;
+    if (start_error == ESP_OK)
+    {
+        wifi_mode_t current_mode = WIFI_MODE_NULL;
+        const esp_err_t mode_err = esp_wifi_get_mode(&current_mode);
+        radio_ready = (mode_err == ESP_OK && (current_mode == WIFI_MODE_STA || current_mode == WIFI_MODE_APSTA));
+        if (!radio_ready && WiFi.mode(WIFI_STA))
+        {
+            radio_ready = (esp_wifi_get_mode(&current_mode) == ESP_OK && current_mode == WIFI_MODE_STA);
+        }
+    }
+    const bool success = (stop_error == ESP_OK || stop_error == ESP_ERR_WIFI_NOT_STARTED) &&
+                         start_error == ESP_OK && radio_ready;
     if (success) WiFi.setAutoReconnect(false);
     WiFi.scanDelete();
 
