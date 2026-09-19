@@ -240,22 +240,35 @@ private:
 class DuplicateRequestTracker
 {
 public:
-    DuplicateRequestTracker() : next_(0) { memset(ids_, 0, sizeof(ids_)); }
+    DuplicateRequestTracker() : next_(0)
+    {
+        memset(valid_, 0, sizeof(valid_));
+        memset(ids_, 0, sizeof(ids_));
+    }
     bool seen(uint32_t id) const
     {
-        if (id == 0) return false;
-        for (size_t i = 0; i < kCapacity; ++i) if (ids_[i] == id) return true;
+        for (size_t i = 0; i < kCapacity; ++i)
+        {
+            if (valid_[i] && ids_[i] == id) return true;
+        }
         return false;
     }
     bool remember(uint32_t id)
     {
-        if (id == 0 || seen(id)) return false;
+        if (seen(id)) return false;
+        valid_[next_] = true;
         ids_[next_] = id;
         next_ = (next_ + 1) % kCapacity;
         return true;
     }
+    void reset()
+    {
+        memset(valid_, 0, sizeof(valid_));
+        next_ = 0;
+    }
 private:
     static const size_t kCapacity = 8;
+    bool valid_[kCapacity];
     uint32_t ids_[kCapacity];
     size_t next_;
 };

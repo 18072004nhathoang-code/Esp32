@@ -32,8 +32,9 @@ bool parse_wss_url(const char *url, String &host, uint16_t &port, String &path)
 
 XiaozhiTransport::XiaozhiTransport()
     : websocket_(nullptr), uplink_queue_(nullptr), inbound_queue_(nullptr), fragment_storage_(nullptr),
-      fragment_assembler_(nullptr), connected_(false), generation_(0),
-      dropped_uplink_(0), dropped_downlink_(0) {}
+      fragment_assembler_(nullptr), connected_(false), connection_epoch_(0), generation_(0),
+      dropped_uplink_(0), dropped_downlink_(0), frames_sent_(0), bytes_sent_(0),
+      last_audio_sent_ms_(0) {}
 
 XiaozhiTransport::~XiaozhiTransport()
 {
@@ -90,6 +91,7 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
     generation_ = generation;
     dropped_uplink_ = 0;
     dropped_downlink_ = 0;
+    resetAudioCounters();
     String authorization = config.token;
     if (authorization.indexOf(' ') < 0) authorization = "Bearer " + authorization;
     uri_ = config.url;
@@ -127,7 +129,8 @@ void XiaozhiTransport::loop()
     AudioPacket packet = {};
     if (xQueuePeek(uplink_queue_, &packet, 0) == pdTRUE)
     {
-        if (packet.generation != generation())
+        const uint32_t active_gen = generation();
+        if (packet.generation != active_gen || active_gen == 0)
         {
             xQueueReceive(uplink_queue_, &packet, 0);
             in_flight_started_ms_ = 0;
@@ -145,6 +148,18 @@ void XiaozhiTransport::loop()
         {
             xQueueReceive(uplink_queue_, &packet, 0);
             in_flight_started_ms_ = 0;
+            frames_sent_.fetch_add(1, std::memory_order_relaxed);
+            bytes_sent_.fetch_add(packet.size, std::memory_order_relaxed);
+            last_audio_sent_ms_.store(now == 0 ? 1 : now, std::memory_order_release);
+        }
+        else if (sent > 0 && sent < packet.size)
+        {
+            log_e("Xiaozhi: Partial send detected (%d < %u), stream framing corrupted, closing",
+                  sent, static_cast<unsigned>(packet.size));
+            xQueueReceive(uplink_queue_, &packet, 0);
+            in_flight_started_ms_ = 0;
+            dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
+            close();
         }
         else
         {
@@ -176,6 +191,7 @@ void XiaozhiTransport::close()
     if (fragment_assembler_) fragment_assembler_->reset();
     generation_ = 0;
     in_flight_started_ms_ = 0;
+    resetAudioCounters();
 }
 
 void XiaozhiTransport::purgeUplink()
@@ -184,17 +200,37 @@ void XiaozhiTransport::purgeUplink()
     in_flight_started_ms_ = 0;
 }
 
-bool XiaozhiTransport::setGeneration(uint32_t generation)
+void XiaozhiTransport::detachTurn()
+{
+    purgeUplink();
+    clearInbound();
+    if (fragment_assembler_) fragment_assembler_->reset();
+    generation_.store(0, std::memory_order_release);
+    in_flight_started_ms_ = 0;
+}
+
+bool XiaozhiTransport::setTurnGeneration(uint32_t generation)
 {
     if (!connected() || !websocket_ || generation == 0) return false;
     purgeUplink();
     clearInbound();
     if (fragment_assembler_) fragment_assembler_->reset();
-    generation_ = generation;
+    generation_.store(generation, std::memory_order_release);
     dropped_uplink_ = 0;
     dropped_downlink_ = 0;
     in_flight_started_ms_ = 0;
+    resetAudioCounters();
     return true;
+}
+
+bool XiaozhiTransport::setGeneration(uint32_t generation)
+{
+    if (generation == 0)
+    {
+        detachTurn();
+        return true;
+    }
+    return setTurnGeneration(generation);
 }
 
 bool XiaozhiTransport::sendText(const char *text)
@@ -240,6 +276,12 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
 {
     if (!inbound_queue_ || !data || size == 0 || size > xiaozhi::kMaxJsonMessageBytes)
         return false;
+    const uint32_t gen = generation();
+    if (gen == 0)
+    {
+        // Detached or idle between turns; drop late callbacks to prevent polluting future turns
+        return false;
+    }
     const size_t allocation = sizeof(InboundMessage) + size;
     InboundMessage *message = static_cast<InboundMessage *>(heap_caps_malloc(
         allocation, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -250,7 +292,7 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
         return false;
     }
     message->kind = kind;
-    message->generation = generation();
+    message->generation = gen;
     message->size = size;
     memcpy(message->data, data, size);
     if (xQueueSend(inbound_queue_, &message, 0) != pdTRUE)
@@ -298,6 +340,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
 {
     if (event_id == WEBSOCKET_EVENT_CONNECTED)
     {
+        connection_epoch_.fetch_add(1, std::memory_order_relaxed);
         connected_.store(true, std::memory_order_release);
         return;
     }

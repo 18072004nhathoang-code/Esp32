@@ -32,11 +32,25 @@ public:
     uint32_t droppedDownlink() const { return dropped_downlink_.load(std::memory_order_relaxed); }
     size_t uplinkPending() const;
     size_t uplinkCapacity() const { return 8; }
-    bool uplinkIdle() const { return uplinkPending() == 0; }
+    bool inFlight() const { return in_flight_started_ms_ != 0; }
+    bool uplinkIdle() const { return uplinkPending() == 0 && in_flight_started_ms_ == 0; }
     size_t inboundPending() const;
     bool inboundIdle() const { return inboundPending() == 0; }
     bool audioQueueHasCapacity(uint32_t generation) const;
     bool setGeneration(uint32_t generation);
+    bool setTurnGeneration(uint32_t generation);
+    void detachTurn();
+    uint32_t connectionEpoch() const { return connection_epoch_.load(std::memory_order_acquire); }
+    uint32_t turnGeneration() const { return generation_.load(std::memory_order_acquire); }
+    uint32_t framesSent() const { return frames_sent_.load(std::memory_order_relaxed); }
+    uint32_t bytesSent() const { return bytes_sent_.load(std::memory_order_relaxed); }
+    uint32_t lastAudioSentMs() const { return last_audio_sent_ms_.load(std::memory_order_acquire); }
+    void resetAudioCounters()
+    {
+        frames_sent_.store(0, std::memory_order_relaxed);
+        bytes_sent_.store(0, std::memory_order_relaxed);
+        last_audio_sent_ms_.store(0, std::memory_order_relaxed);
+    }
 
 private:
     struct AudioPacket
@@ -61,9 +75,13 @@ private:
     uint8_t *fragment_storage_;
     xiaozhi::FragmentAssembler *fragment_assembler_;
     std::atomic<bool> connected_;
+    std::atomic<uint32_t> connection_epoch_;
     std::atomic<uint32_t> generation_;
     std::atomic<uint32_t> dropped_uplink_;
     std::atomic<uint32_t> dropped_downlink_;
+    std::atomic<uint32_t> frames_sent_;
+    std::atomic<uint32_t> bytes_sent_;
+    std::atomic<uint32_t> last_audio_sent_ms_;
     uint32_t in_flight_started_ms_ = 0;
 
     static void eventHandler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);

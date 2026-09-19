@@ -59,6 +59,14 @@ inline bool recorder_control_targets(uint32_t expected_request,
 
 inline bool flush_ready_for_listen_stop(bool capture_complete,
                                         size_t queued_audio,
+                                        bool in_flight,
+                                        bool transport_failed)
+{
+    return capture_complete && queued_audio == 0 && !in_flight && !transport_failed;
+}
+
+inline bool flush_ready_for_listen_stop(bool capture_complete,
+                                        size_t queued_audio,
                                         bool transport_failed)
 {
     return capture_complete && queued_audio == 0 && !transport_failed;
@@ -102,13 +110,24 @@ enum class SessionPhase : uint8_t
 struct PhaseDeadlines
 {
     uint32_t connect_total_budget_ms = 15000;
+    uint32_t warm_connect_timeout_ms = 2500;
     uint32_t listening_max_ms = 30000;
     uint32_t flushing_timeout_ms = 5000;
-    uint32_t wait_response_timeout_ms = 20000;
+    uint32_t wait_stt_timeout_ms = 15000;
+    uint32_t wait_llm_timeout_ms = 20000;
+    uint32_t wait_first_audio_timeout_ms = 8000;
+    uint32_t wait_response_max_total_ms = 45000;
     uint32_t speaking_stall_timeout_ms = 8000;
     uint32_t speaking_max_total_ms = 180000;
     uint32_t cleanup_timeout_ms = 5000;
     uint32_t session_absolute_max_ms = 240000;
+};
+
+enum class WaitingStage : uint8_t
+{
+    WAITING_STT = 0,
+    WAITING_LLM_OR_MCP,
+    WAITING_FIRST_AUDIO
 };
 
 struct SessionTiming
@@ -140,9 +159,14 @@ public:
     void reset()
     {
         phase_ = SessionPhase::IDLE;
+        waiting_stage_ = WaitingStage::WAITING_STT;
         session_started_ms_ = 0;
         phase_started_ms_ = 0;
+        stage_started_ms_ = 0;
         last_progress_ms_ = 0;
+        stt_received_ = false;
+        tts_started_ = false;
+        first_pcm_received_ = false;
     }
 
     void start_connecting(uint32_t now_ms)
@@ -150,6 +174,7 @@ public:
         phase_ = SessionPhase::CONNECTING;
         session_started_ms_ = now_ms;
         phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
         last_progress_ms_ = now_ms;
     }
 
@@ -157,6 +182,7 @@ public:
     {
         phase_ = SessionPhase::LISTENING;
         phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
         last_progress_ms_ = now_ms;
     }
 
@@ -164,27 +190,68 @@ public:
     {
         phase_ = SessionPhase::FLUSHING;
         phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
         last_progress_ms_ = now_ms;
     }
 
     void start_waiting_response(uint32_t now_ms)
     {
         phase_ = SessionPhase::WAITING_RESPONSE;
+        waiting_stage_ = WaitingStage::WAITING_STT;
         phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+        stt_received_ = false;
+        tts_started_ = false;
+        first_pcm_received_ = false;
+    }
+
+    void on_stt_received(uint32_t now_ms)
+    {
+        if (phase_ == SessionPhase::WAITING_RESPONSE)
+        {
+            stt_received_ = true;
+            waiting_stage_ = WaitingStage::WAITING_LLM_OR_MCP;
+            stage_started_ms_ = now_ms;
+            last_progress_ms_ = now_ms;
+        }
+    }
+
+    void on_mcp_progress(uint32_t now_ms)
+    {
+        if (phase_ == SessionPhase::WAITING_RESPONSE)
+        {
+            stage_started_ms_ = now_ms;
+            last_progress_ms_ = now_ms;
+        }
+    }
+
+    void on_tts_start(uint32_t now_ms)
+    {
+        tts_started_ = true;
+        waiting_stage_ = WaitingStage::WAITING_FIRST_AUDIO;
+        phase_ = SessionPhase::SPEAKING;
+        phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void on_first_pcm(uint32_t now_ms)
+    {
+        first_pcm_received_ = true;
         last_progress_ms_ = now_ms;
     }
 
     void start_speaking(uint32_t now_ms)
     {
-        phase_ = SessionPhase::SPEAKING;
-        phase_started_ms_ = now_ms;
-        last_progress_ms_ = now_ms;
+        on_tts_start(now_ms);
     }
 
     void start_cleanup(uint32_t now_ms)
     {
         phase_ = SessionPhase::CLEANUP;
         phase_started_ms_ = now_ms;
+        stage_started_ms_ = now_ms;
         last_progress_ms_ = now_ms;
     }
 
@@ -194,7 +261,12 @@ public:
     }
 
     SessionPhase phase() const { return phase_; }
+    WaitingStage waiting_stage() const { return waiting_stage_; }
+    bool has_stt() const { return stt_received_; }
+    bool has_tts() const { return tts_started_; }
+    bool has_first_pcm() const { return first_pcm_received_; }
     uint32_t phase_started_ms() const { return phase_started_ms_; }
+    uint32_t stage_started_ms() const { return stage_started_ms_; }
     uint32_t last_progress_ms() const { return last_progress_ms_; }
     uint32_t session_started_ms() const { return session_started_ms_; }
 
@@ -204,6 +276,9 @@ public:
         CONNECT_TIMEOUT,
         LISTENING_TIMEOUT,
         FLUSH_TIMEOUT,
+        WAIT_STT_TIMEOUT,
+        WAIT_LLM_TIMEOUT,
+        WAIT_FIRST_AUDIO_TIMEOUT,
         WAIT_RESPONSE_TIMEOUT,
         SPEAKING_STALLED,
         SPEAKING_MAX_EXCEEDED,
@@ -236,10 +311,30 @@ public:
                     return TimeoutReason::FLUSH_TIMEOUT;
                 break;
             case SessionPhase::WAITING_RESPONSE:
-                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.wait_response_timeout_ms))
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.wait_response_max_total_ms))
                     return TimeoutReason::WAIT_RESPONSE_TIMEOUT;
+                if (waiting_stage_ == WaitingStage::WAITING_STT)
+                {
+                    if (static_cast<int32_t>(now_ms - stage_started_ms_) >= static_cast<int32_t>(deadlines.wait_stt_timeout_ms))
+                        return TimeoutReason::WAIT_STT_TIMEOUT;
+                }
+                else if (waiting_stage_ == WaitingStage::WAITING_LLM_OR_MCP)
+                {
+                    if (static_cast<int32_t>(now_ms - stage_started_ms_) >= static_cast<int32_t>(deadlines.wait_llm_timeout_ms))
+                        return TimeoutReason::WAIT_LLM_TIMEOUT;
+                }
+                else if (waiting_stage_ == WaitingStage::WAITING_FIRST_AUDIO)
+                {
+                    if (static_cast<int32_t>(now_ms - stage_started_ms_) >= static_cast<int32_t>(deadlines.wait_first_audio_timeout_ms))
+                        return TimeoutReason::WAIT_FIRST_AUDIO_TIMEOUT;
+                }
                 break;
             case SessionPhase::SPEAKING:
+                if (!first_pcm_received_ &&
+                    static_cast<int32_t>(now_ms - stage_started_ms_) >= static_cast<int32_t>(deadlines.wait_first_audio_timeout_ms))
+                {
+                    return TimeoutReason::WAIT_FIRST_AUDIO_TIMEOUT;
+                }
                 if (static_cast<int32_t>(now_ms - last_progress_ms_) >= static_cast<int32_t>(deadlines.speaking_stall_timeout_ms))
                     return TimeoutReason::SPEAKING_STALLED;
                 if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.speaking_max_total_ms))
@@ -262,7 +357,10 @@ public:
             case TimeoutReason::CONNECT_TIMEOUT: return "Quá thời gian kết nối/xác thực WSS Xiaozhi";
             case TimeoutReason::LISTENING_TIMEOUT: return "Quá thời gian thu âm giọng nói";
             case TimeoutReason::FLUSH_TIMEOUT: return "Quá thời gian gửi dữ liệu âm thanh";
-            case TimeoutReason::WAIT_RESPONSE_TIMEOUT: return "Máy chủ Xiaozhi không phản hồi câu trả lời";
+            case TimeoutReason::WAIT_STT_TIMEOUT: return "Máy chủ Xiaozhi không phản hồi nhận dạng giọng nói (STT)";
+            case TimeoutReason::WAIT_LLM_TIMEOUT: return "Máy chủ Xiaozhi không phản hồi câu trả lời (LLM/MCP)";
+            case TimeoutReason::WAIT_FIRST_AUDIO_TIMEOUT: return "Quá thời gian chờ luồng âm thanh phản hồi từ máy chủ";
+            case TimeoutReason::WAIT_RESPONSE_TIMEOUT: return "Quá thời gian chờ toàn bộ câu trả lời từ máy chủ";
             case TimeoutReason::SPEAKING_STALLED: return "Phát âm thanh Xiaozhi bị gián đoạn (mất luồng)";
             case TimeoutReason::SPEAKING_MAX_EXCEEDED: return "Thời lượng phát câu trả lời vượt mức tối đa";
             case TimeoutReason::CLEANUP_TIMEOUT: return "Quá thời gian giải phóng tài nguyên";
@@ -273,9 +371,14 @@ public:
 
 private:
     SessionPhase phase_ = SessionPhase::IDLE;
+    WaitingStage waiting_stage_ = WaitingStage::WAITING_STT;
     uint32_t session_started_ms_ = 0;
     uint32_t phase_started_ms_ = 0;
+    uint32_t stage_started_ms_ = 0;
     uint32_t last_progress_ms_ = 0;
+    bool stt_received_ = false;
+    bool tts_started_ = false;
+    bool first_pcm_received_ = false;
 };
 
 inline bool session_id_matches_contract(const char *incoming_session,

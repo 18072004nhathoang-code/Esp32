@@ -8,6 +8,7 @@
 struct McpAsyncJob
 {
     uint32_t id;
+    uint32_t generation;
     char session_id[96];
     xiaozhi::McpTool tool;
     AiMusicAction music_action;
@@ -16,6 +17,7 @@ struct McpAsyncJob
 struct McpAsyncResult
 {
     uint32_t id;
+    uint32_t generation;
     char session_id[96];
     bool is_error;
     char text[128];
@@ -33,7 +35,13 @@ class XiaozhiMcpServer
 public:
     XiaozhiMcpServer();
     McpDispatchResult dispatch(JsonObjectConst payload, const char *session_id,
+                               uint32_t generation,
                                String &outer_response, McpAsyncJob &async_job);
+    McpDispatchResult dispatch(JsonObjectConst payload, const char *session_id,
+                               String &outer_response, McpAsyncJob &async_job)
+    {
+        return dispatch(payload, session_id, 0, outer_response, async_job);
+    }
     bool handle(JsonObjectConst payload, const char *session_id, String &outer_response);
     void resetSession();
 
@@ -47,6 +55,7 @@ public:
 private:
     struct CachedResponse
     {
+        bool valid;
         uint32_t id;
         String json;
     };

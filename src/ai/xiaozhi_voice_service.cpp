@@ -25,6 +25,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <cmath>
 
 #ifndef XIAOZHI_WSS_CA_CERT
 #define XIAOZHI_WSS_CA_CERT ""
@@ -70,6 +71,14 @@ static xiaozhi::SessionPhaseTracker s_phase_tracker;
 static xiaozhi::PhaseDeadlines s_deadlines;
 static xiaozhi::SessionTiming s_timing;
 static uint32_t s_total_frames_sent = 0;
+static uint32_t s_mic_total_samples = 0;
+static int16_t s_mic_peak = 0;
+static uint64_t s_mic_sum_sq = 0;
+static uint32_t s_frames_encoded = 0;
+static uint32_t s_frames_enqueued = 0;
+#ifndef XIAOZHI_ENABLE_WARM_REUSE
+#define XIAOZHI_ENABLE_WARM_REUSE 1
+#endif
 static bool s_warm_connected = false;
 static uint32_t s_idle_since_ms = 0;
 static bool s_tts_stopping = false;
@@ -159,6 +168,11 @@ void log_latency_metrics(uint32_t generation)
           s_timing.t_done_ms >= s_timing.t_ptt_ms ? static_cast<unsigned>(s_timing.t_done_ms - s_timing.t_ptt_ms) : 0);
 }
 
+bool current_generation(uint32_t generation);
+bool cancellation_requested(uint32_t generation);
+bool active_generation_matches(uint32_t generation);
+uint32_t active_generation_snapshot();
+
 void mcp_worker(void *)
 {
     McpAsyncJob job = {};
@@ -166,8 +180,15 @@ void mcp_worker(void *)
     {
         if (s_mcp_jobs && xQueueReceive(s_mcp_jobs, &job, portMAX_DELAY) == pdTRUE)
         {
+            if (!current_generation(job.generation) || cancellation_requested(job.generation))
+            {
+                log_w("Xiaozhi MCP worker: Skipping stale/cancelled job id=%u gen=%u",
+                      static_cast<unsigned>(job.id), static_cast<unsigned>(job.generation));
+                continue;
+            }
             McpAsyncResult res = {};
             res.id = job.id;
+            res.generation = job.generation;
             strlcpy(res.session_id, job.session_id, sizeof(res.session_id));
             if (job.tool == xiaozhi::McpTool::MUSIC_PLAY || job.tool == xiaozhi::McpTool::MUSIC_PAUSE ||
                 job.tool == xiaozhi::McpTool::MUSIC_RESUME || job.tool == xiaozhi::McpTool::MUSIC_STOP ||
@@ -207,7 +228,11 @@ void mcp_worker(void *)
             }
             if (s_mcp_results)
             {
-                (void)xQueueSend(s_mcp_results, &res, pdMS_TO_TICKS(100));
+                if (xQueueSend(s_mcp_results, &res, pdMS_TO_TICKS(1000)) != pdTRUE)
+                {
+                    log_e("Xiaozhi MCP worker: Failed to send MCP result id=%u gen=%u (queue full)",
+                          static_cast<unsigned>(res.id), static_cast<unsigned>(res.generation));
+                }
             }
         }
     }
@@ -446,13 +471,14 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
         s_cleanup_retries = 0;
         s_phase_tracker.start_cleanup(millis());
         s_timing.t_done_ms = millis();
+        log_i("Xiaozhi: [DONE] gen=%u", static_cast<unsigned>(generation));
         log_latency_metrics(generation);
         s_tts_stopping = false;
         stop_output(drain_output);
         release_flush_lease();
+#if XIAOZHI_ENABLE_WARM_REUSE
         if (!preserve_error && !cancellation_requested(generation) && s_transport.connected())
         {
-            s_transport.purgeUplink();
             s_transport.setGeneration(0);
             s_warm_connected = true;
             s_idle_since_ms = millis();
@@ -463,6 +489,11 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
             s_warm_connected = false;
             s_idle_since_ms = 0;
         }
+#else
+        s_transport.close();
+        s_warm_connected = false;
+        s_idle_since_ms = 0;
+#endif
         s_codec.end();
         s_mcp.resetSession();
         s_server_hello = false;
@@ -567,11 +598,28 @@ void handle_music_handoff(const char *tool_name)
 
 bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
 {
-    if (!current_generation(generation) || !data || size == 0 ||
-        size > xiaozhi::kMaxJsonMessageBytes) return false;
+    if (!current_generation(generation) || !data || size == 0) return false;
+    if (size > xiaozhi::kMaxJsonMessageBytes)
+    {
+        log_w("Xiaozhi: JSON text message exceeds capacity (%u > %u)",
+              static_cast<unsigned>(size), static_cast<unsigned>(xiaozhi::kMaxJsonMessageBytes));
+        return false;
+    }
     DynamicJsonDocument document(12288);
-    if (deserializeJson(document, data, size, DeserializationOption::NestingLimit(10)) ||
-        !document.is<JsonObject>()) return false;
+    const DeserializationError json_err = deserializeJson(
+        document, data, size, DeserializationOption::NestingLimit(10));
+    if (json_err)
+    {
+        log_w("Xiaozhi: JSON deserialize error '%s' size=%u gen=%u",
+              json_err.c_str(), static_cast<unsigned>(size), static_cast<unsigned>(generation));
+        return false;
+    }
+    if (!document.is<JsonObject>())
+    {
+        log_w("Xiaozhi: JSON root is not an object size=%u gen=%u",
+              static_cast<unsigned>(size), static_cast<unsigned>(generation));
+        return false;
+    }
     JsonObjectConst root = document.as<JsonObjectConst>();
     const char *type = root["type"] | "";
     if (strcmp(type, "hello") == 0)
@@ -600,6 +648,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         s_server_hello = true;
         s_timing.t_hello_ms = millis();
         s_phase_tracker.record_progress(s_timing.t_hello_ms);
+        log_i("Xiaozhi: [HELLO_OK] session='%s' gen=%u", s_session_id, static_cast<unsigned>(generation));
         return true;
     }
 
@@ -630,8 +679,9 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
     else if (strcmp(type, "stt") == 0)
     {
         s_timing.t_stt_ms = millis();
-        s_phase_tracker.record_progress(s_timing.t_stt_ms);
+        s_phase_tracker.on_stt_received(s_timing.t_stt_ms);
         const char *text = root["text"] | "";
+        log_i("Xiaozhi: [STT_RX] text_len=%u gen=%u", static_cast<unsigned>(strlen(text)), static_cast<unsigned>(generation));
         if (*text && strlen(text) < AI_MAX_TEXT_LEN) add_message(true, text);
     }
     else if (strcmp(type, "tts") == 0)
@@ -640,7 +690,8 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         if (strcmp(state, "start") == 0)
         {
             if (s_timing.t_first_tts_ms == 0) s_timing.t_first_tts_ms = millis();
-            s_phase_tracker.start_speaking(millis());
+            s_phase_tracker.on_tts_start(s_timing.t_first_tts_ms);
+            log_i("Xiaozhi: [TTS_START_RX] gen=%u", static_cast<unsigned>(generation));
             if (!begin_output()) { set_error("Không lấy được I2S để phát Xiaozhi"); return false; }
             set_state(AI_STATE_SPEAKING);
         }
@@ -655,30 +706,63 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         {
             s_tts_stopping = true;
             s_tts_stop_ms = millis();
-            log_i("Xiaozhi TTS stop received: waiting for downlink queue and audio drain");
+            log_i("Xiaozhi: [TTS_STOP_RX] waiting for downlink queue and audio drain gen=%u", static_cast<unsigned>(generation));
         }
     }
     else if (strcmp(type, "mcp") == 0)
     {
         JsonObjectConst payload = root["payload"].as<JsonObjectConst>();
+        if (payload.isNull())
+        {
+            log_w("Xiaozhi: MCP payload is null gen=%u", static_cast<unsigned>(generation));
+            return false;
+        }
         const char *tool_name = payload["params"]["name"] | "";
+        log_i("Xiaozhi: [MCP_RX] method='%s' tool='%s' gen=%u",
+              payload["method"] | "", tool_name, static_cast<unsigned>(generation));
         String response;
         McpAsyncJob job = {};
-        const McpDispatchResult disp = s_mcp.dispatch(payload, s_session_id, response, job);
+        const McpDispatchResult disp = s_mcp.dispatch(payload, s_session_id, generation, response, job);
         if (disp == McpDispatchResult::HANDLED_IMMEDIATE)
         {
-            if (!s_transport.sendText(response.c_str())) set_error("Không gửi được MCP ACK");
-            else s_timing.t_mcp_ack_ms = millis();
+            if (response.length() > 0)
+            {
+                if (!s_transport.sendText(response.c_str()))
+                {
+                    log_w("Xiaozhi: Failed to send immediate MCP response");
+                    set_error("Không gửi được MCP ACK");
+                }
+                else
+                {
+                    const uint32_t now = millis();
+                    s_timing.t_mcp_ack_ms = now;
+                    s_phase_tracker.on_mcp_progress(now);
+                    log_i("Xiaozhi: [MCP_ACK] immediate sent OK gen=%u", static_cast<unsigned>(generation));
+                }
+            }
         }
         else if (disp == McpDispatchResult::DISPATCH_ASYNC)
         {
             if (strstr(tool_name, "self.music.") == tool_name) handle_music_handoff(tool_name);
-            if (!s_mcp_jobs || xQueueSend(s_mcp_jobs, &job, 0) != pdTRUE)
+            job.generation = generation;
+            if (!s_mcp_jobs || xQueueSend(s_mcp_jobs, &job, pdMS_TO_TICKS(50)) != pdTRUE)
             {
                 log_e("Xiaozhi MCP async job queue full for tool '%s'", tool_name);
                 String err_resp;
                 XiaozhiMcpServer::make_error(job.id, -32000, "Device busy", s_session_id, err_resp);
-                (void)s_transport.sendText(err_resp.c_str());
+                if (s_transport.sendText(err_resp.c_str()))
+                {
+                    s_mcp.remember(job.id, err_resp);
+                }
+            }
+        }
+        else if (disp == McpDispatchResult::ERROR_OR_REJECTED)
+        {
+            log_w("Xiaozhi: MCP request rejected gen=%u (resp_len=%u)",
+                  static_cast<unsigned>(generation), static_cast<unsigned>(response.length()));
+            if (response.length() > 0)
+            {
+                (void)s_transport.sendText(response.c_str());
             }
         }
     }
@@ -708,7 +792,14 @@ bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
     if (output_count > 0 && audio_write_pcm16_mono(s_resampled, output_count, 250))
     {
         const uint32_t now = millis();
-        if (s_timing.t_first_pcm_ms == 0) s_timing.t_first_pcm_ms = now;
+        if (s_timing.t_first_pcm_ms == 0)
+        {
+            s_timing.t_first_pcm_ms = now;
+            s_phase_tracker.on_first_pcm(now);
+            log_i("Xiaozhi: [FIRST_PCM] gen=%u latency=%ums",
+                  static_cast<unsigned>(generation),
+                  s_timing.t_first_tts_ms ? static_cast<unsigned>(now - s_timing.t_first_tts_ms) : 0);
+        }
         s_phase_tracker.record_progress(now);
         return true;
     }
@@ -767,14 +858,18 @@ bool connect_session(uint32_t generation)
     const uint32_t connect_budget_deadline = connect_start_ms + s_deadlines.connect_total_budget_ms;
     s_phase_tracker.start_connecting(connect_start_ms);
 
-    if (xiaozhi::can_reuse_connection(s_transport.connected(), s_warm_connected,
+#if XIAOZHI_ENABLE_WARM_REUSE
+    if (s_warm_connected && s_transport.connected() &&
+        xiaozhi::can_reuse_connection(s_transport.connected(), s_warm_connected,
                                        s_transport.uplinkPending(), s_transport.inboundPending(),
                                        s_idle_since_ms, connect_start_ms, 30000))
     {
         if (s_transport.setGeneration(generation))
         {
             s_timing.t_wss_connected_ms = millis();
-            log_i("Xiaozhi: Reusing warm WSS connection gen=%u", static_cast<unsigned>(generation));
+            log_i("Xiaozhi: Reusing warm WSS connection gen=%u epoch=%u",
+                  static_cast<unsigned>(generation), static_cast<unsigned>(s_transport.connectionEpoch()));
+            const uint32_t warm_deadline = millis() + s_deadlines.warm_connect_timeout_ms;
             StaticJsonDocument<512> hello;
             hello["type"] = "hello";
             hello["version"] = s_ws_config.version;
@@ -788,16 +883,25 @@ bool connect_session(uint32_t generation)
             String body;
             serializeJson(hello, body);
             if (s_transport.sendText(body.c_str()) &&
-                wait_with_transport(connect_budget_deadline, hello_received))
+                wait_with_transport(warm_deadline, hello_received))
             {
                 s_seen_uplink_drops = s_transport.droppedUplink();
                 s_seen_downlink_drops = s_transport.droppedDownlink();
+                log_i("Xiaozhi: [HELLO_OK] warm connection established gen=%u", static_cast<unsigned>(generation));
                 return true;
             }
+            log_w("Xiaozhi: Warm connection hello failed or timed out, falling back to cold connection");
         }
         s_transport.close();
         s_warm_connected = false;
     }
+#else
+    if (s_transport.connected())
+    {
+        s_transport.close();
+        s_warm_connected = false;
+    }
+#endif
 
     for (uint8_t attempt = 0; attempt < 3 && current_generation(generation) && !xiaozhi::deadline_reached(millis(), connect_budget_deadline); ++attempt)
     {
@@ -831,6 +935,7 @@ bool connect_session(uint32_t generation)
             {
                 s_seen_uplink_drops = s_transport.droppedUplink();
                 s_seen_downlink_drops = s_transport.droppedDownlink();
+                log_i("Xiaozhi: [HELLO_OK] cold connection established gen=%u", static_cast<unsigned>(generation));
                 return true;
             }
         }
@@ -878,6 +983,7 @@ EncodeResult encode_capture_frame(uint32_t generation)
     const int encoded = s_codec.encode60ms(
         s_capture_frame, s_opus_packet, xiaozhi::kMaxOpusPacketBytes);
     if (encoded <= 0) return EncodeResult::ERROR;
+    ++s_frames_encoded;
     const size_t framed_size = xiaozhi::wrap_opus_packet(
         s_ws_config.version, millis(), s_opus_packet, static_cast<size_t>(encoded),
         s_framed_packet, xiaozhi::kMaxOpusPacketBytes + 16U);
@@ -887,9 +993,7 @@ EncodeResult encode_capture_frame(uint32_t generation)
     if (!s_transport.queueAudio(s_framed_packet, framed_size, generation))
         return s_transport.audioQueueHasCapacity(generation)
             ? EncodeResult::ERROR : EncodeResult::BACKPRESSURE;
-    ++s_total_frames_sent;
-    s_timing.t_last_audio_sent_ms = millis();
-    s_phase_tracker.record_progress(s_timing.t_last_audio_sent_ms);
+    ++s_frames_enqueued;
     s_backpressure.reset();
     return EncodeResult::QUEUED;
 }
@@ -920,6 +1024,14 @@ PumpResult pump_capture(uint32_t generation)
             s_capture_offset, s_capture_chunk, wanted, &total, s_record_control_request);
         if (copied == 0) break;
         s_capture_offset += copied;
+        for (size_t i = 0; i < copied; ++i)
+        {
+            const int16_t sample = s_capture_chunk[i];
+            const int16_t abs_s = sample < 0 ? (sample == -32768 ? 32767 : -sample) : sample;
+            if (abs_s > s_mic_peak) s_mic_peak = abs_s;
+            s_mic_sum_sq += static_cast<uint64_t>(sample) * sample;
+        }
+        s_mic_total_samples += copied;
         size_t consumed = 0;
         while (consumed < copied)
         {
@@ -1013,6 +1125,14 @@ PumpResult pump_capture_flush(uint32_t generation)
                 &s_flush_lease, s_capture_offset,
                 s_capture_frame + s_capture_frame_fill, amount);
             if (copied == 0) return PumpResult::ERROR;
+            for (size_t i = 0; i < copied; ++i)
+            {
+                const int16_t sample = (s_capture_frame + s_capture_frame_fill)[i];
+                const int16_t abs_s = sample < 0 ? (sample == -32768 ? 32767 : -sample) : sample;
+                if (abs_s > s_mic_peak) s_mic_peak = abs_s;
+                s_mic_sum_sq += static_cast<uint64_t>(sample) * sample;
+            }
+            s_mic_total_samples += copied;
             s_capture_offset += copied;
             s_capture_frame_fill += copied;
             continue;
@@ -1032,9 +1152,26 @@ PumpResult pump_capture_flush(uint32_t generation)
     if (xiaozhi::flush_ready_for_listen_stop(
             s_flush_source_done && s_capture_frame_fill == 0,
             s_transport.uplinkPending(),
+            s_transport.inFlight(),
             s_transport.droppedUplink() != s_seen_uplink_drops))
     {
+        uint32_t rms = 0;
+        if (s_mic_total_samples > 0)
+        {
+            rms = static_cast<uint32_t>(sqrt(static_cast<double>(s_mic_sum_sq) / s_mic_total_samples));
+        }
+        log_i("Xiaozhi: [AUDIO_SENT] samples=%u peak=%d rms=%u enc=%u enq=%u sent=%u bytes=%u drops=%u",
+              static_cast<unsigned>(s_mic_total_samples),
+              static_cast<int>(s_mic_peak),
+              static_cast<unsigned>(rms),
+              static_cast<unsigned>(s_frames_encoded),
+              static_cast<unsigned>(s_frames_enqueued),
+              static_cast<unsigned>(s_transport.framesSent()),
+              static_cast<unsigned>(s_transport.bytesSent()),
+              static_cast<unsigned>(s_transport.droppedUplink()));
+
         if (!send_listen_state("stop")) return PumpResult::ERROR;
+        log_i("Xiaozhi: [LISTEN_STOP_SENT] gen=%u", static_cast<unsigned>(generation));
         s_flush_active = false;
         s_timing.t_listen_stop_ms = millis();
         s_phase_tracker.start_waiting_response(s_timing.t_listen_stop_ms);
@@ -1055,6 +1192,12 @@ bool start_session(uint32_t generation)
     s_timing.reset();
     s_timing.t_ptt_ms = millis();
     s_total_frames_sent = 0;
+    s_mic_total_samples = 0;
+    s_mic_peak = 0;
+    s_mic_sum_sq = 0;
+    s_frames_encoded = 0;
+    s_frames_enqueued = 0;
+    s_transport.resetAudioCounters();
     memset(&s_music_handoff, 0, sizeof(s_music_handoff));
     s_music_resume_suppressed = false;
     if (music_player_is_playing() || music_player_is_paused())
@@ -1077,6 +1220,7 @@ bool start_session(uint32_t generation)
         begin_cleanup(generation, true);
         return false;
     }
+    log_i("Xiaozhi: [LISTEN_START_SENT] gen=%u", static_cast<unsigned>(generation));
     if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     uint32_t request = 0;
     bool applied = false;
@@ -1130,6 +1274,7 @@ bool start_session(uint32_t generation)
     s_flush_source_done = false;
     s_backpressure.reset();
     s_timing.t_recorder_active_ms = millis();
+    log_i("Xiaozhi: [RECORDER_ACTIVE] gen=%u", static_cast<unsigned>(generation));
     s_phase_tracker.start_listening(s_timing.t_recorder_active_ms);
     set_state(AI_STATE_LISTENING);
     return true;
@@ -1274,18 +1419,32 @@ void worker(void *)
         McpAsyncResult mcp_res = {};
         while (s_mcp_results && xQueueReceive(s_mcp_results, &mcp_res, 0) == pdTRUE)
         {
+            if (mcp_res.generation != active_generation_snapshot() ||
+                cancellation_requested(mcp_res.generation))
+            {
+                log_w("Xiaozhi: Dropping stale MCP async result id=%u gen=%u (active=%u)",
+                      static_cast<unsigned>(mcp_res.id),
+                      static_cast<unsigned>(mcp_res.generation),
+                      static_cast<unsigned>(active_generation_snapshot()));
+                continue;
+            }
             String resp_str;
             XiaozhiMcpServer::make_text_result(mcp_res.id, mcp_res.text, mcp_res.is_error, mcp_res.session_id, resp_str);
-            s_mcp.remember(mcp_res.id, resp_str);
             if (s_transport.connected())
             {
                 if (s_transport.sendText(resp_str.c_str()))
                 {
-                    s_timing.t_mcp_ack_ms = millis();
+                    s_mcp.remember(mcp_res.id, resp_str);
+                    const uint32_t now = millis();
+                    s_timing.t_mcp_ack_ms = now;
+                    s_phase_tracker.on_mcp_progress(now);
+                    log_i("Xiaozhi: [MCP_ACK] async sent OK id=%u gen=%u",
+                          static_cast<unsigned>(mcp_res.id), static_cast<unsigned>(mcp_res.generation));
                 }
                 else
                 {
-                    log_w("Xiaozhi: Không gửi được MCP ACK id=%u", static_cast<unsigned>(mcp_res.id));
+                    log_w("Xiaozhi: Không gửi được MCP ACK id=%u gen=%u",
+                          static_cast<unsigned>(mcp_res.id), static_cast<unsigned>(mcp_res.generation));
                 }
             }
         }
@@ -1355,6 +1514,12 @@ void worker(void *)
                 continue;
             }
             s_transport.loop();
+            if (s_transport.lastAudioSentMs() > s_timing.t_last_audio_sent_ms)
+            {
+                s_timing.t_last_audio_sent_ms = s_transport.lastAudioSentMs();
+                s_total_frames_sent = s_transport.framesSent();
+                s_phase_tracker.record_progress(s_timing.t_last_audio_sent_ms);
+            }
             process_inbound();
             if (s_transport.droppedUplink() != s_seen_uplink_drops ||
                 s_transport.droppedDownlink() != s_seen_downlink_drops)

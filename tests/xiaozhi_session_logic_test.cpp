@@ -1,6 +1,7 @@
 #include "xiaozhi_session_logic.h"
 
 #include <cassert>
+#include <cstring>
 
 int main()
 {
@@ -29,11 +30,17 @@ int main()
     assert(recorder_control_targets(21, 21));
     assert(!recorder_control_targets(20, 21));
 
-    // listen/stop is legal only after the exact audio queue has drained.
+    // listen/stop is legal only after the exact audio queue and in-flight frame have drained.
     assert(!flush_ready_for_listen_stop(false, 0, false));
     assert(!flush_ready_for_listen_stop(true, 1, false));
     assert(!flush_ready_for_listen_stop(true, 0, true));
     assert(flush_ready_for_listen_stop(true, 0, false));
+    // Overload with in_flight parameter
+    assert(!flush_ready_for_listen_stop(true, 0, true, false));
+    assert(!flush_ready_for_listen_stop(true, 1, false, false));
+    assert(flush_ready_for_listen_stop(true, 0, false, false));
+    assert(!flush_ready_for_listen_stop(true, 0, false, true));
+    assert(!flush_ready_for_listen_stop(true, 1, true, true));
 
     // Snapshot generation isolation: lease matches expected generation strictly
     assert(snapshot_lease_matches(0, 5));
@@ -96,13 +103,54 @@ int main()
     assert(tracker.check_timeout(5000 + 4999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
     assert(tracker.check_timeout(5000 + 5000, deadlines) == SessionPhaseTracker::TimeoutReason::FLUSH_TIMEOUT);
 
-    // WAITING_RESPONSE
+    // WAITING_RESPONSE - progression stages:
+    // Stage 1: WAITING_STT
     tracker.start_waiting_response(10000);
-    assert(tracker.check_timeout(10000 + 19999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
-    assert(tracker.check_timeout(10000 + 20000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_RESPONSE_TIMEOUT);
+    assert(tracker.waiting_stage() == WaitingStage::WAITING_STT);
+    assert(tracker.check_timeout(10000 + 14999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    // Unknown messages/ping must NOT advance stage or extend deadline
+    tracker.record_progress(10000 + 14000);
+    assert(tracker.check_timeout(10000 + 15000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_STT_TIMEOUT);
+
+    // Stage 2: WAITING_LLM_OR_MCP (STT arrived)
+    tracker.start_waiting_response(10000);
+    tracker.on_stt_received(20000); // STT arrives at 10s after listen/stop
+    assert(tracker.waiting_stage() == WaitingStage::WAITING_LLM_OR_MCP);
+    // At 25s after listen/stop (5s after STT), previous flat 20s timeout would fail; now it PASSES:
+    assert(tracker.check_timeout(25000, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(20000 + 19999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    // MCP activity extends/refreshes LLM wait deadline:
+    tracker.on_mcp_progress(25000);
+    assert(tracker.check_timeout(25000 + 19999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(25000 + 20000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_LLM_TIMEOUT);
+
+    // Stage 3: WAITING_FIRST_AUDIO (TTS start received)
+    tracker.start_waiting_response(10000);
+    tracker.on_stt_received(15000);
+    tracker.on_tts_start(20000);
+    assert(tracker.waiting_stage() == WaitingStage::WAITING_FIRST_AUDIO);
+    assert(tracker.check_timeout(20000 + 7999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(20000 + 8000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_FIRST_AUDIO_TIMEOUT);
+
+    // First PCM arrives within deadline
+    tracker.on_first_pcm(25000);
+    assert(tracker.check_timeout(25000, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+
+    // Total wait budget cap (45s)
+    tracker.start_waiting_response(10000);
+    tracker.on_stt_received(20000);
+    tracker.on_mcp_progress(35000);
+    tracker.on_mcp_progress(50000);
+    assert(tracker.check_timeout(10000 + 45000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_RESPONSE_TIMEOUT);
+
+    // Vietnamese timeout strings
+    assert(strstr(SessionPhaseTracker::timeout_reason_string(SessionPhaseTracker::TimeoutReason::WAIT_STT_TIMEOUT), "(STT)") != nullptr);
+    assert(strstr(SessionPhaseTracker::timeout_reason_string(SessionPhaseTracker::TimeoutReason::WAIT_LLM_TIMEOUT), "(LLM/MCP)") != nullptr);
+    assert(strstr(SessionPhaseTracker::timeout_reason_string(SessionPhaseTracker::TimeoutReason::WAIT_FIRST_AUDIO_TIMEOUT), "luồng âm thanh") != nullptr);
 
     // SPEAKING - normal long response with active streaming progress must NOT time out at 60s
     tracker.start_speaking(30000);
+    tracker.on_first_pcm(30500);
     // Simulate audio chunks arriving every 2 seconds for 70 seconds
     for (uint32_t t = 32000; t <= 30000 + 70000; t += 2000)
     {
@@ -115,6 +163,7 @@ int main()
 
     // SPEAKING - max response duration cap (180s)
     tracker.start_speaking(10000);
+    tracker.on_first_pcm(10100);
     tracker.record_progress(10000 + 179999);
     assert(tracker.check_timeout(10000 + 179999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
     tracker.record_progress(10000 + 180000);
@@ -129,6 +178,7 @@ int main()
     tracker.reset();
     tracker.start_connecting(1000);
     tracker.start_speaking(1000 + 70000);
+    tracker.on_first_pcm(1000 + 70500);
     tracker.record_progress(1000 + 239999);
     assert(tracker.check_timeout(1000 + 239999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
     assert(tracker.check_timeout(1000 + 240000, deadlines) == SessionPhaseTracker::TimeoutReason::ABSOLUTE_SESSION_TIMEOUT);

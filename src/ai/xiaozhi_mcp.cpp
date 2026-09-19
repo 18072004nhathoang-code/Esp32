@@ -58,38 +58,80 @@ void XiaozhiMcpServer::make_text_result(uint32_t id, const char *text, bool is_e
     serializeJson(response, out);
 }
 
-XiaozhiMcpServer::XiaozhiMcpServer() : next_cache_(0) {}
+XiaozhiMcpServer::XiaozhiMcpServer() : next_cache_(0)
+{
+    resetSession();
+}
 
 void XiaozhiMcpServer::resetSession()
 {
-    for (size_t i = 0; i < 8; ++i) { cache_[i].id = 0; cache_[i].json = ""; }
+    for (size_t i = 0; i < 8; ++i)
+    {
+        cache_[i].valid = false;
+        cache_[i].id = 0;
+        cache_[i].json = "";
+    }
     next_cache_ = 0;
 }
 
 bool XiaozhiMcpServer::lookup(uint32_t id, String &response) const
 {
     for (size_t i = 0; i < 8; ++i)
-        if (id != 0 && cache_[i].id == id) { response = cache_[i].json; return true; }
+    {
+        if (cache_[i].valid && cache_[i].id == id)
+        {
+            response = cache_[i].json;
+            return true;
+        }
+    }
     return false;
 }
 
 void XiaozhiMcpServer::remember(uint32_t id, const String &response)
 {
-    if (!id) return;
+    cache_[next_cache_].valid = true;
     cache_[next_cache_].id = id;
     cache_[next_cache_].json = response;
     next_cache_ = (next_cache_ + 1) % 8;
 }
 
 McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char *session_id,
+                                             uint32_t generation,
                                              String &outer_response, McpAsyncJob &async_job)
 {
+    outer_response = "";
+    if (request.isNull()) return McpDispatchResult::ERROR_OR_REJECTED;
+
+    const bool has_id = request.containsKey("id") &&
+                        (request["id"].is<uint32_t>() || request["id"].is<int>());
+    const uint32_t id = has_id ? request["id"].as<uint32_t>() : 0;
+
+    const char *jsonrpc = request["jsonrpc"] | "";
+    if (strcmp(jsonrpc, "2.0") != 0)
+    {
+        if (has_id)
+        {
+            make_error(id, -32600, "Invalid JSON-RPC version", session_id, outer_response);
+        }
+        return McpDispatchResult::ERROR_OR_REJECTED;
+    }
+
     const char *request_fields[] = {"jsonrpc", "id", "method", "params"};
-    if (request.isNull() || !only_fields(request, request_fields, 4) ||
-        strcmp(request["jsonrpc"] | "", "2.0") != 0 || !request["id"].is<uint32_t>() ||
-        !request["method"].is<const char *>()) return McpDispatchResult::ERROR_OR_REJECTED;
-    const uint32_t id = request["id"].as<uint32_t>();
-    if (id == 0) return McpDispatchResult::ERROR_OR_REJECTED;
+    if (!only_fields(request, request_fields, 4) || !request["method"].is<const char *>())
+    {
+        if (has_id)
+        {
+            make_error(id, -32600, "Invalid Request structure", session_id, outer_response);
+        }
+        return McpDispatchResult::ERROR_OR_REJECTED;
+    }
+
+    if (!has_id)
+    {
+        // JSON-RPC Notification: server MUST NOT reply
+        return McpDispatchResult::HANDLED_IMMEDIATE;
+    }
+
     if (lookup(id, outer_response)) return McpDispatchResult::HANDLED_IMMEDIATE;
     const char *method = request["method"].as<const char *>();
     JsonObjectConst params = request["params"].as<JsonObjectConst>();
@@ -227,6 +269,7 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                 return McpDispatchResult::HANDLED_IMMEDIATE;
             }
             async_job.id = id;
+            async_job.generation = generation;
             strlcpy(async_job.session_id, session_id ? session_id : "", sizeof(async_job.session_id));
             async_job.tool = tool_type;
             async_job.music_action = action;
@@ -244,6 +287,7 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                 return McpDispatchResult::HANDLED_IMMEDIATE;
             }
             async_job.id = id;
+            async_job.generation = generation;
             strlcpy(async_job.session_id, session_id ? session_id : "", sizeof(async_job.session_id));
             async_job.tool = tool_type;
             return McpDispatchResult::DISPATCH_ASYNC;

@@ -83,6 +83,10 @@ int main()
            xiaozhi::SessionFault::QUEUE_OVERFLOW);
 
     xiaozhi::DuplicateRequestTracker duplicate;
+    assert(!duplicate.seen(0));
+    assert(duplicate.remember(0));
+    assert(duplicate.seen(0));
+    assert(!duplicate.remember(0));
     assert(duplicate.remember(42));
     assert(duplicate.seen(42));
     assert(!duplicate.remember(42));
