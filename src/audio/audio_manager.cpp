@@ -12,6 +12,7 @@
 #include "../storage/storage_manager.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
+#include "xiaozhi_session_logic.h"
 
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
@@ -210,9 +211,11 @@ static AudioControlMailbox take_audio_controls()
 {
     portENTER_CRITICAL(&audio_command_mux);
     AudioControlMailbox pending = audio_control_mailbox;
-    pending.recording_pending = recording_control_count > 0;
-    if (pending.recording_pending)
+    audio_control_mailbox.recording_pending = false;
+    audio_control_mailbox.playback_stop_pending = false;
+    if (!pending.recording_pending && recording_control_count > 0)
     {
+        pending.recording_pending = true;
         const RecordingControlRequest &request = recording_control_queue[recording_control_head];
         pending.recording_type = request.type;
         pending.recording_request_id = request.request_id;
@@ -222,9 +225,19 @@ static AudioControlMailbox take_audio_controls()
             (sizeof(recording_control_queue) / sizeof(recording_control_queue[0])));
         --recording_control_count;
     }
-    audio_control_mailbox.playback_stop_pending = false;
     portEXIT_CRITICAL(&audio_command_mux);
     return pending;
+}
+
+static void post_recording_cancel_urgent(uint32_t request_id, uint32_t cancel_through)
+{
+    portENTER_CRITICAL(&audio_command_mux);
+    audio_control_mailbox.recording_pending = true;
+    audio_control_mailbox.recording_type = RECORD_CONTROL_CANCEL;
+    audio_control_mailbox.recording_cancel_through = cancel_through;
+    audio_control_mailbox.recording_request_id = request_id;
+    portEXIT_CRITICAL(&audio_command_mux);
+    if (audio_task_handle) xTaskNotifyGive(audio_task_handle);
 }
 
 static void rollback_command_generation(uint32_t &generation, uint32_t issued, uint32_t previous)
@@ -1237,7 +1250,8 @@ static void audio_background_task(void *pvParameters)
         {
             last_stack_report_ms = now_ms;
             Serial.printf("[AUDIO][STACK] Audio_Task high-water=%u bytes\n",
-                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
+                                                sizeof(StackType_t)));
         }
         const AudioControlMailbox controls = take_audio_controls();
         if (controls.recording_pending)
@@ -1934,14 +1948,33 @@ bool audio_stop_recording_async(uint32_t *request_id)
 bool audio_cancel_recording_async(uint32_t *request_id)
 {
     if (!audio_task_handle) return false;
-    uint32_t previous = 0;
-    const uint32_t issued = next_command_generation(recording_command_generation, &previous);
-    if (!post_recording_control(RECORD_CONTROL_CANCEL, issued, issued))
-    {
-        rollback_command_generation(recording_command_generation, issued, previous);
-        return false;
-    }
+    const uint32_t issued = next_command_generation(recording_command_generation);
+    post_recording_cancel_urgent(issued, issued);
     if (request_id) *request_id = issued;
+    return true;
+}
+
+bool audio_cancel_recording_request_async(uint32_t expected_request_id,
+                                          uint32_t *request_id)
+{
+    if (!audio_task_handle || expected_request_id == 0) return false;
+    uint32_t issued = 0;
+    portENTER_CRITICAL(&audio_command_mux);
+    if (xiaozhi::recorder_control_targets(expected_request_id,
+                                          recording_command_generation))
+    {
+        ++recording_command_generation;
+        if (recording_command_generation == 0) ++recording_command_generation;
+        issued = recording_command_generation;
+        audio_control_mailbox.recording_pending = true;
+        audio_control_mailbox.recording_type = RECORD_CONTROL_CANCEL;
+        audio_control_mailbox.recording_cancel_through = expected_request_id;
+        audio_control_mailbox.recording_request_id = issued;
+    }
+    portEXIT_CRITICAL(&audio_command_mux);
+    if (!issued) return false;
+    if (request_id) *request_id = issued;
+    xTaskNotifyGive(audio_task_handle);
     return true;
 }
 

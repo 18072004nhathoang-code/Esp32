@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <atomic>
 #include <esp_event.h>
 #include <esp_websocket_client.h>
 #include <freertos/FreeRTOS.h>
@@ -20,14 +21,18 @@ public:
                char *error, size_t error_size);
     void loop();
     void close();
-    bool connected() const { return connected_; }
+    bool connected() const { return connected_.load(std::memory_order_acquire); }
     bool sendText(const char *text);
     bool queueAudio(const uint8_t *data, size_t size, uint32_t generation);
     bool receive(XiaozhiInboundKind *kind, uint8_t *data, size_t capacity,
                  size_t *size, uint32_t *generation);
-    uint32_t generation() const { return generation_; }
-    uint32_t droppedUplink() const { return dropped_uplink_; }
-    uint32_t droppedDownlink() const { return dropped_downlink_; }
+    uint32_t generation() const { return generation_.load(std::memory_order_acquire); }
+    uint32_t droppedUplink() const { return dropped_uplink_.load(std::memory_order_relaxed); }
+    uint32_t droppedDownlink() const { return dropped_downlink_.load(std::memory_order_relaxed); }
+    size_t uplinkPending() const;
+    size_t uplinkCapacity() const { return 8; }
+    bool uplinkIdle() const { return uplinkPending() == 0; }
+    bool audioQueueHasCapacity(uint32_t generation) const;
 
 private:
     struct AudioPacket
@@ -51,10 +56,10 @@ private:
     QueueHandle_t inbound_queue_;
     uint8_t *fragment_storage_;
     xiaozhi::FragmentAssembler *fragment_assembler_;
-    volatile bool connected_;
-    uint32_t generation_;
-    uint32_t dropped_uplink_;
-    uint32_t dropped_downlink_;
+    std::atomic<bool> connected_;
+    std::atomic<uint32_t> generation_;
+    std::atomic<uint32_t> dropped_uplink_;
+    std::atomic<uint32_t> dropped_downlink_;
 
     static void eventHandler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
     void onEvent(int32_t event_id, esp_websocket_event_data_t *event);

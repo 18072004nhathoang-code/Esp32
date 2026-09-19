@@ -5,6 +5,8 @@
  */
 
 #include <Arduino.h>
+#include <esp_arduino_version.h>
+#include <esp_idf_version.h>
 #include <esp_system.h>
 #include "board_config.h"
 #include "shared_i2c_bus.h"
@@ -107,6 +109,9 @@ void setup()
     const esp_reset_reason_t reset_reason = esp_reset_reason();
     Serial.printf("[BOOT] Reset reason: %s (%d)\n",
                   reset_reason_name(reset_reason), static_cast<int>(reset_reason));
+    Serial.printf("[BOOT] Framework: Arduino-ESP32 %u.%u.%u | ESP-IDF %s\n",
+                  ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR,
+                  ESP_ARDUINO_VERSION_PATCH, esp_get_idf_version());
 #if defined(CONFIG_MBEDTLS_HAVE_TIME_DATE) && CONFIG_MBEDTLS_HAVE_TIME_DATE
     Serial.println("[SECURITY] TLS certificate chain/hostname/date validation: ENABLED");
 #else

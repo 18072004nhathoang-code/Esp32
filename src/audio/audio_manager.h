@@ -185,6 +185,11 @@ bool audio_start_recording_async(uint32_t max_duration_sec = AUDIO_RECORD_MAX_SE
 void audio_stop_recording(void);
 bool audio_stop_recording_async(uint32_t *request_id = nullptr);
 bool audio_cancel_recording_async(uint32_t *request_id = nullptr);
+/** Cancel only the recorder command generation owned by the caller. The
+ * cancellation is delivered through a non-lossy control mailbox, so a full
+ * normal command queue cannot allow a timed-out Start to run later. */
+bool audio_cancel_recording_request_async(uint32_t expected_request_id,
+                                          uint32_t *request_id = nullptr);
 /** Wait for the exact start/stop/cancel request to be applied by Audio_Task. */
 bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
                                       bool *operation_ok = nullptr);
