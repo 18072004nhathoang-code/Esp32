@@ -216,6 +216,7 @@ uint32_t audio_get_recorded_duration_ms(void);
 uint32_t audio_get_playback_progress_ms(void);
 size_t audio_get_recorded_sample_count(void);
 uint32_t audio_get_recording_generation(void);
+uint32_t audio_get_active_recording_command(void);
 size_t audio_copy_recorded_samples(size_t offset, int16_t *dest, size_t max_samples);
 /** Copy newly captured PCM while a recording is active. The caller advances
  * offset by the returned count; total_available is a point-in-time snapshot. */

@@ -233,5 +233,131 @@ int main()
     nvs.forget();
     assert(!nvs.load(out_s, out_p));
 
+    // =========================================================================
+    // 7. Binary 2-Slot Ping-Pong Blob Contract Tests:
+    // =========================================================================
+    WifiCredentialBlob b0 = {};
+    b0.magic = WIFI_BLOB_MAGIC;
+    b0.version = WIFI_BLOB_VERSION;
+    b0.sequence = 1;
+    strcpy(b0.ssid, "PrimaryWiFi");
+    strcpy(b0.pass, "MyPass123");
+    b0.checksum = wifi_blob_checksum(b0);
+
+    assert(wifi_blob_verify(b0));
+    assert(wifi_credentials_match(b0, "PrimaryWiFi", "MyPass123"));
+    assert(!wifi_credentials_match(b0, "PrimaryWiFi", "OtherPass"));
+
+    // Verify invalid blobs
+    WifiCredentialBlob b_bad = b0;
+    b_bad.magic = 0xDEADBEEF;
+    assert(!wifi_blob_verify(b_bad));
+
+    b_bad = b0;
+    b_bad.version = 2;
+    assert(!wifi_blob_verify(b_bad));
+
+    b_bad = b0;
+    b_bad.sequence = 0;
+    assert(!wifi_blob_verify(b_bad));
+
+    b_bad = b0;
+    b_bad.checksum ^= 0x1234;
+    assert(!wifi_blob_verify(b_bad));
+
+    // Choose active slot:
+    // Slot 0 seq 1, Slot 1 invalid -> Slot 0
+    assert(wifi_choose_active_slot(true, 1, false, 0) == 0);
+    // Slot 0 invalid, Slot 1 seq 2 -> Slot 1
+    assert(wifi_choose_active_slot(false, 0, true, 2) == 1);
+    // Slot 0 seq 1, Slot 1 seq 2 -> Slot 1 (higher sequence)
+    assert(wifi_choose_active_slot(true, 1, true, 2) == 1);
+    // Slot 0 seq 3, Slot 1 seq 2 -> Slot 0 (higher sequence)
+    assert(wifi_choose_active_slot(true, 3, true, 2) == 0);
+    // Both invalid -> -1
+    assert(wifi_choose_active_slot(false, 0, false, 0) == -1);
+
+    // Simulated 2-slot Ping-Pong Storage with power loss:
+    struct Simulated2SlotNvs
+    {
+        WifiCredentialBlob slot0 = {};
+        bool slot0_valid = false;
+        WifiCredentialBlob slot1 = {};
+        bool slot1_valid = false;
+        bool forgotten = false;
+
+        bool save(const char *ssid, const char *pass, bool simulate_cut_during_write = false)
+        {
+            if (forgotten) forgotten = false;
+            const int active = wifi_choose_active_slot(slot0_valid, slot0.sequence, slot1_valid, slot1.sequence);
+            const int target = (active == 0) ? 1 : 0;
+            const uint32_t active_seq = (active >= 0) ? ((active == 0) ? slot0.sequence : slot1.sequence) : 0;
+            const uint32_t next_seq = active_seq + 1;
+
+            WifiCredentialBlob target_blob = {};
+            target_blob.magic = WIFI_BLOB_MAGIC;
+            target_blob.version = WIFI_BLOB_VERSION;
+            target_blob.sequence = next_seq;
+            strcpy(target_blob.ssid, ssid);
+            strcpy(target_blob.pass, pass);
+            target_blob.checksum = wifi_blob_checksum(target_blob);
+
+            if (simulate_cut_during_write)
+            {
+                // Incomplete write: corrupted checksum
+                target_blob.checksum = 0;
+                if (target == 0) { slot0 = target_blob; slot0_valid = false; }
+                else { slot1 = target_blob; slot1_valid = false; }
+                return false;
+            }
+
+            if (target == 0) { slot0 = target_blob; slot0_valid = true; }
+            else { slot1 = target_blob; slot1_valid = true; }
+            return true;
+        }
+
+        bool load(char *out_s, char *out_p)
+        {
+            if (forgotten) return false;
+            const bool b0_ok = slot0_valid && wifi_blob_verify(slot0);
+            const bool b1_ok = slot1_valid && wifi_blob_verify(slot1);
+            const int active = wifi_choose_active_slot(b0_ok, slot0.sequence, b1_ok, slot1.sequence);
+            if (active < 0) return false;
+            const WifiCredentialBlob &chosen = (active == 0) ? slot0 : slot1;
+            strcpy(out_s, chosen.ssid);
+            strcpy(out_p, chosen.pass);
+            return true;
+        }
+
+        void forget()
+        {
+            forgotten = true;
+            slot0_valid = false;
+            slot1_valid = false;
+        }
+    };
+
+    Simulated2SlotNvs pingpong;
+    // Step 1: Write first network to slot 0
+    assert(pingpong.save("CoffeeShop", "Pass1"));
+    assert(pingpong.load(out_s, out_p));
+    assert(strcmp(out_s, "CoffeeShop") == 0 && strcmp(out_p, "Pass1") == 0);
+
+    // Step 2: Attempt to write to slot 1, but power is cut mid-write
+    Simulated2SlotNvs cut_sim = pingpong;
+    cut_sim.save("NewHotel", "Pass2", true);
+    // Loader MUST still seamlessly choose intact slot 0!
+    assert(cut_sim.load(out_s, out_p));
+    assert(strcmp(out_s, "CoffeeShop") == 0 && strcmp(out_p, "Pass1") == 0);
+
+    // Step 3: Clean write to slot 1
+    assert(pingpong.save("NewHotel", "Pass2", false));
+    assert(pingpong.load(out_s, out_p));
+    assert(strcmp(out_s, "NewHotel") == 0 && strcmp(out_p, "Pass2") == 0);
+
+    // Step 4: Forget network
+    pingpong.forget();
+    assert(!pingpong.load(out_s, out_p));
+
     return 0;
 }

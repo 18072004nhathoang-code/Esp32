@@ -632,10 +632,15 @@ void wifi_app_update(void)
         if (state == WIFI_STATE_CONNECTED)
         {
             char buf[96];
-            const bool saved = wifi_manager_is_credentials_saved();
-            if (saved)
+            const WifiSaveStatus save_status = wifi_manager_get_save_status();
+            if (save_status == WIFI_SAVED)
             {
                 snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Đã kết nối: %s\n" LV_SYMBOL_SAVE " Đã lưu WiFi",
+                         wifi_manager_get_ip().c_str());
+            }
+            else if (save_status == WIFI_SAVE_FAILED)
+            {
+                snprintf(buf, sizeof(buf), LV_SYMBOL_OK " Đã kết nối: %s\n" LV_SYMBOL_WARNING " Lưu WiFi lỗi",
                          wifi_manager_get_ip().c_str());
             }
             else

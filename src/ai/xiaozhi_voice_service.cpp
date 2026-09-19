@@ -238,13 +238,12 @@ void finalize_cleanup(uint32_t generation)
 void service_cleanup()
 {
     if (!s_cleanup_pending || !active_generation_matches(s_cleanup_generation)) return;
-    bool recorder_stopped = s_record_control_request == 0;
+    bool recorder_stopped = (s_record_control_request == 0 && s_cleanup_recorder_request == 0);
     if (!recorder_stopped && s_cleanup_recorder_request == 0)
     {
         uint32_t request = 0;
         if (audio_cancel_recording_request_async(s_record_control_request, &request))
         {
-            s_record_control_request = request;
             s_cleanup_recorder_request = request;
         }
         else if (!audio_is_recording() &&
@@ -254,12 +253,15 @@ void service_cleanup()
             s_record_control_request = 0;
             recorder_stopped = true;
         }
-        else if (!xiaozhi::recorder_control_targets(s_record_control_request,
-                                                    audio_get_recording_generation()))
+        else
         {
-            // The request was already superseded or belongs to another owner (e.g. Voice Memo)
-            s_record_control_request = 0;
-            recorder_stopped = true;
+            // The active recording command in audio_manager does not match our request
+            const uint32_t active_cmd = audio_get_active_recording_command();
+            if (active_cmd != s_record_control_request)
+            {
+                s_record_control_request = 0;
+                recorder_stopped = true;
+            }
         }
     }
     if (s_cleanup_recorder_request)
@@ -281,15 +283,38 @@ void service_cleanup()
         finalize_cleanup(s_cleanup_generation);
         return;
     }
-    if (!s_cleanup_timeout_reported && elapsed(s_cleanup_deadline_ms))
+    if (elapsed(s_cleanup_deadline_ms))
     {
-        s_cleanup_timeout_reported = true;
-        s_cleanup_preserve_error = true;
-        set_error("Recorder chưa ACK cleanup; giữ phiên ở trạng thái lỗi");
-        log_e("Xiaozhi cleanup timeout generation=%u recorder_request=%u owner=%u",
-              static_cast<unsigned>(s_cleanup_generation),
-              static_cast<unsigned>(s_record_control_request),
-              static_cast<unsigned>(audio_get_current_owner()));
+        static uint8_t s_cleanup_retries = 0;
+        if (!audio_is_recording() && audio_get_current_owner() != AUDIO_OWNER_RECORDER)
+        {
+            s_cleanup_recorder_request = 0;
+            s_record_control_request = 0;
+            s_cleanup_retries = 0;
+            finalize_cleanup(s_cleanup_generation);
+            return;
+        }
+        if (s_cleanup_retries < 3)
+        {
+            ++s_cleanup_retries;
+            s_cleanup_deadline_ms = millis() + 1500U;
+            log_w("Xiaozhi cleanup retry %u generation=%u", s_cleanup_retries, s_cleanup_generation);
+            uint32_t retry_req = 0;
+            if (audio_cancel_recording_async(&retry_req))
+            {
+                s_cleanup_recorder_request = retry_req;
+            }
+        }
+        else
+        {
+            s_cleanup_retries = 0;
+            audio_cancel_recording();
+            s_cleanup_preserve_error = true;
+            set_error("Recorder timeout sau nhiều lần thử hủy");
+            s_cleanup_recorder_request = 0;
+            s_record_control_request = 0;
+            finalize_cleanup(s_cleanup_generation);
+        }
     }
 }
 
@@ -343,7 +368,6 @@ void cancel_session(uint32_t generation)
         uint32_t request = 0;
         if (audio_cancel_recording_request_async(s_record_control_request, &request))
         {
-            s_record_control_request = request;
             s_cleanup_recorder_request = request;
         }
     }
@@ -795,7 +819,10 @@ bool start_session(uint32_t generation)
         if (cancellation_requested(generation))
         {
             uint32_t cancel_req = 0;
-            audio_cancel_recording_request_async(request, &cancel_req);
+            if (audio_cancel_recording_request_async(request, &cancel_req))
+            {
+                s_cleanup_recorder_request = cancel_req;
+            }
             cancel_session(generation);
             return false;
         }
@@ -803,7 +830,10 @@ bool start_session(uint32_t generation)
         {
             set_error("Microphone Start không ACK đúng hạn");
             uint32_t cancel_req = 0;
-            audio_cancel_recording_request_async(request, &cancel_req);
+            if (audio_cancel_recording_request_async(request, &cancel_req))
+            {
+                s_cleanup_recorder_request = cancel_req;
+            }
             begin_cleanup(generation, true);
             return false;
         }
@@ -813,7 +843,10 @@ bool start_session(uint32_t generation)
     {
         if (!cancellation_requested(generation)) set_error("Không khởi động được microphone");
         uint32_t cancel_req = 0;
-        audio_cancel_recording_request_async(request, &cancel_req);
+        if (audio_cancel_recording_request_async(request, &cancel_req))
+        {
+            s_cleanup_recorder_request = cancel_req;
+        }
         begin_cleanup(generation, true);
         return false;
     }

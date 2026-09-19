@@ -26,7 +26,8 @@ enum class WifiScanDriverPhase : uint8_t
     STOPPING,
     DRAINING,
     RECOVERING,
-    COMPLETED
+    COMPLETED,
+    RECOVERY_FAILED
 };
 
 struct WifiScanDriverCompletion
@@ -178,7 +179,8 @@ struct WifiScanAdapterLogic
     bool begin_recovery(uint32_t now_ms)
     {
         if (phase != WifiScanDriverPhase::DRAINING &&
-            phase != WifiScanDriverPhase::RECOVERING) return false;
+            phase != WifiScanDriverPhase::RECOVERING &&
+            phase != WifiScanDriverPhase::RECOVERY_FAILED) return false;
         phase = WifiScanDriverPhase::RECOVERING;
         phase_started_ms = now_ms;
         active_request_id = 0;
@@ -200,9 +202,8 @@ struct WifiScanAdapterLogic
             ++recovery_retries;
             if (recovery_retries >= kMaxRecoveryRetries)
             {
-                phase = WifiScanDriverPhase::IDLE;
-                drained_event_ready = true;
-                recovery_retries = 0;
+                phase = WifiScanDriverPhase::RECOVERY_FAILED;
+                drained_event_ready = false;
             }
             else
             {
@@ -210,6 +211,14 @@ struct WifiScanAdapterLogic
             }
         }
     }
+
+    bool retry_failed_recovery(uint32_t now_ms)
+    {
+        if (phase != WifiScanDriverPhase::RECOVERY_FAILED) return false;
+        recovery_retries = 0;
+        return begin_recovery(now_ms);
+    }
+
 };
 
 inline bool wifi_scan_total_expired(uint32_t now_ms, uint32_t queued_at_ms,

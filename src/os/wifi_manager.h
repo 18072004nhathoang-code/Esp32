@@ -137,9 +137,26 @@ int8_t wifi_manager_get_rssi(void);
 bool wifi_manager_has_saved_credentials(void);
 
 /**
- * @brief Kiểm tra xem mạng WiFi hiện tại đã được lưu thành công vào NVS chưa
+ * @brief Trạng thái lưu trữ NVS của thông tin WiFi
+ */
+enum WifiSaveStatus : uint8_t
+{
+    WIFI_SAVE_NONE = 0,
+    WIFI_SAVE_PENDING,
+    WIFI_SAVED,
+    WIFI_SAVE_FAILED
+};
+
+/**
+ * @brief Lấy trạng thái lưu thông tin mạng hiện tại (Thread-Safe snapshot, không đọc NVS)
+ */
+WifiSaveStatus wifi_manager_get_save_status(void);
+
+/**
+ * @brief Kiểm tra xem mạng WiFi hiện tại đã được lưu thành công vào NVS chưa (Thread-Safe snapshot)
  */
 bool wifi_manager_is_credentials_saved(void);
+
 
 /**
  * @brief Lưu thông tin WiFi vào bộ nhớ Flash NVS (Preferences)
