@@ -21,6 +21,7 @@ public:
                char *error, size_t error_size);
     void loop();
     void close();
+    void purgeUplink();
     bool connected() const { return connected_.load(std::memory_order_acquire); }
     bool sendText(const char *text);
     bool queueAudio(const uint8_t *data, size_t size, uint32_t generation);

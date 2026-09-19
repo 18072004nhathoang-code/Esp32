@@ -142,6 +142,11 @@ void XiaozhiTransport::close()
     generation_ = 0;
 }
 
+void XiaozhiTransport::purgeUplink()
+{
+    if (uplink_queue_) xQueueReset(uplink_queue_);
+}
+
 bool XiaozhiTransport::sendText(const char *text)
 {
     if (!connected() || !websocket_ || !text || !*text ||

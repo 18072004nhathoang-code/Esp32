@@ -172,22 +172,42 @@ struct WifiScanAdapterLogic
                static_cast<uint32_t>(now_ms - phase_started_ms) >= timeout_ms;
     }
 
+    static constexpr uint8_t kMaxRecoveryRetries = 3;
+    uint8_t recovery_retries = 0;
+
     bool begin_recovery(uint32_t now_ms)
     {
-        if (phase != WifiScanDriverPhase::DRAINING) return false;
+        if (phase != WifiScanDriverPhase::DRAINING &&
+            phase != WifiScanDriverPhase::RECOVERING) return false;
         phase = WifiScanDriverPhase::RECOVERING;
         phase_started_ms = now_ms;
         active_request_id = 0;
         return true;
     }
 
-    void recovery_finished(bool success)
+    void recovery_finished(bool success, uint32_t now_ms = 0)
     {
         if (phase != WifiScanDriverPhase::RECOVERING) return;
+        phase_started_ms = now_ms;
         if (success)
         {
             phase = WifiScanDriverPhase::IDLE;
             drained_event_ready = true;
+            recovery_retries = 0;
+        }
+        else
+        {
+            ++recovery_retries;
+            if (recovery_retries >= kMaxRecoveryRetries)
+            {
+                phase = WifiScanDriverPhase::IDLE;
+                drained_event_ready = true;
+                recovery_retries = 0;
+            }
+            else
+            {
+                phase = WifiScanDriverPhase::DRAINING;
+            }
         }
     }
 };

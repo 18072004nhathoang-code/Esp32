@@ -476,6 +476,25 @@ private:
     TaskHandle_t          m_audioTaskHandle = nullptr;
     MusicWorkerExitTracker m_audioTaskExit;
 
+    struct AudioTaskSync {
+        std::atomic<uint32_t> ref_count{2};
+        SemaphoreHandle_t exit_sem = nullptr;
+        std::atomic<bool> worker_done{false};
+        std::atomic<TaskHandle_t> task_handle{nullptr};
+        uint32_t generation = 0;
+
+        void release() {
+            if (ref_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                if (exit_sem) {
+                    vSemaphoreDelete(exit_sem);
+                    exit_sem = nullptr;
+                }
+                delete this;
+            }
+        }
+    };
+    AudioTaskSync*        m_taskSync = nullptr;
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #if ESP_IDF_VERSION_MAJOR == 5

@@ -166,6 +166,33 @@ static bool camera_config_command_current(const CameraUiCommand &command)
     return current;
 }
 
+static uint32_t apply_camera_control_if_current(const CameraUiCommand &command,
+                                                bool active, bool run_service,
+                                                uint16_t width, uint16_t height)
+{
+    portENTER_CRITICAL(&camera_control_mux);
+    const bool current = camera_config_revision_current(
+        command.request_id, camera_config_status.requested_id,
+        command.session_id, ui_session_id,
+        command.expected_control_revision, camera_control.revision,
+        camera_control.active && camera_control.session_id == command.session_id);
+    uint32_t revision = 0;
+    if (current)
+    {
+        camera_control.session_id = command.session_id;
+        camera_control.active = active;
+        camera_control.run_service = run_service;
+        camera_control.width = width;
+        camera_control.height = height;
+        ++camera_control.revision;
+        if (camera_control.revision == 0) ++camera_control.revision;
+        revision = camera_control.revision;
+    }
+    portEXIT_CRITICAL(&camera_control_mux);
+    if (revision != 0 && camera_worker_handle) xTaskNotifyGive(camera_worker_handle);
+    return revision;
+}
+
 /* Callback của thư viện TJpgDec đưa dữ liệu RGB565 vào bộ đệm Canvas */
 static bool camera_tjpg_output_cb(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap)
 {
@@ -639,13 +666,12 @@ static void camera_ui_worker(void *)
                 if (configure_ok && camera_config_command_current(command))
                 {
                     save_ok = camera_service_save_network_profile();
-                    if (save_ok && command.run_service &&
-                        camera_config_command_current(command))
+                    if (save_ok && command.run_service)
                     {
-                        // The new desired state owns Start and its ACK. Do not
-                        // start directly here or report an enqueue as applied.
-                        control_revision = set_camera_control(
-                            command.session_id, true, true,
+                        // The new desired state owns Start and its ACK. Atomic check-and-set
+                        // guarantees that a race with Stop/Close/Reopen never overwrites the control.
+                        control_revision = apply_camera_control_if_current(
+                            command, true, true,
                             worker_canvas_w, worker_canvas_h);
                     }
                 }

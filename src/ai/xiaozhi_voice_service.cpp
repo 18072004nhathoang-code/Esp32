@@ -39,6 +39,8 @@ static TaskHandle_t s_task = nullptr;
 static AIVoiceState s_state = AI_STATE_ERROR;
 static ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
 static int s_message_count = 0;
+static uint32_t s_history_revision = 0;
+static uint32_t s_message_seq_id = 0;
 static char s_last_error[160] = "Xiaozhi chưa khởi tạo";
 static char s_activation_code[32] = {};
 static char s_activation_message[160] = {};
@@ -166,6 +168,8 @@ void add_message(bool user, const char *text)
     message.is_user = user;
     strlcpy(message.text, text, sizeof(message.text));
     message.timestamp_sec = millis() / 1000U;
+    message.id = ++s_message_seq_id;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
 }
 
@@ -250,6 +254,13 @@ void service_cleanup()
             s_record_control_request = 0;
             recorder_stopped = true;
         }
+        else if (!xiaozhi::recorder_control_targets(s_record_control_request,
+                                                    audio_get_recording_generation()))
+        {
+            // The request was already superseded or belongs to another owner (e.g. Voice Memo)
+            s_record_control_request = 0;
+            recorder_stopped = true;
+        }
     }
     if (s_cleanup_recorder_request)
     {
@@ -321,6 +332,20 @@ void cancel_session(uint32_t generation)
         if (generation > s_cancelled_through) s_cancelled_through = generation;
         s_state = AI_STATE_CANCELING;
         xSemaphoreGive(s_mutex);
+    }
+    stop_output(false);
+    release_flush_lease();
+    s_capture_offset = 0;
+    s_capture_frame_fill = 0;
+    s_transport.purgeUplink();
+    if (s_record_control_request != 0 && s_cleanup_recorder_request == 0)
+    {
+        uint32_t request = 0;
+        if (audio_cancel_recording_request_async(s_record_control_request, &request))
+        {
+            s_record_control_request = request;
+            s_cleanup_recorder_request = request;
+        }
     }
     if (s_transport.connected() && s_session_id[0])
     {
@@ -745,13 +770,16 @@ bool start_session(uint32_t generation)
             return false;
         }
     }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     if (!connect_session(generation)) { begin_cleanup(generation, true); return false; }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     if (!send_listen_state("start"))
     {
         set_error("Không gửi được trạng thái listen/start");
         begin_cleanup(generation, true);
         return false;
     }
+    if (cancellation_requested(generation)) { cancel_session(generation); return false; }
     uint32_t request = 0;
     bool applied = false;
     if (!audio_start_recording_async(AUDIO_RECORD_MAX_SEC, &request))
@@ -766,12 +794,16 @@ bool start_session(uint32_t generation)
     {
         if (cancellation_requested(generation))
         {
+            uint32_t cancel_req = 0;
+            audio_cancel_recording_request_async(request, &cancel_req);
             cancel_session(generation);
             return false;
         }
         if (elapsed(ack_deadline))
         {
             set_error("Microphone Start không ACK đúng hạn");
+            uint32_t cancel_req = 0;
+            audio_cancel_recording_request_async(request, &cancel_req);
             begin_cleanup(generation, true);
             return false;
         }
@@ -780,6 +812,8 @@ bool start_session(uint32_t generation)
     if (!applied || !current_generation(generation))
     {
         if (!cancellation_requested(generation)) set_error("Không khởi động được microphone");
+        uint32_t cancel_req = 0;
+        audio_cancel_recording_request_async(request, &cancel_req);
         begin_cleanup(generation, true);
         return false;
     }
@@ -1237,11 +1271,20 @@ bool ai_voice_get_message_copy(int index, ChatMessage *message)
 
 void ai_voice_add_message(bool is_user, const char *text) { add_message(is_user, text); }
 
+uint32_t ai_voice_get_history_revision(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    const uint32_t rev = s_history_revision;
+    xSemaphoreGive(s_mutex);
+    return rev;
+}
+
 void ai_voice_clear_history(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     memset(s_history, 0, sizeof(s_history));
     s_message_count = 0;
+    ++s_history_revision;
     xSemaphoreGive(s_mutex);
 }
 
