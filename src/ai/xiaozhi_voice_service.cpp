@@ -1119,7 +1119,7 @@ bool ai_voice_init(void)
     s_state = s_configured ? AI_STATE_IDLE : AI_STATE_NEEDS_USER_INPUT;
     strlcpy(s_last_error, s_configured ? "" : "Đang chờ kích hoạt Xiaozhi",
             sizeof(s_last_error));
-    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", 18432, nullptr, 3,
+    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", 32768, nullptr, 3,
                                 &s_task, 0) != pdPASS)
     {
         s_task = nullptr;
