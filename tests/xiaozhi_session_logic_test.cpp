@@ -74,5 +74,98 @@ int main()
     assert(rendered_bubbles[0] == (500 - 32 + 1));
     assert(rendered_bubbles[MAX_BUBBLES - 1] == 500);
 
+    // Phase Deadlines & Tracker
+    PhaseDeadlines deadlines;
+    SessionPhaseTracker tracker;
+    assert(tracker.phase() == SessionPhase::IDLE);
+    assert(tracker.check_timeout(1000, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+
+    // CONNECTING
+    tracker.start_connecting(1000);
+    assert(tracker.phase() == SessionPhase::CONNECTING);
+    assert(tracker.check_timeout(1000 + 14999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(1000 + 15000, deadlines) == SessionPhaseTracker::TimeoutReason::CONNECT_TIMEOUT);
+
+    // LISTENING
+    tracker.start_listening(2000);
+    assert(tracker.check_timeout(2000 + 29999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(2000 + 30000, deadlines) == SessionPhaseTracker::TimeoutReason::LISTENING_TIMEOUT);
+
+    // FLUSHING
+    tracker.start_flushing(5000);
+    assert(tracker.check_timeout(5000 + 4999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(5000 + 5000, deadlines) == SessionPhaseTracker::TimeoutReason::FLUSH_TIMEOUT);
+
+    // WAITING_RESPONSE
+    tracker.start_waiting_response(10000);
+    assert(tracker.check_timeout(10000 + 19999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(10000 + 20000, deadlines) == SessionPhaseTracker::TimeoutReason::WAIT_RESPONSE_TIMEOUT);
+
+    // SPEAKING - normal long response with active streaming progress must NOT time out at 60s
+    tracker.start_speaking(30000);
+    // Simulate audio chunks arriving every 2 seconds for 70 seconds
+    for (uint32_t t = 32000; t <= 30000 + 70000; t += 2000)
+    {
+        tracker.record_progress(t);
+        assert(tracker.check_timeout(t, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    }
+    // Now simulate stall: 8 seconds without audio chunk
+    assert(tracker.check_timeout(30000 + 70000 + 7999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(30000 + 70000 + 8000, deadlines) == SessionPhaseTracker::TimeoutReason::SPEAKING_STALLED);
+
+    // SPEAKING - max response duration cap (180s)
+    tracker.start_speaking(10000);
+    tracker.record_progress(10000 + 179999);
+    assert(tracker.check_timeout(10000 + 179999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    tracker.record_progress(10000 + 180000);
+    assert(tracker.check_timeout(10000 + 180000, deadlines) == SessionPhaseTracker::TimeoutReason::SPEAKING_MAX_EXCEEDED);
+
+    // CLEANUP
+    tracker.start_cleanup(50000);
+    assert(tracker.check_timeout(50000 + 4999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(50000 + 5000, deadlines) == SessionPhaseTracker::TimeoutReason::CLEANUP_TIMEOUT);
+
+    // Absolute session timeout (240s)
+    tracker.reset();
+    tracker.start_connecting(1000);
+    tracker.start_speaking(1000 + 70000);
+    tracker.record_progress(1000 + 239999);
+    assert(tracker.check_timeout(1000 + 239999, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(1000 + 240000, deadlines) == SessionPhaseTracker::TimeoutReason::ABSOLUTE_SESSION_TIMEOUT);
+
+    // Wraparound safety
+    tracker.reset();
+    tracker.start_connecting(0xfffffff0U);
+    assert(tracker.check_timeout(0xfffffff0U + 1000, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    assert(tracker.check_timeout(0xfffffff0U + 15000, deadlines) == SessionPhaseTracker::TimeoutReason::CONNECT_TIMEOUT);
+
+    // session_id_matches_contract
+    assert(!session_id_matches_contract("sess-1", "sess-1", false));
+    assert(session_id_matches_contract("sess-1", "sess-1", true));
+    assert(session_id_matches_contract(nullptr, "sess-1", true)); // Optional session_id accepted
+    assert(session_id_matches_contract("", "sess-1", true));      // Optional session_id accepted
+    assert(!session_id_matches_contract("sess-2", "sess-1", true)); // Mismatch rejected
+
+    // has_captured_audio
+    assert(!has_captured_audio(0, 0, 0));
+    assert(has_captured_audio(1, 0, 0));
+    assert(has_captured_audio(0, 1, 0));
+    assert(has_captured_audio(0, 0, 1));
+
+    // can_reuse_connection
+    assert(can_reuse_connection(true, true, 0, 0, 1000, 5000, 30000));
+    assert(!can_reuse_connection(false, true, 0, 0, 1000, 5000, 30000)); // not connected
+    assert(!can_reuse_connection(true, false, 0, 0, 1000, 5000, 30000)); // not clean turn
+    assert(!can_reuse_connection(true, true, 1, 0, 1000, 5000, 30000));  // uplink pending
+    assert(!can_reuse_connection(true, true, 0, 1, 1000, 5000, 30000));  // downlink pending
+    assert(!can_reuse_connection(true, true, 0, 0, 1000, 32000, 30000)); // idle timed out (>30s)
+
+    // SessionTiming reset
+    SessionTiming timing;
+    timing.t_ptt_ms = 123;
+    timing.t_done_ms = 456;
+    timing.reset();
+    assert(timing.t_ptt_ms == 0 && timing.t_done_ms == 0);
+
     return 0;
 }

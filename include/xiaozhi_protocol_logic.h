@@ -310,4 +310,68 @@ inline bool should_resume_music(const MusicHandoff &handoff, bool session_cancel
     (void)session_cancelled;
     return handoff.paused_by_voice && !handoff.suppress_resume;
 }
+
+enum class HelloValidationResult : uint8_t
+{
+    OK = 0,
+    INVALID_TRANSPORT,
+    INVALID_FORMAT,
+    INVALID_CHANNELS,
+    UNSUPPORTED_SAMPLE_RATE,
+    INVALID_SESSION_ID
+};
+
+inline HelloValidationResult validate_server_hello(const char *transport,
+                                                   const char *format,
+                                                   int channels,
+                                                   uint32_t sample_rate,
+                                                   const char *session_id,
+                                                   size_t max_session_len)
+{
+    if (!transport || strcmp(transport, "websocket") != 0)
+        return HelloValidationResult::INVALID_TRANSPORT;
+    if (!format || strcmp(format, "opus") != 0)
+        return HelloValidationResult::INVALID_FORMAT;
+    if (channels != 1)
+        return HelloValidationResult::INVALID_CHANNELS;
+    if (sample_rate != 8000 && sample_rate != 12000 && sample_rate != 16000 &&
+        sample_rate != 24000 && sample_rate != 48000)
+        return HelloValidationResult::UNSUPPORTED_SAMPLE_RATE;
+    if (!session_id || !*session_id || strlen(session_id) >= max_session_len)
+        return HelloValidationResult::INVALID_SESSION_ID;
+    return HelloValidationResult::OK;
 }
+
+inline const char *hello_validation_error_string(HelloValidationResult res)
+{
+    switch (res)
+    {
+        case HelloValidationResult::INVALID_TRANSPORT: return "Hello transport không phải websocket";
+        case HelloValidationResult::INVALID_FORMAT: return "Hello audio format không phải opus";
+        case HelloValidationResult::INVALID_CHANNELS: return "Hello audio channels không phải mono (1)";
+        case HelloValidationResult::UNSUPPORTED_SAMPLE_RATE: return "Hello sample rate không được hỗ trợ";
+        case HelloValidationResult::INVALID_SESSION_ID: return "Hello session_id trống hoặc quá dài";
+        default: return "Hello hợp lệ";
+    }
+}
+
+inline bool is_mcp_async_tool(McpTool tool)
+{
+    switch (tool)
+    {
+        case McpTool::MUSIC_PLAY:
+        case McpTool::MUSIC_PAUSE:
+        case McpTool::MUSIC_RESUME:
+        case McpTool::MUSIC_STOP:
+        case McpTool::MUSIC_VOLUME:
+        case McpTool::CAMERA_OPEN:
+        case McpTool::CAMERA_START:
+        case McpTool::CAMERA_STOP:
+        case McpTool::CAMERA_REFRESH:
+            return true;
+        default:
+            return false;
+    }
+}
+}
+

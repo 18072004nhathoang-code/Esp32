@@ -98,5 +98,31 @@ int main()
     assert(xiaozhi::mcp_volume_valid(100));
     assert(!xiaozhi::mcp_result_success(true, false));
     assert(xiaozhi::mcp_result_success(true, true));
+
+    // Server hello validation
+    assert(xiaozhi::validate_server_hello("websocket", "opus", 1, 16000, "sess-123", 96) ==
+           xiaozhi::HelloValidationResult::OK);
+    assert(xiaozhi::validate_server_hello("webrtc", "opus", 1, 16000, "sess-123", 96) ==
+           xiaozhi::HelloValidationResult::INVALID_TRANSPORT);
+    assert(xiaozhi::validate_server_hello("websocket", "pcm", 1, 16000, "sess-123", 96) ==
+           xiaozhi::HelloValidationResult::INVALID_FORMAT);
+    assert(xiaozhi::validate_server_hello("websocket", "opus", 2, 16000, "sess-123", 96) ==
+           xiaozhi::HelloValidationResult::INVALID_CHANNELS);
+    assert(xiaozhi::validate_server_hello("websocket", "opus", 1, 44100, "sess-123", 96) ==
+           xiaozhi::HelloValidationResult::UNSUPPORTED_SAMPLE_RATE);
+    assert(xiaozhi::validate_server_hello("websocket", "opus", 1, 16000, "", 96) ==
+           xiaozhi::HelloValidationResult::INVALID_SESSION_ID);
+    assert(xiaozhi::validate_server_hello("websocket", "opus", 1, 16000, nullptr, 96) ==
+           xiaozhi::HelloValidationResult::INVALID_SESSION_ID);
+
+    // MCP Async Tools
+    assert(xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::MUSIC_PLAY));
+    assert(xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::MUSIC_STOP));
+    assert(xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::CAMERA_OPEN));
+    assert(xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::CAMERA_STOP));
+    assert(!xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::CAMERA_STATUS));
+    assert(!xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::CLOCK_TIME));
+    assert(!xiaozhi::is_mcp_async_tool(xiaozhi::McpTool::UNKNOWN));
+
     return 0;
 }

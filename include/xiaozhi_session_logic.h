@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace xiaozhi
 {
@@ -85,5 +86,222 @@ inline bool live_capture_matches(uint32_t expected_cmd, uint32_t active_cmd)
 inline bool snapshot_flush_needed(uint32_t snapshot_gen, size_t sample_count)
 {
     return snapshot_gen != 0 && sample_count > 0;
+}
+
+enum class SessionPhase : uint8_t
+{
+    IDLE = 0,
+    CONNECTING,
+    LISTENING,
+    FLUSHING,
+    WAITING_RESPONSE,
+    SPEAKING,
+    CLEANUP
+};
+
+struct PhaseDeadlines
+{
+    uint32_t connect_total_budget_ms = 15000;
+    uint32_t listening_max_ms = 30000;
+    uint32_t flushing_timeout_ms = 5000;
+    uint32_t wait_response_timeout_ms = 20000;
+    uint32_t speaking_stall_timeout_ms = 8000;
+    uint32_t speaking_max_total_ms = 180000;
+    uint32_t cleanup_timeout_ms = 5000;
+    uint32_t session_absolute_max_ms = 240000;
+};
+
+struct SessionTiming
+{
+    uint32_t t_ptt_ms = 0;
+    uint32_t t_wss_connected_ms = 0;
+    uint32_t t_hello_ms = 0;
+    uint32_t t_recorder_active_ms = 0;
+    uint32_t t_release_ms = 0;
+    uint32_t t_last_audio_sent_ms = 0;
+    uint32_t t_listen_stop_ms = 0;
+    uint32_t t_stt_ms = 0;
+    uint32_t t_mcp_ack_ms = 0;
+    uint32_t t_first_tts_ms = 0;
+    uint32_t t_first_pcm_ms = 0;
+    uint32_t t_done_ms = 0;
+
+    void reset()
+    {
+        memset(this, 0, sizeof(*this));
+    }
+};
+
+class SessionPhaseTracker
+{
+public:
+    SessionPhaseTracker() = default;
+
+    void reset()
+    {
+        phase_ = SessionPhase::IDLE;
+        session_started_ms_ = 0;
+        phase_started_ms_ = 0;
+        last_progress_ms_ = 0;
+    }
+
+    void start_connecting(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::CONNECTING;
+        session_started_ms_ = now_ms;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void start_listening(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::LISTENING;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void start_flushing(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::FLUSHING;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void start_waiting_response(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::WAITING_RESPONSE;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void start_speaking(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::SPEAKING;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void start_cleanup(uint32_t now_ms)
+    {
+        phase_ = SessionPhase::CLEANUP;
+        phase_started_ms_ = now_ms;
+        last_progress_ms_ = now_ms;
+    }
+
+    void record_progress(uint32_t now_ms)
+    {
+        last_progress_ms_ = now_ms;
+    }
+
+    SessionPhase phase() const { return phase_; }
+    uint32_t phase_started_ms() const { return phase_started_ms_; }
+    uint32_t last_progress_ms() const { return last_progress_ms_; }
+    uint32_t session_started_ms() const { return session_started_ms_; }
+
+    enum class TimeoutReason : uint8_t
+    {
+        NONE = 0,
+        CONNECT_TIMEOUT,
+        LISTENING_TIMEOUT,
+        FLUSH_TIMEOUT,
+        WAIT_RESPONSE_TIMEOUT,
+        SPEAKING_STALLED,
+        SPEAKING_MAX_EXCEEDED,
+        CLEANUP_TIMEOUT,
+        ABSOLUTE_SESSION_TIMEOUT
+    };
+
+    TimeoutReason check_timeout(uint32_t now_ms, const PhaseDeadlines &deadlines) const
+    {
+        if (phase_ == SessionPhase::IDLE) return TimeoutReason::NONE;
+
+        if (phase_ != SessionPhase::CLEANUP &&
+            static_cast<int32_t>(now_ms - session_started_ms_) >= static_cast<int32_t>(deadlines.session_absolute_max_ms))
+        {
+            return TimeoutReason::ABSOLUTE_SESSION_TIMEOUT;
+        }
+
+        switch (phase_)
+        {
+            case SessionPhase::CONNECTING:
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.connect_total_budget_ms))
+                    return TimeoutReason::CONNECT_TIMEOUT;
+                break;
+            case SessionPhase::LISTENING:
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.listening_max_ms))
+                    return TimeoutReason::LISTENING_TIMEOUT;
+                break;
+            case SessionPhase::FLUSHING:
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.flushing_timeout_ms))
+                    return TimeoutReason::FLUSH_TIMEOUT;
+                break;
+            case SessionPhase::WAITING_RESPONSE:
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.wait_response_timeout_ms))
+                    return TimeoutReason::WAIT_RESPONSE_TIMEOUT;
+                break;
+            case SessionPhase::SPEAKING:
+                if (static_cast<int32_t>(now_ms - last_progress_ms_) >= static_cast<int32_t>(deadlines.speaking_stall_timeout_ms))
+                    return TimeoutReason::SPEAKING_STALLED;
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.speaking_max_total_ms))
+                    return TimeoutReason::SPEAKING_MAX_EXCEEDED;
+                break;
+            case SessionPhase::CLEANUP:
+                if (static_cast<int32_t>(now_ms - phase_started_ms_) >= static_cast<int32_t>(deadlines.cleanup_timeout_ms))
+                    return TimeoutReason::CLEANUP_TIMEOUT;
+                break;
+            default:
+                break;
+        }
+        return TimeoutReason::NONE;
+    }
+
+    static const char *timeout_reason_string(TimeoutReason reason)
+    {
+        switch (reason)
+        {
+            case TimeoutReason::CONNECT_TIMEOUT: return "Quá thời gian kết nối/xác thực WSS Xiaozhi";
+            case TimeoutReason::LISTENING_TIMEOUT: return "Quá thời gian thu âm giọng nói";
+            case TimeoutReason::FLUSH_TIMEOUT: return "Quá thời gian gửi dữ liệu âm thanh";
+            case TimeoutReason::WAIT_RESPONSE_TIMEOUT: return "Máy chủ Xiaozhi không phản hồi câu trả lời";
+            case TimeoutReason::SPEAKING_STALLED: return "Phát âm thanh Xiaozhi bị gián đoạn (mất luồng)";
+            case TimeoutReason::SPEAKING_MAX_EXCEEDED: return "Thời lượng phát câu trả lời vượt mức tối đa";
+            case TimeoutReason::CLEANUP_TIMEOUT: return "Quá thời gian giải phóng tài nguyên";
+            case TimeoutReason::ABSOLUTE_SESSION_TIMEOUT: return "Phiên Xiaozhi vượt quá giới hạn tối đa";
+            default: return "Phiên kết thúc bình thường";
+        }
+    }
+
+private:
+    SessionPhase phase_ = SessionPhase::IDLE;
+    uint32_t session_started_ms_ = 0;
+    uint32_t phase_started_ms_ = 0;
+    uint32_t last_progress_ms_ = 0;
+};
+
+inline bool session_id_matches_contract(const char *incoming_session,
+                                        const char *expected_session,
+                                        bool socket_authenticated)
+{
+    if (!socket_authenticated) return false;
+    if (!incoming_session || !*incoming_session)
+    {
+        return true;
+    }
+    return expected_session && strcmp(incoming_session, expected_session) == 0;
+}
+
+inline bool has_captured_audio(size_t live_offset, size_t fill, size_t frames_sent)
+{
+    return live_offset > 0 || fill > 0 || frames_sent > 0;
+}
+
+inline bool can_reuse_connection(bool connected, bool clean_turn_end,
+                                 size_t uplink_pending, size_t downlink_pending,
+                                 uint32_t idle_since_ms, uint32_t now_ms,
+                                 uint32_t max_idle_ms)
+{
+    if (!connected || !clean_turn_end || uplink_pending > 0 || downlink_pending > 0)
+        return false;
+    return static_cast<int32_t>(now_ms - idle_since_ms) < static_cast<int32_t>(max_idle_ms);
 }
 }

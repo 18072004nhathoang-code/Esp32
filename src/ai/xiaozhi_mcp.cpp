@@ -21,7 +21,7 @@ bool only_fields(JsonObjectConst object, const char *const *allowed, size_t allo
     return true;
 }
 
-void make_error(uint32_t id, int code, const char *message, const char *session_id, String &out)
+void XiaozhiMcpServer::make_error(uint32_t id, int code, const char *message, const char *session_id, String &out)
 {
     DynamicJsonDocument response(768);
     response["session_id"] = session_id ? session_id : "";
@@ -36,8 +36,8 @@ void make_error(uint32_t id, int code, const char *message, const char *session_
     serializeJson(response, out);
 }
 
-void make_text_result(uint32_t id, const char *text, bool is_error,
-                      const char *session_id, String &out)
+void XiaozhiMcpServer::make_text_result(uint32_t id, const char *text, bool is_error,
+                                        const char *session_id, String &out)
 {
     DynamicJsonDocument response(1024);
     response["session_id"] = session_id ? session_id : "";
@@ -81,16 +81,16 @@ void XiaozhiMcpServer::remember(uint32_t id, const String &response)
     next_cache_ = (next_cache_ + 1) % 8;
 }
 
-bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
-                              String &outer_response)
+McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char *session_id,
+                                             String &outer_response, McpAsyncJob &async_job)
 {
     const char *request_fields[] = {"jsonrpc", "id", "method", "params"};
     if (request.isNull() || !only_fields(request, request_fields, 4) ||
         strcmp(request["jsonrpc"] | "", "2.0") != 0 || !request["id"].is<uint32_t>() ||
-        !request["method"].is<const char *>()) return false;
+        !request["method"].is<const char *>()) return McpDispatchResult::ERROR_OR_REJECTED;
     const uint32_t id = request["id"].as<uint32_t>();
-    if (id == 0) return false;
-    if (lookup(id, outer_response)) return true;
+    if (id == 0) return McpDispatchResult::ERROR_OR_REJECTED;
+    if (lookup(id, outer_response)) return McpDispatchResult::HANDLED_IMMEDIATE;
     const char *method = request["method"].as<const char *>();
     JsonObjectConst params = request["params"].as<JsonObjectConst>();
 
@@ -110,6 +110,8 @@ bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
         info["version"] = "1";
         outer_response = "";
         serializeJson(response, outer_response);
+        remember(id, outer_response);
+        return McpDispatchResult::HANDLED_IMMEDIATE;
     }
     else if (strcmp(method, "tools/list") == 0)
     {
@@ -117,7 +119,9 @@ bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
         if ((!params.isNull() && !only_fields(params, param_fields, 2)) ||
             (!params["cursor"].isNull() && strcmp(params["cursor"] | "", "") != 0) ||
             (params["withUserTools"] | false))
+        {
             make_error(id, -32602, "Invalid tools/list params", session_id, outer_response);
+        }
         else
         {
             DynamicJsonDocument response(6144);
@@ -165,6 +169,8 @@ bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
             outer_response = "";
             serializeJson(response, outer_response);
         }
+        remember(id, outer_response);
+        return McpDispatchResult::HANDLED_IMMEDIATE;
     }
     else if (strcmp(method, "tools/call") == 0)
     {
@@ -172,108 +178,168 @@ bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
         if (params.isNull() || !only_fields(params, call_fields, 2) ||
             !params["name"].is<const char *>() ||
             (!params["arguments"].isNull() && !params["arguments"].is<JsonObjectConst>()))
+        {
             make_error(id, -32602, "Invalid tools/call params", session_id, outer_response);
+            remember(id, outer_response);
+            return McpDispatchResult::HANDLED_IMMEDIATE;
+        }
+
+        const char *name = params["name"].as<const char *>();
+        JsonObjectConst args = params["arguments"].as<JsonObjectConst>();
+        AiMusicAction action = {};
+        bool is_music = true;
+        bool args_ok = true;
+        const xiaozhi::McpTool tool_type = xiaozhi::mcp_tool_type(name);
+        if (tool_type == xiaozhi::McpTool::MUSIC_PLAY)
+        {
+            action.type = AI_MUSIC_ACTION_PLAY;
+            const char *fields[] = {"source_id"};
+            args_ok = args.isNull() || only_fields(args, fields, 1);
+            if (!args["source_id"].isNull())
+            {
+                const char *source = args["source_id"].as<const char *>();
+                args_ok = args_ok && source && *source && strlen(source) < sizeof(action.source_id);
+                if (args_ok) strlcpy(action.source_id, source, sizeof(action.source_id));
+            }
+        }
+        else if (tool_type == xiaozhi::McpTool::MUSIC_PAUSE) action.type = AI_MUSIC_ACTION_PAUSE;
+        else if (tool_type == xiaozhi::McpTool::MUSIC_RESUME) action.type = AI_MUSIC_ACTION_RESUME;
+        else if (tool_type == xiaozhi::McpTool::MUSIC_STOP) action.type = AI_MUSIC_ACTION_STOP;
+        else if (tool_type == xiaozhi::McpTool::MUSIC_VOLUME)
+        {
+            action.type = AI_MUSIC_ACTION_VOLUME;
+            const char *fields[] = {"value"};
+            args_ok = !args.isNull() && only_fields(args, fields, 1) && args["value"].is<int>();
+            const int value = args_ok ? args["value"].as<int>() : -1;
+            args_ok = args_ok && xiaozhi::mcp_volume_valid(value);
+            if (args_ok) action.volume = static_cast<uint8_t>(value);
+        }
+        else is_music = false;
+
+        if (is_music)
+        {
+            if (action.type != AI_MUSIC_ACTION_PLAY && action.type != AI_MUSIC_ACTION_VOLUME)
+                args_ok = no_arguments(args);
+            if (!args_ok || !ai_music_action_valid(action))
+            {
+                make_error(id, -32602, "Invalid music arguments", session_id, outer_response);
+                remember(id, outer_response);
+                return McpDispatchResult::HANDLED_IMMEDIATE;
+            }
+            async_job.id = id;
+            strlcpy(async_job.session_id, session_id ? session_id : "", sizeof(async_job.session_id));
+            async_job.tool = tool_type;
+            async_job.music_action = action;
+            return McpDispatchResult::DISPATCH_ASYNC;
+        }
+        else if (tool_type == xiaozhi::McpTool::CAMERA_OPEN ||
+                 tool_type == xiaozhi::McpTool::CAMERA_START ||
+                 tool_type == xiaozhi::McpTool::CAMERA_STOP ||
+                 tool_type == xiaozhi::McpTool::CAMERA_REFRESH)
+        {
+            if (!no_arguments(args))
+            {
+                make_error(id, -32602, "Camera tool has no arguments", session_id, outer_response);
+                remember(id, outer_response);
+                return McpDispatchResult::HANDLED_IMMEDIATE;
+            }
+            async_job.id = id;
+            strlcpy(async_job.session_id, session_id ? session_id : "", sizeof(async_job.session_id));
+            async_job.tool = tool_type;
+            return McpDispatchResult::DISPATCH_ASYNC;
+        }
+        else if (tool_type == xiaozhi::McpTool::CAMERA_STATUS)
+        {
+            if (!no_arguments(args)) make_error(id, -32602, "Camera tool has no arguments", session_id, outer_response);
+            else
+            {
+                char status[192];
+                snprintf(status, sizeof(status), "available=%s connected=%s state=%s model=%s",
+                         camera_service_is_available() ? "true" : "false",
+                         camera_service_is_connected() ? "true" : "false",
+                         camera_runtime_state_to_string(camera_service_get_runtime_state()),
+                         camera_service_get_model_name());
+                make_text_result(id, status, false, session_id, outer_response);
+            }
+            remember(id, outer_response);
+            return McpDispatchResult::HANDLED_IMMEDIATE;
+        }
+        else if (tool_type == xiaozhi::McpTool::CLOCK_TIME)
+        {
+            char clock[16] = {};
+            const bool ok = no_arguments(args) && time_service_is_synced() &&
+                            time_service_format_clock(clock, sizeof(clock));
+            make_text_result(id, ok ? clock : "SNTP chưa đồng bộ", !ok,
+                             session_id, outer_response);
+            remember(id, outer_response);
+            return McpDispatchResult::HANDLED_IMMEDIATE;
+        }
         else
         {
-            const char *name = params["name"].as<const char *>();
-            JsonObjectConst args = params["arguments"].as<JsonObjectConst>();
-            AiMusicAction action = {};
-            bool is_music = true;
-            bool args_ok = true;
-            const xiaozhi::McpTool tool_type = xiaozhi::mcp_tool_type(name);
-            if (tool_type == xiaozhi::McpTool::MUSIC_PLAY)
-            {
-                action.type = AI_MUSIC_ACTION_PLAY;
-                const char *fields[] = {"source_id"};
-                args_ok = args.isNull() || only_fields(args, fields, 1);
-                if (!args["source_id"].isNull())
-                {
-                    const char *source = args["source_id"].as<const char *>();
-                    args_ok = args_ok && source && *source && strlen(source) < sizeof(action.source_id);
-                    if (args_ok) strlcpy(action.source_id, source, sizeof(action.source_id));
-                }
-            }
-            else if (tool_type == xiaozhi::McpTool::MUSIC_PAUSE) action.type = AI_MUSIC_ACTION_PAUSE;
-            else if (tool_type == xiaozhi::McpTool::MUSIC_RESUME) action.type = AI_MUSIC_ACTION_RESUME;
-            else if (tool_type == xiaozhi::McpTool::MUSIC_STOP) action.type = AI_MUSIC_ACTION_STOP;
-            else if (tool_type == xiaozhi::McpTool::MUSIC_VOLUME)
-            {
-                action.type = AI_MUSIC_ACTION_VOLUME;
-                const char *fields[] = {"value"};
-                args_ok = !args.isNull() && only_fields(args, fields, 1) && args["value"].is<int>();
-                const int value = args_ok ? args["value"].as<int>() : -1;
-                args_ok = args_ok && xiaozhi::mcp_volume_valid(value);
-                if (args_ok) action.volume = static_cast<uint8_t>(value);
-            }
-            else is_music = false;
-
-            if (is_music)
-            {
-                if (action.type != AI_MUSIC_ACTION_PLAY && action.type != AI_MUSIC_ACTION_VOLUME)
-                    args_ok = no_arguments(args);
-                if (!args_ok || !ai_music_action_valid(action))
-                    make_error(id, -32602, "Invalid music arguments", session_id, outer_response);
-                else
-                {
-                    char action_error[128] = {};
-                    const bool device_ack = music_player_execute_ai_action(&action, 2500,
-                                                                            action_error, sizeof(action_error));
-                    const bool executed = xiaozhi::mcp_result_success(true, device_ack);
-                    make_text_result(id, executed ? "Lệnh nhạc đã được thiết bị ACK"
-                                                  : action_error,
-                                     !executed, session_id, outer_response);
-                }
-            }
-            else if (tool_type == xiaozhi::McpTool::CAMERA_OPEN ||
-                     tool_type == xiaozhi::McpTool::CAMERA_START ||
-                     tool_type == xiaozhi::McpTool::CAMERA_STOP ||
-                     tool_type == xiaozhi::McpTool::CAMERA_REFRESH)
-            {
-                if (!no_arguments(args))
-                    make_error(id, -32602, "Camera tool has no arguments", session_id, outer_response);
-                else
-                {
-                    bool ok = false;
-                    if (tool_type == xiaozhi::McpTool::CAMERA_OPEN) ok = ui_open_camera_app();
-                    else if (tool_type == xiaozhi::McpTool::CAMERA_START) ok = camera_service_start();
-                    else if (tool_type == xiaozhi::McpTool::CAMERA_STOP) ok = camera_service_stop(2000);
-                    else
-                    {
-                        const bool stopped = camera_service_stop(2000);
-                        ok = stopped && camera_service_start();
-                    }
-                    make_text_result(id, ok ? "Camera đã ACK thao tác"
-                                            : "Camera không thực hiện được thao tác",
-                                     !ok, session_id, outer_response);
-                }
-            }
-            else if (tool_type == xiaozhi::McpTool::CAMERA_STATUS)
-            {
-                if (!no_arguments(args)) make_error(id, -32602, "Camera tool has no arguments", session_id, outer_response);
-                else
-                {
-                    char status[192];
-                    snprintf(status, sizeof(status), "available=%s connected=%s state=%s model=%s",
-                             camera_service_is_available() ? "true" : "false",
-                             camera_service_is_connected() ? "true" : "false",
-                             camera_runtime_state_to_string(camera_service_get_runtime_state()),
-                             camera_service_get_model_name());
-                    make_text_result(id, status, false, session_id, outer_response);
-                }
-            }
-            else if (tool_type == xiaozhi::McpTool::CLOCK_TIME)
-            {
-                char clock[16] = {};
-                const bool ok = no_arguments(args) && time_service_is_synced() &&
-                                time_service_format_clock(clock, sizeof(clock));
-                make_text_result(id, ok ? clock : "SNTP chưa đồng bộ", !ok,
-                                 session_id, outer_response);
-            }
-            else make_error(id, -32601, "Tool not found", session_id, outer_response);
+            make_error(id, -32601, "Tool not found", session_id, outer_response);
+            remember(id, outer_response);
+            return McpDispatchResult::HANDLED_IMMEDIATE;
         }
     }
-    else make_error(id, -32601, "Method not found", session_id, outer_response);
+    else
+    {
+        make_error(id, -32601, "Method not found", session_id, outer_response);
+        remember(id, outer_response);
+        return McpDispatchResult::HANDLED_IMMEDIATE;
+    }
+}
 
-    remember(id, outer_response);
-    return true;
+bool XiaozhiMcpServer::handle(JsonObjectConst request, const char *session_id,
+                              String &outer_response)
+{
+    McpAsyncJob job = {};
+    const McpDispatchResult disp = dispatch(request, session_id, outer_response, job);
+    if (disp == McpDispatchResult::HANDLED_IMMEDIATE) return true;
+    if (disp == McpDispatchResult::DISPATCH_ASYNC)
+    {
+        if (job.tool == xiaozhi::McpTool::MUSIC_PLAY || job.tool == xiaozhi::McpTool::MUSIC_PAUSE ||
+            job.tool == xiaozhi::McpTool::MUSIC_RESUME || job.tool == xiaozhi::McpTool::MUSIC_STOP ||
+            job.tool == xiaozhi::McpTool::MUSIC_VOLUME)
+        {
+            char action_error[128] = {};
+            const bool device_ack = music_player_execute_ai_action(&job.music_action, 2500,
+                                                                   action_error, sizeof(action_error));
+            const bool executed = xiaozhi::mcp_result_success(true, device_ack);
+            make_text_result(job.id, executed ? "Lệnh nhạc đã được thiết bị ACK"
+                                              : action_error,
+                             !executed, job.session_id, outer_response);
+        }
+        else if (job.tool == xiaozhi::McpTool::CAMERA_OPEN)
+        {
+            const bool ok = ui_open_camera_app();
+            make_text_result(job.id, ok ? "Camera đã ACK thao tác"
+                                        : "Camera không thực hiện được thao tác",
+                             !ok, job.session_id, outer_response);
+        }
+        else if (job.tool == xiaozhi::McpTool::CAMERA_START)
+        {
+            const bool ok = camera_service_start();
+            make_text_result(job.id, ok ? "Camera đã ACK thao tác"
+                                        : "Camera không thực hiện được thao tác",
+                             !ok, job.session_id, outer_response);
+        }
+        else if (job.tool == xiaozhi::McpTool::CAMERA_STOP)
+        {
+            const bool ok = camera_service_stop(2000);
+            make_text_result(job.id, ok ? "Camera đã ACK thao tác"
+                                        : "Camera không thực hiện được thao tác",
+                             !ok, job.session_id, outer_response);
+        }
+        else if (job.tool == xiaozhi::McpTool::CAMERA_REFRESH)
+        {
+            const bool stopped = camera_service_stop(2000);
+            const bool ok = stopped && camera_service_start();
+            make_text_result(job.id, ok ? "Camera đã ACK thao tác"
+                                        : "Camera không thực hiện được thao tác",
+                             !ok, job.session_id, outer_response);
+        }
+        remember(job.id, outer_response);
+        return true;
+    }
+    return false;
 }

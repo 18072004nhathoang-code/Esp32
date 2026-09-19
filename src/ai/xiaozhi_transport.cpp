@@ -49,6 +49,13 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
                              const char *client_id, uint32_t generation,
                              char *error, size_t error_size)
 {
+    if (connected() && websocket_ && uri_ == config.url && generation != 0)
+    {
+        if (setGeneration(generation))
+        {
+            return true;
+        }
+    }
     close();
     if (!xiaozhi::valid_websocket_config(config) || !ca_cert || !*ca_cert ||
         !device_id || !*device_id || !client_id || !*client_id || generation == 0)
@@ -118,12 +125,40 @@ void XiaozhiTransport::loop()
 {
     if (!connected() || !uplink_queue_ || !websocket_) return;
     AudioPacket packet = {};
-    if (xQueueReceive(uplink_queue_, &packet, 0) == pdTRUE)
+    if (xQueuePeek(uplink_queue_, &packet, 0) == pdTRUE)
     {
-        if (packet.generation == generation() && esp_websocket_client_send_bin(
-                websocket_, reinterpret_cast<const char *>(packet.data), packet.size,
-                pdMS_TO_TICKS(30)) != packet.size)
-            dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
+        if (packet.generation != generation())
+        {
+            xQueueReceive(uplink_queue_, &packet, 0);
+            in_flight_started_ms_ = 0;
+            return;
+        }
+        const uint32_t now = millis();
+        if (in_flight_started_ms_ == 0)
+        {
+            in_flight_started_ms_ = now == 0 ? 1 : now;
+        }
+        const int sent = esp_websocket_client_send_bin(
+            websocket_, reinterpret_cast<const char *>(packet.data), packet.size,
+            pdMS_TO_TICKS(30));
+        if (sent == packet.size)
+        {
+            xQueueReceive(uplink_queue_, &packet, 0);
+            in_flight_started_ms_ = 0;
+        }
+        else
+        {
+            if (static_cast<int32_t>(now - in_flight_started_ms_) >= 1500)
+            {
+                xQueueReceive(uplink_queue_, &packet, 0);
+                in_flight_started_ms_ = 0;
+                dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    else
+    {
+        in_flight_started_ms_ = 0;
     }
 }
 
@@ -140,11 +175,26 @@ void XiaozhiTransport::close()
     clearInbound();
     if (fragment_assembler_) fragment_assembler_->reset();
     generation_ = 0;
+    in_flight_started_ms_ = 0;
 }
 
 void XiaozhiTransport::purgeUplink()
 {
     if (uplink_queue_) xQueueReset(uplink_queue_);
+    in_flight_started_ms_ = 0;
+}
+
+bool XiaozhiTransport::setGeneration(uint32_t generation)
+{
+    if (!connected() || !websocket_ || generation == 0) return false;
+    purgeUplink();
+    clearInbound();
+    if (fragment_assembler_) fragment_assembler_->reset();
+    generation_ = generation;
+    dropped_uplink_ = 0;
+    dropped_downlink_ = 0;
+    in_flight_started_ms_ = 0;
+    return true;
 }
 
 bool XiaozhiTransport::sendText(const char *text)
@@ -172,6 +222,11 @@ bool XiaozhiTransport::queueAudio(const uint8_t *data, size_t size, uint32_t gen
 size_t XiaozhiTransport::uplinkPending() const
 {
     return uplink_queue_ ? static_cast<size_t>(uxQueueMessagesWaiting(uplink_queue_)) : 0;
+}
+
+size_t XiaozhiTransport::inboundPending() const
+{
+    return inbound_queue_ ? static_cast<size_t>(uxQueueMessagesWaiting(inbound_queue_)) : 0;
 }
 
 bool XiaozhiTransport::audioQueueHasCapacity(uint32_t generation) const

@@ -33,7 +33,10 @@ public:
     size_t uplinkPending() const;
     size_t uplinkCapacity() const { return 8; }
     bool uplinkIdle() const { return uplinkPending() == 0; }
+    size_t inboundPending() const;
+    bool inboundIdle() const { return inboundPending() == 0; }
     bool audioQueueHasCapacity(uint32_t generation) const;
+    bool setGeneration(uint32_t generation);
 
 private:
     struct AudioPacket
@@ -61,6 +64,7 @@ private:
     std::atomic<uint32_t> generation_;
     std::atomic<uint32_t> dropped_uplink_;
     std::atomic<uint32_t> dropped_downlink_;
+    uint32_t in_flight_started_ms_ = 0;
 
     static void eventHandler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
     void onEvent(int32_t event_id, esp_websocket_event_data_t *event);
