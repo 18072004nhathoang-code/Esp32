@@ -89,21 +89,28 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 /* Callback đọc tọa độ cảm ứng từ LovyanGFX */
 static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 {
-    uint16_t touchX, touchY;
+    uint16_t touchX = 0, touchY = 0;
     bool touched = shared_i2c_touch_read(&touchX, &touchY);
+
+    SharedTouchSnapshot snap = {};
+    const bool has_snap = shared_i2c_touch_get_snapshot(&snap);
+    const bool io_ok = has_snap ? snap.io_ok : true;
 
     const AIVoiceState ai_state = ai_voice_get_state();
     if (ai_state == AI_STATE_STARTING || ai_state == AI_STATE_LISTENING)
     {
         static uint32_t last_log_ms = 0;
         static bool last_touched = false;
+        static bool last_io_ok = true;
         const uint32_t now = millis();
-        if (touched != last_touched || (now - last_log_ms) >= 500)
+        if (touched != last_touched || io_ok != last_io_ok || (now - last_log_ms) >= 500)
         {
             last_log_ms = now;
             last_touched = touched;
-            log_i("Xiaozhi Touch: state=%s x=%u y=%u ai_state=%d gen=%u",
-                  touched ? "PR" : "REL",
+            last_io_ok = io_ok;
+            log_i("Xiaozhi Touch: state=%s io_ok=%d x=%u y=%u ai_state=%d gen=%u",
+                  touched ? "PR" : (io_ok ? "REL" : "I2C_ERR"),
+                  io_ok ? 1 : 0,
                   static_cast<unsigned>(touchX), static_cast<unsigned>(touchY),
                   static_cast<int>(ai_state),
                   static_cast<unsigned>(ai_voice_get_active_generation()));
@@ -155,7 +162,7 @@ static void lvgl_render_task(void *pvParameters)
         if (power_manager_is_rendering_paused())
         {
             // Trong chế độ Sleep: Tạm dừng lv_timer_handler(), chỉ quét cảm ứng tiết kiệm điện để chờ Touch to Wake
-            uint16_t touchX, touchY;
+            uint16_t touchX = 0, touchY = 0;
             if (shared_i2c_touch_read(&touchX, &touchY))
             {
                 // Chạm vào màn hình lúc đang ngủ -> đánh thức ngay lập tức!

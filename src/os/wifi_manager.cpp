@@ -431,6 +431,32 @@ static bool is_wifi_forgotten_persisted(void)
     return forgotten;
 }
 
+static bool clear_and_verify_wifi_forgotten(void)
+{
+    if (!prefs_mutex) return false;
+    lock_prefs();
+    bool ok = true;
+    if (prefs.begin(WIFI_PREFS_NAMESPACE, false))
+    {
+        if (prefs.isKey(WIFI_PREFS_KEY_FORGOTTEN))
+        {
+            prefs.remove(WIFI_PREFS_KEY_FORGOTTEN);
+            if (prefs.isKey(WIFI_PREFS_KEY_FORGOTTEN))
+            {
+                log_e("Không thể xóa forgotten marker trong NVS");
+                ok = false;
+            }
+        }
+        prefs.end();
+    }
+    else
+    {
+        ok = false;
+    }
+    unlock_prefs();
+    return ok;
+}
+
 /* Task chuyên trách quản lý mạng WiFi chạy độc lập trên Core 0 */
 static void wifi_service_task(void *pvParameters)
 {
@@ -668,9 +694,12 @@ static void wifi_service_task(void *pvParameters)
                     if (wifi_manager_load_credentials(cur_saved_s, cur_saved_p) &&
                         cur_saved_s == cur_target_s && cur_saved_p == cur_target_p)
                     {
-                        lock_wifi();
-                        current_save_status = WIFI_SAVED;
-                        unlock_wifi();
+                        if (clear_and_verify_wifi_forgotten())
+                        {
+                            lock_wifi();
+                            current_save_status = WIFI_SAVED;
+                            unlock_wifi();
+                        }
                     }
                 }
             }
@@ -697,16 +726,15 @@ static void wifi_service_task(void *pvParameters)
                     {
                         String nvs_ssid, nvs_pass;
                         unlock_wifi();
-                        if (wifi_manager_load_credentials(nvs_ssid, nvs_pass) && nvs_ssid.length() > 0)
+                        const bool loaded = wifi_manager_load_credentials(nvs_ssid, nvs_pass) && nvs_ssid.length() > 0;
+                        lock_wifi();
+                        if (loaded &&
+                            active_generation_snapshot == request_generation &&
+                            active_generation_snapshot == active_connect_generation)
                         {
-                            lock_wifi();
                             strlcpy(target_ssid, nvs_ssid.c_str(), sizeof(target_ssid));
                             strlcpy(target_pass, nvs_pass.c_str(), sizeof(target_pass));
                             log_i("Phục hồi mạng đã lưu [%s] sau khi sai mật khẩu mạng mới", target_ssid);
-                        }
-                        else
-                        {
-                            lock_wifi();
                         }
                     }
                 }
@@ -1243,7 +1271,10 @@ bool wifi_manager_connect(const char *ssid, const char *pass, bool save_to_nvs)
             const char *check_pass = pass ? pass : "";
             if (nvs_s == ssid && nvs_p == check_pass)
             {
-                matches_saved = true;
+                if (clear_and_verify_wifi_forgotten())
+                {
+                    matches_saved = true;
+                }
             }
         }
     }

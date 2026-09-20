@@ -164,7 +164,13 @@ static void publish_touch_snapshot(const SharedTouchSnapshot &snapshot)
 
 bool shared_i2c_touch_read(uint16_t *x, uint16_t *y)
 {
-    if (!s_touch_detected || !x || !y)
+    if (!x || !y)
+    {
+        return false;
+    }
+    *x = 0;
+    *y = 0;
+    if (!s_touch_detected)
     {
         return false;
     }

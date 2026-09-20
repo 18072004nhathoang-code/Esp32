@@ -228,6 +228,9 @@ public:
 
     void reset() { size_ = 0; kind_ = Kind::NONE; failed_ = false; }
     bool failed() const { return failed_; }
+    bool isActive() const { return kind_ != Kind::NONE; }
+    Kind kind() const { return kind_; }
+    size_t size() const { return size_; }
 
 private:
     uint8_t *storage_;

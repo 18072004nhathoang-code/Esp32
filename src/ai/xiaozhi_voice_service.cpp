@@ -112,6 +112,7 @@ static uint32_t s_cleanup_generation = 0;
 static uint32_t s_cleanup_deadline_ms = 0;
 static uint32_t s_cleanup_recorder_request = 0;
 static uint8_t s_cleanup_retries = 0;
+static bool s_recovery_required = false;
 static uint32_t s_last_diagnostic_ms = 0;
 static xiaozhi::BackpressureWindow s_backpressure;
 
@@ -124,7 +125,7 @@ static const size_t kCaptureChunkSamples = 256;
 static const size_t kFramesPerWorkerPass = 2;
 
 enum class EncodeResult : uint8_t { QUEUED, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
-enum class PumpResult : uint8_t { PROGRESS, IDLE, COMPLETE, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
+enum class PumpResult : uint8_t { PROGRESS, IDLE, COMPLETE, BACKPRESSURE, TIMEOUT, ERROR, HANDLED_ERROR, CANCELLED };
 
 bool elapsed(uint32_t deadline) { return xiaozhi::deadline_reached(millis(), deadline); }
 
@@ -151,21 +152,39 @@ void log_session_fault(const char *reason, uint32_t generation)
           static_cast<unsigned>(psram_free));
 }
 
+static void format_latency(char *buf, size_t buf_size, uint32_t t_start, uint32_t t_end)
+{
+    if (t_start == 0 || t_end == 0 || t_end < t_start)
+    {
+        strlcpy(buf, "N/A", buf_size);
+    }
+    else
+    {
+        snprintf(buf, buf_size, "%ums", static_cast<unsigned>(t_end - t_start));
+    }
+}
+
 void log_latency_metrics(uint32_t generation)
 {
-    log_i("Xiaozhi Latency [%s gen=%u]: PTT->WSS=%ums WSS->HELLO=%ums HELLO->REC=%ums REC->REL=%ums REL->LAST_AUDIO=%ums AUDIO->STOP=%ums STOP->STT=%ums STOP->TTS=%ums TTS->PCM=%ums TOTAL=%ums",
+    char ptt_wss[16], wss_hello[16], hello_rec[16], rec_rel[16];
+    char rel_audio[16], audio_stop[16], stop_stt[16], stop_tts[16], tts_pcm[16], total[16];
+
+    format_latency(ptt_wss, sizeof(ptt_wss), s_timing.t_ptt_ms, s_timing.t_wss_connected_ms);
+    format_latency(wss_hello, sizeof(wss_hello), s_timing.t_wss_connected_ms, s_timing.t_hello_ms);
+    format_latency(hello_rec, sizeof(hello_rec), s_timing.t_hello_ms, s_timing.t_recorder_active_ms);
+    format_latency(rec_rel, sizeof(rec_rel), s_timing.t_recorder_active_ms, s_timing.t_release_ms);
+    format_latency(rel_audio, sizeof(rel_audio), s_timing.t_release_ms, s_timing.t_last_audio_sent_ms);
+    format_latency(audio_stop, sizeof(audio_stop), s_timing.t_last_audio_sent_ms, s_timing.t_listen_stop_ms);
+    format_latency(stop_stt, sizeof(stop_stt), s_timing.t_listen_stop_ms, s_timing.t_stt_ms);
+    format_latency(stop_tts, sizeof(stop_tts), s_timing.t_listen_stop_ms, s_timing.t_first_tts_ms);
+    format_latency(tts_pcm, sizeof(tts_pcm), s_timing.t_first_tts_ms, s_timing.t_first_pcm_ms);
+    format_latency(total, sizeof(total), s_timing.t_ptt_ms, s_timing.t_done_ms);
+
+    log_i("Xiaozhi Latency [%s gen=%u]: PTT->WSS=%s WSS->HELLO=%s HELLO->REC=%s REC->REL=%s REL->LAST_AUDIO=%s AUDIO->STOP=%s STOP->STT=%s STOP->TTS=%s TTS->PCM=%s TOTAL=%s",
           s_session_id[0] ? s_session_id : "none",
           static_cast<unsigned>(generation),
-          s_timing.t_wss_connected_ms >= s_timing.t_ptt_ms ? static_cast<unsigned>(s_timing.t_wss_connected_ms - s_timing.t_ptt_ms) : 0,
-          s_timing.t_hello_ms >= s_timing.t_wss_connected_ms ? static_cast<unsigned>(s_timing.t_hello_ms - s_timing.t_wss_connected_ms) : 0,
-          s_timing.t_recorder_active_ms >= s_timing.t_hello_ms ? static_cast<unsigned>(s_timing.t_recorder_active_ms - s_timing.t_hello_ms) : 0,
-          s_timing.t_release_ms >= s_timing.t_recorder_active_ms ? static_cast<unsigned>(s_timing.t_release_ms - s_timing.t_recorder_active_ms) : 0,
-          s_timing.t_last_audio_sent_ms >= s_timing.t_release_ms ? static_cast<unsigned>(s_timing.t_last_audio_sent_ms - s_timing.t_release_ms) : 0,
-          s_timing.t_listen_stop_ms >= s_timing.t_last_audio_sent_ms ? static_cast<unsigned>(s_timing.t_listen_stop_ms - s_timing.t_last_audio_sent_ms) : 0,
-          s_timing.t_stt_ms >= s_timing.t_listen_stop_ms ? static_cast<unsigned>(s_timing.t_stt_ms - s_timing.t_listen_stop_ms) : 0,
-          s_timing.t_first_tts_ms >= s_timing.t_listen_stop_ms ? static_cast<unsigned>(s_timing.t_first_tts_ms - s_timing.t_listen_stop_ms) : 0,
-          s_timing.t_first_pcm_ms >= s_timing.t_first_tts_ms ? static_cast<unsigned>(s_timing.t_first_pcm_ms - s_timing.t_first_tts_ms) : 0,
-          s_timing.t_done_ms >= s_timing.t_ptt_ms ? static_cast<unsigned>(s_timing.t_done_ms - s_timing.t_ptt_ms) : 0);
+          ptt_wss, wss_hello, hello_rec, rec_rel,
+          rel_audio, audio_stop, stop_stt, stop_tts, tts_pcm, total);
 }
 
 bool current_generation(uint32_t generation);
@@ -194,12 +213,28 @@ void mcp_worker(void *)
                 job.tool == xiaozhi::McpTool::MUSIC_RESUME || job.tool == xiaozhi::McpTool::MUSIC_STOP ||
                 job.tool == xiaozhi::McpTool::MUSIC_VOLUME)
             {
-                char action_error[128] = {};
-                const bool device_ack = music_player_execute_ai_action(&job.music_action, 2500,
-                                                                       action_error, sizeof(action_error));
-                const bool executed = xiaozhi::mcp_result_success(true, device_ack);
-                res.is_error = !executed;
-                strlcpy(res.text, executed ? "Lệnh nhạc đã được thiết bị ACK" : action_error, sizeof(res.text));
+                if ((job.tool == xiaozhi::McpTool::MUSIC_PLAY || job.tool == xiaozhi::McpTool::MUSIC_RESUME) &&
+                    ai_voice_get_state() != AI_STATE_IDLE && ai_voice_get_state() != AI_STATE_ERROR)
+                {
+                    // Defer music start until voice turn finishes to prevent stealing I2S before TTS plays
+                    s_music_handoff.valid = true;
+                    s_music_handoff.resume_after_voice = true;
+                    s_music_handoff.is_stream = (job.music_action.source_id[0] != '\0');
+                    s_music_handoff.track_index = -1;
+                    strlcpy(s_music_handoff.source_id, job.music_action.source_id, sizeof(s_music_handoff.source_id));
+                    s_music_resume_suppressed = false;
+                    res.is_error = false;
+                    strlcpy(res.text, "Lệnh nhạc đã được thiết bị ghi nhận", sizeof(res.text));
+                }
+                else
+                {
+                    char action_error[128] = {};
+                    const bool device_ack = music_player_execute_ai_action(&job.music_action, 2500,
+                                                                           action_error, sizeof(action_error));
+                    const bool executed = xiaozhi::mcp_result_success(true, device_ack);
+                    res.is_error = !executed;
+                    strlcpy(res.text, executed ? "Lệnh nhạc đã được thiết bị ACK" : action_error, sizeof(res.text));
+                }
             }
             else if (job.tool == xiaozhi::McpTool::CAMERA_OPEN)
             {
@@ -228,10 +263,13 @@ void mcp_worker(void *)
             }
             if (s_mcp_results)
             {
-                if (xQueueSend(s_mcp_results, &res, pdMS_TO_TICKS(1000)) != pdTRUE)
+                while (current_generation(res.generation) && !cancellation_requested(res.generation))
                 {
-                    log_e("Xiaozhi MCP worker: Failed to send MCP result id=%u gen=%u (queue full)",
-                          static_cast<unsigned>(res.id), static_cast<unsigned>(res.generation));
+                    if (xQueueSend(s_mcp_results, &res, pdMS_TO_TICKS(100)) == pdTRUE)
+                    {
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(10));
                 }
             }
         }
@@ -384,74 +422,52 @@ void finalize_cleanup(uint32_t generation)
 void service_cleanup()
 {
     if (!s_cleanup_pending || !active_generation_matches(s_cleanup_generation)) return;
-    bool recorder_stopped = (s_record_control_request == 0 && s_cleanup_recorder_request == 0);
-    if (!recorder_stopped && s_cleanup_recorder_request == 0)
+
+    const uint32_t req = s_cleanup_recorder_request ? s_cleanup_recorder_request : s_record_control_request;
+    const AudioRecorderStatus status = audio_get_recorder_status(req);
+
+    if (status == AudioRecorderStatus::STOPPED)
     {
-        uint32_t request = 0;
-        if (s_record_control_request != 0 &&
-            audio_cancel_recording_request_async(s_record_control_request, &request))
-        {
-            s_cleanup_recorder_request = request;
-        }
-        else
-        {
-            // The active recording command in audio_manager does not match our request
-            const uint32_t active_cmd = audio_get_active_recording_command();
-            if (active_cmd != s_record_control_request)
-            {
-                s_record_control_request = 0;
-                recorder_stopped = true;
-            }
-        }
-    }
-    if (s_cleanup_recorder_request)
-    {
-        bool applied = false;
-        if (audio_wait_recording_command_ack(s_cleanup_recorder_request, 0, &applied))
-        {
-            recorder_stopped = applied;
-            if (recorder_stopped)
-            {
-                s_cleanup_recorder_request = 0;
-                s_record_control_request = 0;
-            }
-        }
-    }
-    if (recorder_stopped)
-    {
+        s_recovery_required = false;
+        s_cleanup_recorder_request = 0;
+        s_record_control_request = 0;
         finalize_cleanup(s_cleanup_generation);
         return;
     }
+
+    if (s_cleanup_recorder_request == 0 && s_record_control_request != 0)
+    {
+        uint32_t request = 0;
+        if (audio_cancel_recording_request_async(s_record_control_request, &request))
+        {
+            s_cleanup_recorder_request = request;
+        }
+    }
+
     if (elapsed(s_cleanup_deadline_ms))
     {
         if (s_cleanup_retries < 3)
         {
             ++s_cleanup_retries;
             s_cleanup_deadline_ms = millis() + 1500U;
-            log_w("Xiaozhi cleanup retry %u generation=%u", s_cleanup_retries, s_cleanup_generation);
+            log_w("Xiaozhi cleanup retry %u generation=%u status=%d",
+                  s_cleanup_retries, s_cleanup_generation, static_cast<int>(status));
             uint32_t retry_req = 0;
             if (s_record_control_request != 0 &&
                 audio_cancel_recording_request_async(s_record_control_request, &retry_req))
             {
                 s_cleanup_recorder_request = retry_req;
             }
-            else
-            {
-                s_record_control_request = 0;
-                s_cleanup_recorder_request = 0;
-                recorder_stopped = true;
-                finalize_cleanup(s_cleanup_generation);
-                return;
-            }
         }
         else
         {
-            s_cleanup_retries = 0;
+            // Do NOT fake finalize or wipe resource IDs! Set bounded RECOVERY_REQUIRED.
+            s_recovery_required = true;
             s_cleanup_preserve_error = true;
-            set_error("Recorder timeout sau nhiều lần thử hủy");
-            s_cleanup_recorder_request = 0;
-            s_record_control_request = 0;
-            finalize_cleanup(s_cleanup_generation);
+            set_error("Recorder timeout sau nhiều lần thử hủy: RECOVERY_REQUIRED");
+            log_e("Xiaozhi cleanup timeout: RECOVERY_REQUIRED gen=%u status=%d",
+                  s_cleanup_generation, static_cast<int>(status));
+            s_cleanup_deadline_ms = millis() + 2000U;
         }
     }
 }
@@ -561,6 +577,19 @@ bool queue_command(CommandType type, uint32_t generation,
 bool begin_output()
 {
     if (s_audio_output_session) return true;
+    if (audio_get_current_owner() == AUDIO_OWNER_MUSIC || music_player_is_playing())
+    {
+        MusicVoiceHandoff handoff = {};
+        char error[128] = {};
+        if (music_player_suspend_for_voice(&handoff, 3000, error, sizeof(error)))
+        {
+            if (!s_music_resume_suppressed) s_music_handoff = handoff;
+        }
+        else
+        {
+            log_w("Xiaozhi: Không thể suspend music trước TTS: %s", error);
+        }
+    }
     if (!audio_request_ownership(AUDIO_OWNER_AI_VOICE)) return false;
     s_audio_output_session = audio_get_owner_session(AUDIO_OWNER_AI_VOICE);
     if (!s_audio_output_session || !audio_codec_configure_for_stream(16000, 256) ||
@@ -1076,7 +1105,7 @@ PumpResult begin_capture_flush(uint32_t generation,
           static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason),
           static_cast<unsigned>(snap_samples));
 
-    const size_t total_samples = snap_samples > 0 ? snap_samples : (s_capture_offset + s_capture_frame_fill);
+    const size_t total_samples = snap_samples > 0 ? snap_samples : s_capture_offset;
     const uint32_t rec_duration_ms = (s_timing.t_recorder_active_ms && s_timing.t_release_ms >= s_timing.t_recorder_active_ms)
         ? (s_timing.t_release_ms - s_timing.t_recorder_active_ms)
         : 0;
@@ -1086,7 +1115,7 @@ PumpResult begin_capture_flush(uint32_t generation,
         log_w("Xiaozhi: EMPTY_AUDIO detected, aborting session without waiting for AI");
         set_error("Chưa thu được âm thanh giọng nói");
         begin_cleanup(generation, true, false);
-        return PumpResult::ERROR;
+        return PumpResult::HANDLED_ERROR;
     }
 
     if (xiaozhi::is_too_short_recording(rec_duration_ms, total_samples))
@@ -1098,7 +1127,7 @@ PumpResult begin_capture_flush(uint32_t generation,
               ai_voice_stop_reason_str(reason));
         set_error("Giữ nút và nói sau khi hiện Đang nghe");
         begin_cleanup(generation, true, false);
-        return PumpResult::ERROR;
+        return PumpResult::HANDLED_ERROR;
     }
 
     s_flush_active = true;
@@ -1110,7 +1139,7 @@ PumpResult begin_capture_flush(uint32_t generation,
                   static_cast<unsigned>(snap_gen), static_cast<unsigned>(snap_samples));
             set_error("Không truy cập được dữ liệu ghi âm snapshot");
             begin_cleanup(generation, true, false);
-            return PumpResult::ERROR;
+            return PumpResult::HANDLED_ERROR;
         }
         s_flush_source_done = false;
     }
@@ -1207,6 +1236,21 @@ PumpResult pump_capture_flush(uint32_t generation)
 bool start_session(uint32_t generation)
 {
     if (!current_generation(generation)) return false;
+    if (s_recovery_required || audio_get_recorder_status(0) != AudioRecorderStatus::STOPPED)
+    {
+        if (audio_get_recorder_status(0) == AudioRecorderStatus::STOPPED)
+        {
+            s_recovery_required = false;
+        }
+        else
+        {
+            log_e("Xiaozhi: Từ chối start_session vì recorder chưa STOPPED (recovery_required=%d)",
+                  s_recovery_required ? 1 : 0);
+            set_error("Microphone bận hoặc đang khôi phục");
+            begin_cleanup(generation, true, false);
+            return false;
+        }
+    }
     if (!s_configured || !wifi_manager_is_connected())
     {
         set_error(!s_configured ? "Xiaozhi chưa kích hoạt" : "WiFi chưa kết nối");
@@ -1395,6 +1439,11 @@ bool handle_pump_fault(PumpResult result, uint32_t generation, const char *conte
     if (result == PumpResult::CANCELLED)
     {
         cancel_session(generation);
+        return true;
+    }
+    if (result == PumpResult::HANDLED_ERROR)
+    {
+        // Explicit user-facing error and cleanup already initiated by caller; preserve it!
         return true;
     }
     if (result == PumpResult::TIMEOUT || result == PumpResult::ERROR)

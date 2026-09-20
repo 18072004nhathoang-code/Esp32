@@ -113,6 +113,9 @@ struct AudioCommandAck
     size_t sample_count;
 };
 static AudioCommandAck recording_acks[8] = {};
+static uint32_t last_completed_recording_generation = 0;
+static uint32_t last_completed_snapshot_generation = 0;
+static size_t last_completed_sample_count = 0;
 
 enum RecordingControlType : uint8_t
 {
@@ -1423,6 +1426,7 @@ static void audio_background_task(void *pvParameters)
             int16_t peak = 0;
             bool recording_complete = false;
             size_t completed_sample_count = 0;
+            uint32_t auto_stopped_command = 0;
 
             const bool state_locked = audio_state_mutex &&
                                       xSemaphoreTake(audio_state_mutex, pdMS_TO_TICKS(20)) == pdTRUE;
@@ -1453,6 +1457,7 @@ static void audio_background_task(void *pvParameters)
                     recording_state = RECORD_SNAPSHOTTING;
                     completed_sample_count = recorded_samples_count;
                     recording_complete = true;
+                    auto_stopped_command = active_recording_command_generation;
                 }
             }
 
@@ -1479,8 +1484,22 @@ static void audio_background_task(void *pvParameters)
             if (state_locked) xSemaphoreGive(audio_state_mutex);
             if (recording_complete)
             {
-                const bool snapshot_ok = publish_recording_snapshot(completed_sample_count);
-                if (snapshot_ok) schedule_recording_export();
+                uint32_t created_gen = 0;
+                const bool snapshot_ok = publish_recording_snapshot(completed_sample_count, &created_gen);
+                if (snapshot_ok)
+                {
+                    schedule_recording_export();
+                    portENTER_CRITICAL(&audio_command_mux);
+                    last_completed_recording_generation = auto_stopped_command;
+                    last_completed_snapshot_generation = created_gen;
+                    last_completed_sample_count = completed_sample_count;
+                    portEXIT_CRITICAL(&audio_command_mux);
+                    if (auto_stopped_command != 0)
+                    {
+                        acknowledge_recording_command(auto_stopped_command, true, true,
+                                                      created_gen, completed_sample_count);
+                    }
+                }
                 audio_release_ownership(AUDIO_OWNER_RECORDER);
             }
 
@@ -1914,6 +1933,11 @@ static bool start_recording_transaction(uint32_t max_duration_sec, uint32_t expe
     recording_file_state = AUDIO_FILE_NONE;
     recording_state = RECORD_ACTIVE;
     xSemaphoreGive(audio_state_mutex);
+    portENTER_CRITICAL(&audio_command_mux);
+    last_completed_recording_generation = 0;
+    last_completed_snapshot_generation = 0;
+    last_completed_sample_count = 0;
+    portEXIT_CRITICAL(&audio_command_mux);
     Serial.printf("[AUDIO] Bắt đầu ghi âm Mic vào PSRAM (Tối đa %u giây)...\n", max_duration_sec);
     return true;
 }
@@ -1952,6 +1976,27 @@ static bool stop_recording_for_generation(uint32_t cancel_through, bool discard,
 
     if (!audio_state_mutex || xSemaphoreTake(audio_state_mutex, portMAX_DELAY) != pdTRUE)
         return false;
+
+    // Check if recording is already stopped (e.g., auto-stop completed earlier)
+    if (recording_state == RECORD_IDLE)
+    {
+        xSemaphoreGive(audio_state_mutex);
+        if (!discard)
+        {
+            portENTER_CRITICAL(&audio_command_mux);
+            const bool matches = (cancel_through == 0 ||
+                                  audio_control_applies_to_generation(last_completed_recording_generation, cancel_through));
+            if (matches && last_completed_snapshot_generation != 0)
+            {
+                if (out_snapshot_valid) *out_snapshot_valid = true;
+                if (out_snapshot_generation) *out_snapshot_generation = last_completed_snapshot_generation;
+                if (out_sample_count) *out_sample_count = last_completed_sample_count;
+            }
+            portEXIT_CRITICAL(&audio_command_mux);
+        }
+        return true;
+    }
+
     const bool generation_matches = audio_control_applies_to_generation(
         active_recording_command_generation, cancel_through);
     if (!generation_matches)
@@ -1967,12 +2012,18 @@ static bool stop_recording_for_generation(uint32_t cancel_through, bool discard,
     }
     if (was_recording) recording_state = RECORD_SNAPSHOTTING;
     const uint32_t sample_count = recorded_samples_count;
+    const uint32_t command_gen = active_recording_command_generation;
     active_recording_command_generation = 0;
     if (discard)
     {
         recording_state = RECORD_IDLE;
         recorded_samples_count = 0;
         recording_file_state = AUDIO_FILE_NONE;
+        portENTER_CRITICAL(&audio_command_mux);
+        last_completed_recording_generation = 0;
+        last_completed_snapshot_generation = 0;
+        last_completed_sample_count = 0;
+        portEXIT_CRITICAL(&audio_command_mux);
     }
     xSemaphoreGive(audio_state_mutex);
 
@@ -1985,9 +2036,18 @@ static bool stop_recording_for_generation(uint32_t cancel_through, bool discard,
         if (snapshot_ok)
         {
             schedule_recording_export();
+            portENTER_CRITICAL(&audio_command_mux);
+            last_completed_recording_generation = command_gen;
+            last_completed_snapshot_generation = created_gen;
+            last_completed_sample_count = sample_count;
+            portEXIT_CRITICAL(&audio_command_mux);
             if (out_snapshot_valid) *out_snapshot_valid = true;
             if (out_snapshot_generation) *out_snapshot_generation = created_gen;
             if (out_sample_count) *out_sample_count = sample_count;
+            if (command_gen != 0)
+            {
+                acknowledge_recording_command(command_gen, true, true, created_gen, sample_count);
+            }
         }
         audio_release_ownership(AUDIO_OWNER_RECORDER);
     }
@@ -2116,6 +2176,37 @@ bool audio_is_recording(void)
     const bool active = recording_state == RECORD_ACTIVE;
     xSemaphoreGive(audio_state_mutex);
     return active;
+}
+
+AudioRecorderStatus audio_get_recorder_status(uint32_t request_id)
+{
+    const bool is_rec = audio_is_recording();
+    const bool owns_i2s = (audio_get_current_owner() == AUDIO_OWNER_RECORDER);
+
+    if (request_id == 0)
+    {
+        if (!is_rec && !owns_i2s) return AudioRecorderStatus::STOPPED;
+        return AudioRecorderStatus::BUSY;
+    }
+
+    portENTER_CRITICAL(&audio_command_mux);
+    const AudioCommandAck &slot = recording_acks[request_id %
+        (sizeof(recording_acks) / sizeof(recording_acks[0]))];
+    const bool found = (slot.generation == request_id);
+    const bool ok = slot.ok;
+    const bool in_mailbox = (audio_control_mailbox.recording_pending &&
+                             audio_control_mailbox.recording_request_id == request_id);
+    portEXIT_CRITICAL(&audio_command_mux);
+
+    if (found)
+    {
+        if (!ok) return AudioRecorderStatus::REJECTED;
+        if (!is_rec && !owns_i2s) return AudioRecorderStatus::STOPPED;
+        return AudioRecorderStatus::BUSY;
+    }
+
+    if (in_mailbox || is_rec || owns_i2s) return AudioRecorderStatus::BUSY;
+    return AudioRecorderStatus::UNKNOWN;
 }
 
 static bool start_playback_transaction(uint32_t expected_generation)

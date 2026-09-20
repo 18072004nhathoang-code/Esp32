@@ -31,10 +31,13 @@ bool parse_wss_url(const char *url, String &host, uint16_t &port, String &path)
 }
 
 XiaozhiTransport::XiaozhiTransport()
-    : websocket_(nullptr), uplink_queue_(nullptr), inbound_queue_(nullptr), fragment_storage_(nullptr),
-      fragment_assembler_(nullptr), connected_(false), connection_epoch_(0), generation_(0),
-      dropped_uplink_(0), dropped_downlink_(0), frames_sent_(0), bytes_sent_(0),
-      last_audio_sent_ms_(0) {}
+    : websocket_(nullptr), uplink_queue_(nullptr), inbound_queue_(nullptr), rx_mutex_(nullptr),
+      fragment_storage_(nullptr), fragment_assembler_(nullptr), connected_(false),
+      connection_epoch_(0), generation_(0), dropped_uplink_(0), dropped_downlink_(0),
+      frames_sent_(0), bytes_sent_(0), last_audio_sent_ms_(0)
+{
+    rx_mutex_ = xSemaphoreCreateMutex();
+}
 
 XiaozhiTransport::~XiaozhiTransport()
 {
@@ -43,6 +46,7 @@ XiaozhiTransport::~XiaozhiTransport()
     if (inbound_queue_) vQueueDelete(inbound_queue_);
     delete fragment_assembler_;
     free(fragment_storage_);
+    if (rx_mutex_) vSemaphoreDelete(rx_mutex_);
 }
 
 bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
@@ -180,18 +184,21 @@ void XiaozhiTransport::loop()
 void XiaozhiTransport::close()
 {
     connected_ = false;
+    connection_epoch_.fetch_add(1, std::memory_order_acq_rel);
     if (websocket_)
     {
         (void)esp_websocket_client_stop(websocket_);
         (void)esp_websocket_client_destroy(websocket_);
         websocket_ = nullptr;
     }
+    if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     if (uplink_queue_) xQueueReset(uplink_queue_);
     clearInbound();
     if (fragment_assembler_) fragment_assembler_->reset();
     generation_ = 0;
     in_flight_started_ms_ = 0;
     resetAudioCounters();
+    if (rx_mutex_) xSemaphoreGive(rx_mutex_);
 }
 
 void XiaozhiTransport::purgeUplink()
@@ -202,16 +209,19 @@ void XiaozhiTransport::purgeUplink()
 
 void XiaozhiTransport::detachTurn()
 {
+    if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
     clearInbound();
     if (fragment_assembler_) fragment_assembler_->reset();
     generation_.store(0, std::memory_order_release);
     in_flight_started_ms_ = 0;
+    if (rx_mutex_) xSemaphoreGive(rx_mutex_);
 }
 
 bool XiaozhiTransport::setTurnGeneration(uint32_t generation)
 {
     if (!connected() || !websocket_ || generation == 0) return false;
+    if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
     clearInbound();
     if (fragment_assembler_) fragment_assembler_->reset();
@@ -220,6 +230,7 @@ bool XiaozhiTransport::setTurnGeneration(uint32_t generation)
     dropped_downlink_ = 0;
     in_flight_started_ms_ = 0;
     resetAudioCounters();
+    if (rx_mutex_) xSemaphoreGive(rx_mutex_);
     return true;
 }
 
@@ -340,7 +351,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
 {
     if (event_id == WEBSOCKET_EVENT_CONNECTED)
     {
-        connection_epoch_.fetch_add(1, std::memory_order_relaxed);
+        connection_epoch_.fetch_add(1, std::memory_order_acq_rel);
         connected_.store(true, std::memory_order_release);
         return;
     }
@@ -351,8 +362,45 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         return;
     }
     if (event_id != WEBSOCKET_EVENT_DATA || !event || !event->data_ptr ||
-        event->data_len <= 0 || event->payload_len <= 0 || event->payload_offset < 0 ||
-        !fragment_assembler_) return;
+        event->data_len <= 0 || event->payload_len <= 0 || event->payload_offset < 0) return;
+
+    // 1. Separate control frames (CLOSE 0x08, PING 0x09, PONG 0x0a)
+    const uint8_t op = event->op_code;
+    if (op == 0x08 || op == 0x09 || op == 0x0a)
+    {
+        // Control frames may carry payload (e.g. heartbeat ping/pong).
+        // Must NOT reset fragment assembler, must NOT drop downlink, must NOT cancel session.
+        return;
+    }
+
+    // 2. Validate data frame opcodes (TEXT 0x01, BINARY 0x02, CONTINUATION 0x00)
+    if (op != 0x00 && op != 0x01 && op != 0x02)
+    {
+        if (rx_mutex_ && xSemaphoreTake(rx_mutex_, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
+            if (fragment_assembler_) fragment_assembler_->reset();
+            xSemaphoreGive(rx_mutex_);
+        }
+        dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    const uint32_t current_epoch = connection_epoch_.load(std::memory_order_acquire);
+    if (!connected_.load(std::memory_order_acquire) || current_epoch == 0) return;
+
+    if (!rx_mutex_ || xSemaphoreTake(rx_mutex_, pdMS_TO_TICKS(50)) != pdTRUE)
+    {
+        dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (connection_epoch_.load(std::memory_order_acquire) != current_epoch ||
+        !connected_.load(std::memory_order_acquire) || !fragment_assembler_)
+    {
+        xSemaphoreGive(rx_mutex_);
+        return;
+    }
+
     const size_t total = static_cast<size_t>(event->payload_len);
     const size_t offset = static_cast<size_t>(event->payload_offset);
     const size_t length = static_cast<size_t>(event->data_len);
@@ -360,34 +408,51 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     {
         fragment_assembler_->reset();
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        xSemaphoreGive(rx_mutex_);
         return;
     }
-    if (offset == 0 && event->op_code != 0x1 && event->op_code != 0x2)
-    {
-        fragment_assembler_->reset();
-        dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-    const XiaozhiInboundKind inbound_kind = event->op_code == 0x1
-        ? XiaozhiInboundKind::TEXT : XiaozhiInboundKind::BINARY;
+
     const uint8_t *payload = reinterpret_cast<const uint8_t *>(event->data_ptr);
-    if (offset == 0 && length == total)
+
+    // Differentiate:
+    // A. Unfragmented single-frame message:
+    if (op != 0x00 && offset == 0 && length == total && !fragment_assembler_->isActive())
     {
+        const XiaozhiInboundKind inbound_kind = (op == 0x02)
+            ? XiaozhiInboundKind::BINARY : XiaozhiInboundKind::TEXT;
         (void)enqueueInbound(inbound_kind, payload, length);
+        xSemaphoreGive(rx_mutex_);
         return;
     }
-    if (offset == 0)
+
+    // B. Start of a new message (initial frame):
+    if (op != 0x00 && offset == 0)
     {
-        const xiaozhi::FragmentAssembler::Kind kind = inbound_kind == XiaozhiInboundKind::TEXT
-            ? xiaozhi::FragmentAssembler::Kind::TEXT : xiaozhi::FragmentAssembler::Kind::BINARY;
+        const xiaozhi::FragmentAssembler::Kind kind = (op == 0x02)
+            ? xiaozhi::FragmentAssembler::Kind::BINARY : xiaozhi::FragmentAssembler::Kind::TEXT;
         if (!fragment_assembler_->begin(kind, payload, length))
         {
             fragment_assembler_->reset();
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         }
+        xSemaphoreGive(rx_mutex_);
+        return;
     }
-    else if (offset + length < total)
+
+    // C. Continuation: either SDK buffer chunk (offset > 0) OR WS continuation frame (op == 0x00)
+    if (!fragment_assembler_->isActive())
     {
+        // Continuation received without active initial frame
+        fragment_assembler_->reset();
+        dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        xSemaphoreGive(rx_mutex_);
+        return;
+    }
+
+    const bool is_frame_end = (offset + length >= total);
+    if (!is_frame_end)
+    {
+        // Intermediate SDK buffer chunk within frame
         if (!fragment_assembler_->append(payload, length))
         {
             fragment_assembler_->reset();
@@ -396,13 +461,21 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     }
     else
     {
+        // Reached end of frame (end of chunked frame or continuation frame)
         xiaozhi::FragmentAssembler::Kind kind = xiaozhi::FragmentAssembler::Kind::NONE;
         const uint8_t *message = nullptr;
         size_t size = 0;
         if (fragment_assembler_->finish(payload, length, &kind, &message, &size))
+        {
             (void)enqueueInbound(kind == xiaozhi::FragmentAssembler::Kind::TEXT
                 ? XiaozhiInboundKind::TEXT : XiaozhiInboundKind::BINARY, message, size);
-        else dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        }
+        else
+        {
+            dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        }
         fragment_assembler_->reset();
     }
+
+    xSemaphoreGive(rx_mutex_);
 }

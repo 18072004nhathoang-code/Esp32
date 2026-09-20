@@ -196,6 +196,17 @@ bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
                                       uint32_t *snapshot_generation = nullptr,
                                       size_t *sample_count = nullptr);
 /** Stop a recording and discard it without scheduling a WAV export. */
+enum class AudioRecorderStatus : uint8_t
+{
+    UNKNOWN = 0,
+    BUSY,
+    REJECTED,
+    STOPPED
+};
+
+/** Query verified recorder status distinguishing UNKNOWN, BUSY, REJECTED, and STOPPED. */
+AudioRecorderStatus audio_get_recorder_status(uint32_t request_id = 0);
+
 void audio_cancel_recording(void);
 bool audio_is_recording(void);
 

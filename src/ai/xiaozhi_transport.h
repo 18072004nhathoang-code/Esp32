@@ -72,6 +72,7 @@ private:
     String headers_;
     QueueHandle_t uplink_queue_;
     QueueHandle_t inbound_queue_;
+    SemaphoreHandle_t rx_mutex_;
     uint8_t *fragment_storage_;
     xiaozhi::FragmentAssembler *fragment_assembler_;
     std::atomic<bool> connected_;
