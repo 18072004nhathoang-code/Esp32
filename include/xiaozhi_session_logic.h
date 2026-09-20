@@ -407,4 +407,12 @@ inline bool can_reuse_connection(bool connected, bool clean_turn_end,
         return false;
     return static_cast<int32_t>(now_ms - idle_since_ms) < static_cast<int32_t>(max_idle_ms);
 }
+
+static constexpr uint32_t kMinVoiceDurationMs = 500;
+static constexpr size_t kMinVoiceSamples = 8000;
+
+inline bool is_too_short_recording(uint32_t duration_ms, size_t total_samples)
+{
+    return duration_ms < kMinVoiceDurationMs || total_samples < kMinVoiceSamples;
+}
 }

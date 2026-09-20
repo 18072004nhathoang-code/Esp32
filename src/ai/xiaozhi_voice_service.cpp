@@ -38,7 +38,7 @@
 namespace
 {
 enum class CommandType : uint8_t { START, STOP, CANCEL, RETRY_ACTIVATION, CANCEL_ACTIVATION };
-struct Command { CommandType type; uint32_t generation; };
+struct Command { CommandType type; uint32_t generation; AiVoiceStopReason stop_reason; };
 
 static SemaphoreHandle_t s_mutex = nullptr;
 static QueueHandle_t s_commands = nullptr;
@@ -514,6 +514,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
 void cancel_session(uint32_t generation)
 {
     if (!active_generation_matches(generation)) return;
+    log_i("Xiaozhi: [CANCEL_ACK] gen=%u", static_cast<unsigned>(generation));
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (generation > s_cancelled_through) s_cancelled_through = generation;
@@ -549,10 +550,11 @@ void cancel_session(uint32_t generation)
     begin_cleanup(generation, true, false);
 }
 
-bool queue_command(CommandType type, uint32_t generation)
+bool queue_command(CommandType type, uint32_t generation,
+                   AiVoiceStopReason stop_reason = AiVoiceStopReason::USER_RELEASE)
 {
     if (!s_commands) return false;
-    const Command command = {type, generation};
+    const Command command = {type, generation, stop_reason};
     return xQueueSend(s_commands, &command, 0) == pdTRUE;
 }
 
@@ -1048,7 +1050,8 @@ PumpResult pump_capture(uint32_t generation)
     return made_progress ? PumpResult::PROGRESS : PumpResult::IDLE;
 }
 
-PumpResult begin_capture_flush(uint32_t generation)
+PumpResult begin_capture_flush(uint32_t generation,
+                               AiVoiceStopReason reason = AiVoiceStopReason::USER_RELEASE)
 {
     s_timing.t_release_ms = millis();
     s_phase_tracker.start_flushing(s_timing.t_release_ms);
@@ -1069,10 +1072,31 @@ PumpResult begin_capture_flush(uint32_t generation)
     s_record_control_request = 0;
     release_flush_lease();
 
+    log_i("Xiaozhi: [STOP_ACK] gen=%u reason=%s snap_samples=%u",
+          static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason),
+          static_cast<unsigned>(snap_samples));
+
+    const size_t total_samples = snap_samples > 0 ? snap_samples : (s_capture_offset + s_capture_frame_fill);
+    const uint32_t rec_duration_ms = (s_timing.t_recorder_active_ms && s_timing.t_release_ms >= s_timing.t_recorder_active_ms)
+        ? (s_timing.t_release_ms - s_timing.t_recorder_active_ms)
+        : 0;
+
     if (!xiaozhi::has_captured_audio(s_capture_offset, s_capture_frame_fill, s_total_frames_sent + snap_samples))
     {
         log_w("Xiaozhi: EMPTY_AUDIO detected, aborting session without waiting for AI");
         set_error("Chưa thu được âm thanh giọng nói");
+        begin_cleanup(generation, true, false);
+        return PumpResult::ERROR;
+    }
+
+    if (xiaozhi::is_too_short_recording(rec_duration_ms, total_samples))
+    {
+        log_w("Xiaozhi: [TOO_SHORT] gen=%u dur=%ums samples=%u reason=%s, aborting session cleanly",
+              static_cast<unsigned>(generation),
+              static_cast<unsigned>(rec_duration_ms),
+              static_cast<unsigned>(total_samples),
+              ai_voice_stop_reason_str(reason));
+        set_error("Giữ nút và nói sau khi hiện Đang nghe");
         begin_cleanup(generation, true, false);
         return PumpResult::ERROR;
     }
@@ -1275,6 +1299,7 @@ bool start_session(uint32_t generation)
     s_backpressure.reset();
     s_timing.t_recorder_active_ms = millis();
     log_i("Xiaozhi: [RECORDER_ACTIVE] gen=%u", static_cast<unsigned>(generation));
+    log_i("Xiaozhi: [START_ACK] gen=%u", static_cast<unsigned>(generation));
     s_phase_tracker.start_listening(s_timing.t_recorder_active_ms);
     set_state(AI_STATE_LISTENING);
     return true;
@@ -1473,7 +1498,7 @@ void worker(void *)
                 (void)start_session(command.generation);
             else if (command.type == CommandType::STOP && current_generation(command.generation))
             {
-                const PumpResult result = begin_capture_flush(command.generation);
+                const PumpResult result = begin_capture_flush(command.generation, command.stop_reason);
                 (void)handle_pump_fault(result, command.generation,
                                         "Không dừng được recorder Xiaozhi");
             }
@@ -1544,7 +1569,7 @@ void worker(void *)
                     continue;
                 else if (!audio_is_recording())
                 {
-                    const PumpResult stop_result = begin_capture_flush(generation);
+                    const PumpResult stop_result = begin_capture_flush(generation, AiVoiceStopReason::MAX_DURATION);
                     if (handle_pump_fault(stop_result, generation,
                                           "Microphone dừng ngoài dự kiến")) continue;
                 }
@@ -1699,6 +1724,7 @@ bool ai_voice_start_recording(void)
     s_state = AI_STATE_STARTING;
     s_last_error[0] = '\0';
     xSemaphoreGive(s_mutex);
+    log_i("Xiaozhi: [START_REQUESTED] gen=%u", static_cast<unsigned>(generation));
     if (!queue_command(CommandType::START, generation))
     {
         if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
@@ -1714,7 +1740,7 @@ bool ai_voice_start_recording(void)
     return true;
 }
 
-bool ai_voice_stop_and_process(void)
+bool ai_voice_stop_and_process(AiVoiceStopReason reason)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const uint32_t generation = s_active_generation;
@@ -1729,11 +1755,15 @@ bool ai_voice_stop_and_process(void)
     xSemaphoreGive(s_mutex);
     if (starting)
     {
-        (void)queue_command(CommandType::CANCEL, generation);
+        log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s (released during STARTING)",
+              static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
+        (void)queue_command(CommandType::CANCEL, generation, reason);
         xTaskNotifyGive(s_task);
         return true;
     }
-    if (!allowed || !queue_command(CommandType::STOP, generation))
+    log_i("Xiaozhi: [STOP_REQUESTED] gen=%u reason=%s",
+          static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
+    if (!allowed || !queue_command(CommandType::STOP, generation, reason))
     {
         if (allowed)
         {
@@ -1753,7 +1783,7 @@ bool ai_voice_stop_and_process(void)
     return true;
 }
 
-void ai_voice_cancel(void)
+void ai_voice_cancel(AiVoiceStopReason reason)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     const uint32_t generation = s_active_generation;
@@ -1762,11 +1792,18 @@ void ai_voice_cancel(void)
     xSemaphoreGive(s_mutex);
     if (generation)
     {
+        log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s",
+              static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
         // The mutex-protected cancellation watermark is authoritative. The
         // queue entry only reduces latency and may be dropped safely.
-        (void)queue_command(CommandType::CANCEL, generation);
+        (void)queue_command(CommandType::CANCEL, generation, reason);
         xTaskNotifyGive(s_task);
     }
+}
+
+uint32_t ai_voice_get_active_generation(void)
+{
+    return active_generation_snapshot();
 }
 
 AIVoiceState ai_voice_get_state(void)

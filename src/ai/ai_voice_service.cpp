@@ -986,8 +986,9 @@ bool ai_voice_start_recording(void)
     return true;
 }
 
-bool ai_voice_stop_and_process(void)
+bool ai_voice_stop_and_process(AiVoiceStopReason reason)
 {
+    (void)reason;
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
     if ((s_state != AI_STATE_LISTENING && s_state != AI_STATE_STARTING) || !s_recording_started)
     {
@@ -1026,8 +1027,9 @@ bool ai_voice_stop_and_process(void)
     return true;
 }
 
-void ai_voice_cancel(void)
+void ai_voice_cancel(AiVoiceStopReason reason)
 {
+    (void)reason;
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     const bool resume_music = s_music_paused_for_voice;
     s_music_paused_for_voice = false;
@@ -1071,6 +1073,14 @@ void ai_voice_cancel(void)
         xSemaphoreGive(s_mutex);
     }
     if (resume_music) (void)music_player_resume();
+}
+
+uint32_t ai_voice_get_active_generation(void)
+{
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    const uint32_t gen = s_active_request_id ? s_active_request_id : s_pending_request_id;
+    xSemaphoreGive(s_mutex);
+    return gen;
 }
 
 AIVoiceState ai_voice_get_state(void)

@@ -217,5 +217,17 @@ int main()
     timing.reset();
     assert(timing.t_ptt_ms == 0 && timing.t_done_ms == 0);
 
+    // Minimum voice recording duration and sample count (is_too_short_recording)
+    static_assert(kMinVoiceDurationMs == 500, "Min voice duration should be 500ms");
+    static_assert(kMinVoiceSamples == 8000, "Min voice samples should be 8000 (0.5s at 16kHz)");
+    // Evidence trace: gen=7 stopped after 143ms and 2560 samples -> must abort as too short
+    assert(is_too_short_recording(143, 2560));
+    // Boundary conditions
+    assert(is_too_short_recording(499, 8000));
+    assert(is_too_short_recording(500, 7999));
+    assert(!is_too_short_recording(500, 8000));
+    // Normal 3-second hold: 3000ms, 48000 samples -> must pass
+    assert(!is_too_short_recording(3000, 48000));
+
     return 0;
 }

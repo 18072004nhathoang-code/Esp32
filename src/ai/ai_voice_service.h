@@ -23,6 +23,32 @@ enum AIVoiceState
     AI_STATE_ERROR             // Tài nguyên hệ thống không sẵn sàng
 };
 
+enum class AiVoiceStopReason : uint8_t
+{
+    USER_RELEASE = 0,
+    PRESS_LOST,
+    APP_CLOSE,
+    CANCEL,
+    MAX_DURATION,
+    AUDIO_ERROR,
+    TOO_SHORT
+};
+
+inline const char *ai_voice_stop_reason_str(AiVoiceStopReason reason)
+{
+    switch (reason)
+    {
+        case AiVoiceStopReason::USER_RELEASE: return "USER_RELEASE";
+        case AiVoiceStopReason::PRESS_LOST:   return "PRESS_LOST";
+        case AiVoiceStopReason::APP_CLOSE:    return "APP_CLOSE";
+        case AiVoiceStopReason::CANCEL:       return "CANCEL";
+        case AiVoiceStopReason::MAX_DURATION: return "MAX_DURATION";
+        case AiVoiceStopReason::AUDIO_ERROR:  return "AUDIO_ERROR";
+        case AiVoiceStopReason::TOO_SHORT:    return "TOO_SHORT";
+        default:                              return "UNKNOWN";
+    }
+}
+
 struct ChatMessage
 {
     bool is_user;              // true: Người dùng, false: AI Assistant
@@ -46,10 +72,13 @@ bool ai_voice_start_recording(void);
 /**
  * @brief Dừng ghi âm khi thả nút và gửi âm thanh lên luồng xử lý AI
  */
-bool ai_voice_stop_and_process(void);
+bool ai_voice_stop_and_process(AiVoiceStopReason reason = AiVoiceStopReason::USER_RELEASE);
 
 /** @brief Hủy lần thu hiện tại khi UI đóng, không gửi dữ liệu lên mạng. */
-void ai_voice_cancel(void);
+void ai_voice_cancel(AiVoiceStopReason reason = AiVoiceStopReason::CANCEL);
+
+/** @brief Lấy generation hiện tại của phiên ghi âm/xử lý. */
+uint32_t ai_voice_get_active_generation(void);
 
 /**
  * @brief Lấy trạng thái hiện tại của AI Voice Assistant

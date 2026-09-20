@@ -1,0 +1,73 @@
+13:08:14.373 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:08:15.844 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:08:45.857 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:08:45.857 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:09:14.372 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:09:15.869 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:09:44.371 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:09:45.882 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:10:14.371 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:10:15.895 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:10:44.370 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:10:45.908 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:11:14.370 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:11:44.369 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:11:44.370 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:11:45.934 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:12:15.946 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:12:15.947 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:12:44.369 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:13:14.368 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:13:14.369 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:13:39.990 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:13:39.991 > [POWER] ⚡ TOUCH TO WAKE: Đánh thức từ trạng thái SLEEP (0%) -> ACTIVE (100%)
+13:13:43.099 > [3778755][I][xiaozhi_voice_service.cpp:474] begin_cleanup(): Xiaozhi: [DONE] gen=5
+13:13:43.116 > [3778762][I][xiaozhi_voice_service.cpp:168] log_latency_metrics(): Xiaozhi Latency [none gen=5]: PTT->WSS=0ms WSS->HELLO=0ms HELLO->REC=0ms REC->REL=0ms REL->LAST_AUDIO=0ms AUDIO->STOP=0ms STOP->STT=0ms STOP->TTS=0ms TTS->PCM=0ms TOTAL=1882ms
+13:13:44.372 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:13:45.984 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:13:46.709 > [3782366][I][xiaozhi_voice_service.cpp:474] begin_cleanup(): Xiaozhi: [DONE] gen=6
+13:13:46.726 > [3782374][I][xiaozhi_voice_service.cpp:168] log_latency_metrics(): Xiaozhi Latency [none gen=6]: PTT->WSS=891ms WSS->HELLO=0ms HELLO->REC=0ms REC->REL=0ms REL->LAST_AUDIO=0ms AUDIO->STOP=0ms STOP->STT=0ms STOP->TTS=0ms TTS->PCM=0ms TOTAL=1192ms
+13:13:54.838 > [3790495][I][xiaozhi_voice_service.cpp:651] handle_text_message(): Xiaozhi: [HELLO_OK] session='33d237a7' gen=7
+13:13:54.849 > [3790505][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='initialize' tool='' gen=7
+13:13:54.863 > [3790520][I][xiaozhi_voice_service.cpp:740] handle_text_message(): Xiaozhi: [MCP_ACK] immediate sent OK gen=7
+13:13:54.873 > [3790530][I][xiaozhi_voice_service.cpp:938] connect_session(): Xiaozhi: [HELLO_OK] cold connection established gen=7
+13:13:54.885 > [3790543][I][xiaozhi_voice_service.cpp:1223] start_session(): Xiaozhi: [LISTEN_START_SENT] gen=7
+13:13:54.895 > [AUDIO][OWNER] acquire owner=3 session=5 ref=1
+13:13:54.896 > [AUDIO] Bắt đầu ghi âm Mic vào PSRAM (Tối đa 10 giây)...
+13:13:54.900 > [3790557][I][xiaozhi_voice_service.cpp:1277] start_session(): Xiaozhi: [RECORDER_ACTIVE] gen=7
+13:13:54.917 > [3790566][I][xiaozhi_voice_service.cpp:1365] log_runtime_diagnostics(): Xiaozhi diag state=2 gen=7 recorder=3 owner=3 cmdq=0 upq=0/8 drops=0/0 stack_free=6256B int=18192/6868/7668 psram=7788467/7770003/7733236 cleanup=0
+13:13:55.004 > [3790661][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='notifications/initialized' tool='' gen=7
+13:13:55.017 > [3790674][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='tools/list' tool='' gen=7
+13:13:55.034 > [3790690][I][xiaozhi_voice_service.cpp:740] handle_text_message(): Xiaozhi: [MCP_ACK] immediate sent OK gen=7
+13:13:55.056 > [AUDIO] Đã dừng ghi âm. Thu được 2560 mẫu (0.16 giây)
+13:13:55.056 > [AUDIO][OWNER] release owner=3 session=5 complete
+13:13:55.150 > [3790804][I][xiaozhi_voice_service.cpp:1171] pump_capture_flush(): Xiaozhi: [AUDIO_SENT] samples=2560 peak=1848 rms=552 enc=3 enq=3 sent=3 bytes=359 drops=0
+13:13:55.164 > [3790821][I][xiaozhi_voice_service.cpp:1174] pump_capture_flush(): Xiaozhi: [LISTEN_STOP_SENT] gen=7
+13:14:09.917 > [3805566][I][xiaozhi_voice_service.cpp:1365] log_runtime_diagnostics(): Xiaozhi diag state=3 gen=7 recorder=0 owner=0 cmdq=0 upq=0/8 drops=0/0 stack_free=6256B int=16800/6868/7668 psram=7795123/7770003/7733236 cleanup=0
+13:14:10.190 > [3805831][E][xiaozhi_voice_service.cpp:151] log_session_fault(): Xiaozhi FAULT [Máy chủ Xiaozhi không phản hồi nhận dạng giọng nói (STT)] FW=d29d8fbfa4a4+wte134bcf5ae8c gen=7 session=33d237a7 phase=4 elapsed=16493ms last_prog=15001ms up_q=0 down_q=0 drops=0/0 stack=6256B int=16800B psram=7795123B
+13:14:10.201 > [3805858][I][xiaozhi_voice_service.cpp:474] begin_cleanup(): Xiaozhi: [DONE] gen=7
+13:14:10.219 > [3805866][I][xiaozhi_voice_service.cpp:168] log_latency_metrics(): Xiaozhi Latency [33d237a7 gen=7]: PTT->WSS=914ms WSS->HELLO=247ms HELLO->REC=62ms REC->REL=143ms REL->LAST_AUDIO=102ms AUDIO->STOP=28ms STOP->STT=0ms STOP->TTS=0ms TTS->PCM=0ms TOTAL=16524ms
+13:14:14.381 > [MUSIC_AUDIO][STACK] MusicAudioTask high-water=5972 bytes
+13:14:15.997 > [AUDIO][STACK] Audio_Task high-water=5660 bytes
+13:14:25.669 > [3821326][I][xiaozhi_voice_service.cpp:651] handle_text_message(): Xiaozhi: [HELLO_OK] session='39d21ed6' gen=8
+13:14:25.680 > [3821337][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='initialize' tool='' gen=8
+13:14:25.693 > [3821351][I][xiaozhi_voice_service.cpp:740] handle_text_message(): Xiaozhi: [MCP_ACK] immediate sent OK gen=8
+13:14:25.703 > [3821361][I][xiaozhi_voice_service.cpp:938] connect_session(): Xiaozhi: [HELLO_OK] cold connection established gen=8
+13:14:25.717 > [3821375][I][xiaozhi_voice_service.cpp:1223] start_session(): Xiaozhi: [LISTEN_START_SENT] gen=8
+13:14:25.739 > [AUDIO][OWNER] acquire owner=3 session=6 ref=1
+13:14:25.740 > [AUDIO] Bắt đầu ghi âm Mic vào PSRAM (Tối đa 10 giây)...
+13:14:25.740 > [3821398][I][xiaozhi_voice_service.cpp:1277] start_session(): Xiaozhi: [RECORDER_ACTIVE] gen=8
+13:14:25.757 > [3821407][I][xiaozhi_voice_service.cpp:1365] log_runtime_diagnostics(): Xiaozhi diag state=2 gen=8 recorder=5 owner=3 cmdq=0 upq=0/8 drops=0/0 stack_free=6256B int=17828/6868/7668 psram=7795123/7770003/7733236 cleanup=0
+13:14:25.788 > [3821446][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='notifications/initialized' tool='' gen=8
+13:14:25.801 > [3821458][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='tools/list' tool='' gen=8
+13:14:25.818 > [3821475][I][xiaozhi_voice_service.cpp:740] handle_text_message(): Xiaozhi: [MCP_ACK] immediate sent OK gen=8
+13:14:26.096 > [3821753][I][xiaozhi_voice_service.cpp:722] handle_text_message(): Xiaozhi: [MCP_RX] method='tools/list' tool='' gen=8
+13:14:26.113 > [3821770][I][xiaozhi_voice_service.cpp:740] handle_text_message(): Xiaozhi: [MCP_ACK] immediate sent OK gen=8
+13:14:26.354 > E (3823715) TRANSPORT_WS: Error transport_poll_write
+13:14:26.355 > E (3823715) WEBSOCKET_CLIENT: Network error: esp_transport_write() returned 0, errno=0
+13:14:26.383 > [3822016][E][xiaozhi_voice_service.cpp:151] log_session_fault(): Xiaozhi FAULT [WebSocket Xiaozhi đã ngắt kết nối] FW=d29d8fbfa4a4+wte134bcf5ae8c gen=8 session=39d21ed6 phase=2 elapsed=1750ms last_prog=95ms up_q=1 down_q=0 drops=0/0 stack=5764B int=60232B psram=7795123B
+13:14:26.387 > E (3823718) TRANSPORT_BASE: poll_read select error 0, errno = Success, fd = 48
+13:14:26.395 > E (3823747) WEBSOCKET_CLIENT: Network error: esp_transport_poll_read() returned -1, errno=119
+13:14:26.406 > [3822064][I][xiaozhi_voice_service.cpp:474] begin_cleanup(): Xiaozhi: [DONE] gen=8
+13:14:26.425 > [3822071][I][xiaozhi_voice_service.cpp:168] log_latency_metrics(): Xiaozhi Latency [39d21ed6 gen=8]: PTT->WSS=815ms WSS->HELLO=249ms HELLO->REC=72ms REC->REL=0ms REL->LAST_AUDIO=3821921ms AUDIO->STOP=0ms STOP->STT=0ms STOP->TTS=0ms TTS->PCM=0ms TOTAL=1802ms
+13:14:26.444 > [AUDIO][OWNER] release owner=3 session=6 complete

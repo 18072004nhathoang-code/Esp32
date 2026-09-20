@@ -7,6 +7,7 @@
 #include "../os/power_manager.h"
 #include "../ui/fonts/ui_fonts.h"
 #include "../ui/ui_theme.h"
+#include "../ai/ai_voice_service.h"
 #include "shared_i2c_bus.h"
 #include <esp_heap_caps.h>
 #include <Preferences.h>
@@ -90,6 +91,24 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 {
     uint16_t touchX, touchY;
     bool touched = shared_i2c_touch_read(&touchX, &touchY);
+
+    const AIVoiceState ai_state = ai_voice_get_state();
+    if (ai_state == AI_STATE_STARTING || ai_state == AI_STATE_LISTENING)
+    {
+        static uint32_t last_log_ms = 0;
+        static bool last_touched = false;
+        const uint32_t now = millis();
+        if (touched != last_touched || (now - last_log_ms) >= 500)
+        {
+            last_log_ms = now;
+            last_touched = touched;
+            log_i("Xiaozhi Touch: state=%s x=%u y=%u ai_state=%d gen=%u",
+                  touched ? "PR" : "REL",
+                  static_cast<unsigned>(touchX), static_cast<unsigned>(touchY),
+                  static_cast<int>(ai_state),
+                  static_cast<unsigned>(ai_voice_get_active_generation()));
+        }
+    }
 
     if (touched)
     {

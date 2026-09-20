@@ -119,17 +119,30 @@ static void ptt_btn_event_cb(lv_event_t *e)
 
     if (code == LV_EVENT_PRESSED)
     {
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_point_t pt = {0, 0};
+        if (indev) lv_indev_get_point(indev, &pt);
+
         if (ai_voice_start_recording())
         {
             is_button_held = true;
-            // Hiệu ứng phát sáng mạnh khi đang giữ
-            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
-            lv_obj_set_style_shadow_width(btn_push_to_talk, 18, 0);
-            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
-            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_80, 0);
+            log_i("Xiaozhi: [PTT_PRESSED] gen=%u x=%d y=%d",
+                  static_cast<unsigned>(ai_voice_get_active_generation()),
+                  pt.x, pt.y);
+
+            // Phản hồi ban đầu: Vàng hổ phách (Amber) thể hiện "Đang kết nối..."
+            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+            lv_obj_set_style_shadow_width(btn_push_to_talk, 12, 0);
+            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_60, 0);
             if (lbl_ptt_icon)
             {
-                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x0A0D14), 0);
+                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x1F2937), 0);
+            }
+            if (lbl_status_text)
+            {
+                lv_label_set_text(lbl_status_text, "Đang kết nối...");
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
             }
         }
         else
@@ -138,16 +151,56 @@ static void ptt_btn_event_cb(lv_event_t *e)
             if (lbl_status_text)
             {
                 lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
             }
         }
     }
-    else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST)
+    else if (code == LV_EVENT_RELEASED)
     {
         if (is_button_held)
         {
             is_button_held = false;
-            if (!ai_voice_stop_and_process() && lbl_status_text)
+            lv_indev_t *indev = lv_indev_get_act();
+            lv_point_t pt = {0, 0};
+            if (indev) lv_indev_get_point(indev, &pt);
+            log_i("Xiaozhi: [PTT_RELEASED] gen=%u x=%d y=%d",
+                  static_cast<unsigned>(ai_voice_get_active_generation()),
+                  pt.x, pt.y);
+
+            if (!ai_voice_stop_and_process(AiVoiceStopReason::USER_RELEASE) && lbl_status_text)
+            {
                 lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+            }
+
+            // Trở về kiểu dáng bình thường
+            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x1F2937), 0);
+            lv_obj_set_style_shadow_width(btn_push_to_talk, 6, 0);
+            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
+            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_30, 0);
+            if (lbl_ptt_icon)
+            {
+                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x00F2FE), 0);
+            }
+        }
+    }
+    else if (code == LV_EVENT_PRESS_LOST)
+    {
+        if (is_button_held)
+        {
+            is_button_held = false;
+            lv_indev_t *indev = lv_indev_get_act();
+            lv_point_t pt = {0, 0};
+            if (indev) lv_indev_get_point(indev, &pt);
+            log_w("Xiaozhi: [PTT_PRESS_LOST] gen=%u x=%d y=%d",
+                  static_cast<unsigned>(ai_voice_get_active_generation()),
+                  pt.x, pt.y);
+
+            if (!ai_voice_stop_and_process(AiVoiceStopReason::PRESS_LOST) && lbl_status_text)
+            {
+                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+            }
 
             // Trở về kiểu dáng bình thường
             lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x1F2937), 0);
@@ -258,7 +311,7 @@ void ai_voice_app_open(lv_obj_t *parent)
     lv_obj_set_style_radius(bottom_bar, 0, 0);
     lv_obj_set_style_pad_hor(bottom_bar, 12, 0);
     lv_obj_set_style_pad_ver(bottom_bar, 4, 0);
-    lv_obj_clear_flag(bottom_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(bottom_bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_CHAIN);
 
     // 2.1 Hiệu ứng dải sóng âm Waveform (7 thanh bar)
     lv_obj_t *wave_container = lv_obj_create(bottom_bar);
@@ -292,6 +345,9 @@ void ai_voice_app_open(lv_obj_t *parent)
     lv_obj_set_style_shadow_width(btn_push_to_talk, 6, 0);
     lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
     lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_40, 0);
+    lv_obj_add_flag(btn_push_to_talk, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_clear_flag(btn_push_to_talk, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_SCROLL_CHAIN);
+    lv_obj_set_ext_click_area(btn_push_to_talk, 15);
     lv_obj_add_event_cb(btn_push_to_talk, ptt_btn_event_cb, LV_EVENT_ALL, nullptr);
 
     lbl_ptt_icon = lv_label_create(btn_push_to_talk);
@@ -317,7 +373,8 @@ void ai_voice_app_open(lv_obj_t *parent)
 /* Đóng và giải phóng tài nguyên */
 void ai_voice_app_close(void)
 {
-    ai_voice_cancel();
+    log_i("Xiaozhi: [APP_CLOSE]");
+    ai_voice_cancel(AiVoiceStopReason::APP_CLOSE);
     is_button_held = false;
     for (size_t i = 0; i < AI_MAX_CHAT_MESSAGES; ++i) rendered_bubbles[i] = nullptr;
     rendered_bubble_count = 0;
@@ -392,19 +449,55 @@ void ai_voice_app_update(void)
         last_history_revision = current_rev;
     }
 
-    // 2. Cập nhật nhãn trạng thái AI
+    // 2. Cập nhật nhãn trạng thái AI và nút bấm
+    AIVoiceState state = ai_voice_get_state();
     if (lbl_status_text)
     {
-        lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
-        AIVoiceState state = ai_voice_get_state();
-        if (state == AI_STATE_STARTING || state == AI_STATE_LISTENING)
-            lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
-        else if (state == AI_STATE_PROCESSING)
+        if (state == AI_STATE_STARTING)
+        {
+            lv_label_set_text(lbl_status_text, "Đang kết nối...");
             lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
-        else if (state == AI_STATE_SPEAKING)
-            lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00E676), 0);
+        }
         else
-            lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
+        {
+            lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
+            if (state == AI_STATE_LISTENING)
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
+            else if (state == AI_STATE_PROCESSING)
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
+            else if (state == AI_STATE_SPEAKING)
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00E676), 0);
+            else if (state == AI_STATE_ERROR)
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+            else
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
+        }
+    }
+
+    if (is_button_held && btn_push_to_talk)
+    {
+        if (state == AI_STATE_LISTENING)
+        {
+            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
+            lv_obj_set_style_shadow_width(btn_push_to_talk, 18, 0);
+            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
+            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_80, 0);
+            if (lbl_ptt_icon)
+            {
+                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x0A0D14), 0);
+            }
+        }
+        else if (state == AI_STATE_STARTING)
+        {
+            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+            lv_obj_set_style_shadow_width(btn_push_to_talk, 12, 0);
+            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_60, 0);
+            if (lbl_ptt_icon)
+            {
+                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x1F2937), 0);
+            }
+        }
     }
 
     if (activation_panel && lbl_activation && btn_push_to_talk)
@@ -431,7 +524,7 @@ void ai_voice_app_update(void)
     }
 
     // 3. Hiển thị biên độ microphone thật; không tạo hoạt ảnh giả khi không thu.
-    AIVoiceState state = ai_voice_get_state();
+    state = ai_voice_get_state();
     int16_t samples[NUM_WAVE_BARS] = {};
     if (state == AI_STATE_LISTENING) audio_get_waveform_samples(samples, NUM_WAVE_BARS);
 
