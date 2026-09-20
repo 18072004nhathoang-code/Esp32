@@ -150,6 +150,30 @@ function requestContext(req, res, timeoutMs) {
   };
 }
 
+function waitWithSignal(promise, signal) {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason || new Error("aborted"));
+  }
+  return new Promise((resolve, reject) => {
+    let cleanup = null;
+    if (signal) {
+      const onAbort = () => reject(signal.reason || new Error("aborted"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      cleanup = () => signal.removeEventListener("abort", onAbort);
+    }
+    promise.then(
+      (res) => {
+        if (cleanup) cleanup();
+        resolve(res);
+      },
+      (err) => {
+        if (cleanup) cleanup();
+        reject(err);
+      }
+    );
+  });
+}
+
 export function createServer(config, dependencies = {}) {
   const stt = dependencies.stt || transcribeGemini;
   const llm = dependencies.llm || queryDeepSeek;
@@ -207,8 +231,10 @@ export function createServer(config, dependencies = {}) {
       .then((wav) => {
         parsePcm16Mono16kWav(wav);
         entry.bytes = wav.length;
-        totalCacheBytes += wav.length;
-        trimCache();
+        if (ttsCache.get(text) === entry) {
+          totalCacheBytes += wav.length;
+          trimCache();
+        }
         return wav;
       })
       .catch(() => {
@@ -231,6 +257,7 @@ export function createServer(config, dependencies = {}) {
       return sendJson(res, 200, {
         ok: true,
         providers: { stt: config.sttProvider, llm: config.llmProvider, tts: config.ttsProvider },
+        cache: { entries: ttsCache.size, bytes: totalCacheBytes },
       });
     }
     if (req.method !== "POST" || (req.url !== "/v1/query" && req.url !== "/v1/tts")) {
@@ -285,8 +312,14 @@ export function createServer(config, dependencies = {}) {
           totalCacheBytes = Math.max(0, totalCacheBytes - entry.bytes);
         }
         try {
-          wav = await entry.promise;
-        } catch {
+          wav = await waitWithSignal(entry.promise, context.signal);
+        } catch (err) {
+          if (context.signal.aborted) {
+            if (entry.controller && !entry.controller.signal.aborted) {
+              try { entry.controller.abort(context.signal.reason); } catch {}
+            }
+            throw err;
+          }
           wav = null;
         }
       }

@@ -283,15 +283,18 @@ static bool save_credentials_for_generation(uint32_t generation, const char *ssi
     const bool still_current = (generation == request_generation &&
                                 (pending_save_generation == 0 || generation == pending_save_generation) &&
                                 !manual_disconnect);
-    if (ok && still_current)
+    if (still_current)
     {
-        should_save_credentials = false;
-        pending_save_generation = 0;
-        current_save_status = WIFI_SAVED;
-    }
-    else if (!ok && current)
-    {
-        current_save_status = WIFI_SAVE_FAILED;
+        if (ok)
+        {
+            should_save_credentials = false;
+            pending_save_generation = 0;
+            current_save_status = WIFI_SAVED;
+        }
+        else
+        {
+            current_save_status = WIFI_SAVE_FAILED;
+        }
     }
     unlock_wifi();
     return ok;
@@ -311,13 +314,10 @@ static bool save_credentials_direct(uint32_t generation, const char *ssid, const
     }
     unlock_prefs();
     lock_wifi();
-    if (ok && generation == request_generation && !manual_disconnect)
+    const bool still_current = (generation == request_generation && !manual_disconnect);
+    if (still_current)
     {
-        current_save_status = WIFI_SAVED;
-    }
-    else if (!ok && current)
-    {
-        current_save_status = WIFI_SAVE_FAILED;
+        current_save_status = ok ? WIFI_SAVED : WIFI_SAVE_FAILED;
     }
     unlock_wifi();
     return ok;

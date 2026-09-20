@@ -378,10 +378,20 @@ bool NetworkCameraService::saveProfileToNVS()
     if (!prefs.begin("netcam", false)) return false;
 
     NetworkCameraProfile prof = getActiveProfile();
+
+    char sanitized_url[128] = {};
+    char ext_user[32] = {};
+    char ext_pass[32] = {};
+    bool had_credentials = false;
+    strip_url_credentials(prof.custom_url, sanitized_url, sizeof(sanitized_url),
+                          ext_user, sizeof(ext_user), ext_pass, sizeof(ext_pass),
+                          &had_credentials);
+
     bool saved = true;
     saved = (prefs.putString("name", prof.name) == strlen(prof.name)) && saved;
     saved = (prefs.putString("ip", prof.ip) == strlen(prof.ip)) && saved;
-    saved = (prefs.putString("custom_url", prof.custom_url) == strlen(prof.custom_url)) && saved;
+    saved = (prefs.putString("custom_url", sanitized_url) == strlen(sanitized_url)) && saved;
+    saved = (prefs.putBool("url_had_cred", had_credentials) > 0) && saved;
     saved = (prefs.putUShort("http_port", prof.http_port) > 0) && saved;
     saved = (prefs.putUShort("rtsp_port", prof.rtsp_port) > 0) && saved;
     saved = (prefs.putUShort("onvif_port", prof.onvif_port) > 0) && saved;
@@ -389,10 +399,12 @@ bool NetworkCameraService::saveProfileToNVS()
     saved = (prefs.putUChar("proto", (uint8_t)prof.protocol) > 0) && saved;
     saved = (prefs.putUChar("ch", prof.channel) > 0) && saved;
     saved = (prefs.putUChar("security", (uint8_t)prof.security_mode) > 0) && saved;
-    saved = (prefs.putString("user", prof.username) == strlen(prof.username)) && saved;
-    // Lưu ý bảo mật: Mật khẩu không bao giờ được lưu plaintext vào Flash
+
+    const char *user_to_save = (prof.username[0] != '\0') ? prof.username : ext_user;
+    saved = (prefs.putString("user", user_to_save) == strlen(user_to_save)) && saved;
+    // Lưu ý bảo mật: Mật khẩu và token xác thực không bao giờ được lưu plaintext vào Flash
     prefs.end();
-    if (saved) Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS (mật khẩu không được lưu).");
+    if (saved) Serial.println("[NET_CAM] ✔ Đã lưu cấu hình Camera vào NVS (mật khẩu/token không được lưu).");
     else Serial.println("[NET_CAM] ❌ Không thể lưu đầy đủ cấu hình Camera vào NVS.");
     return saved;
 }
@@ -431,39 +443,74 @@ bool NetworkCameraService::loadProfileFromNVS()
     strncpy(prof.username, user.c_str(), sizeof(prof.username) - 1);
     prof.password[0] = '\0'; // Mật khẩu không lưu để bảo mật
 
+    bool url_had_cred = prefs.getBool("url_had_cred", false);
     prefs.end();
+
+    // Check if custom_url loaded from NVS still contains legacy credentials
+    char clean_url[128] = {};
+    char leg_user[32] = {};
+    char leg_pass[32] = {};
+    bool legacy_had_creds = false;
+    strip_url_credentials(prof.custom_url, clean_url, sizeof(clean_url),
+                          leg_user, sizeof(leg_user), leg_pass, sizeof(leg_pass),
+                          &legacy_had_creds);
+    if (legacy_had_creds)
+    {
+        url_had_cred = true;
+        strncpy(prof.custom_url, clean_url, sizeof(prof.custom_url) - 1);
+        if (prof.username[0] == '\0' && leg_user[0] != '\0')
+        {
+            strncpy(prof.username, leg_user, sizeof(prof.username) - 1);
+        }
+        // Migrate legacy NVS entry: rewrite sanitized URL and set flag
+        Preferences wprefs;
+        if (wprefs.begin("netcam", false))
+        {
+            wprefs.putString("custom_url", clean_url);
+            wprefs.putBool("url_had_cred", true);
+            if (prof.username[0] != '\0') wprefs.putString("user", prof.username);
+            wprefs.end();
+            Serial.println("[NET_CAM] [MIGRATE] Đã di trú custom_url legacy: loại bỏ plaintext credential khỏi NVS.");
+        }
+    }
+
+    const bool needs_credentials = (strlen(prof.username) > 0 && strlen(prof.password) == 0) || url_had_cred;
 
     if (xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
         _profile = prof;
         _configured = true;
-        if (_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
-        {
-            _snapshot_status = CAM_STATUS_READY;
-        }
-        else if (_profile.protocol == CAM_PROTO_MJPEG)
-        {
-            _mjpeg_status = CAM_STATUS_NOT_IMPLEMENTED;
-        }
-        else if (_profile.protocol == CAM_PROTO_RTSP)
-        {
-            _rtsp_status = CAM_STATUS_NOT_IMPLEMENTED;
-        }
-        if (strlen(_profile.username) > 0 && strlen(_profile.password) == 0)
+        if (needs_credentials)
         {
             _runtime_state = CAM_STATE_PASSWORD_REQUIRED;
+            _failure_reason = CAM_FAILURE_AUTH;
+            _snapshot_status = CAM_STATUS_ERROR;
         }
         else
         {
             _runtime_state = CAM_STATE_STOPPED;
+            _failure_reason = CAM_FAILURE_NONE;
+            if (_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
+            {
+                _snapshot_status = CAM_STATUS_READY;
+            }
+            else if (_profile.protocol == CAM_PROTO_MJPEG)
+            {
+                _mjpeg_status = CAM_STATUS_NOT_IMPLEMENTED;
+            }
+            else if (_profile.protocol == CAM_PROTO_RTSP)
+            {
+                _rtsp_status = CAM_STATUS_NOT_IMPLEMENTED;
+            }
         }
         xSemaphoreGive(_config_mutex);
     }
 
-    Serial.printf("[NET_CAM] Đã nạp profile camera '%s' tại %s%s%s (password không lưu)\n",
+    Serial.printf("[NET_CAM] Đã nạp profile camera '%s' tại %s%s%s (password không lưu, state=%s)\n",
                   prof.name, prof.ip[0] ? prof.ip : "",
                   (prof.ip[0] && prof.custom_url[0]) ? " / " : "",
-                  prof.custom_url[0] ? prof.custom_url : "");
+                  prof.custom_url[0] ? prof.custom_url : "",
+                  camera_runtime_state_to_string(_runtime_state));
     return true;
 }
 

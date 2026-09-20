@@ -412,35 +412,99 @@ void resume_music_if_needed()
     PendingMusicAction pending = {};
     MusicVoiceHandoff suspended = {};
     bool resume_suppressed = false;
+    uint32_t current_rev = 0;
 
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         pending = s_pending_music_action;
         suspended = s_suspended_music;
         resume_suppressed = s_music_resume_suppressed;
-        memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
-        memset(&s_suspended_music, 0, sizeof(s_suspended_music));
-        s_music_resume_suppressed = false;
-        ++s_music_handoff_revision;
+        current_rev = s_music_handoff_revision;
         xSemaphoreGive(s_mutex);
     }
 
-    if (resume_suppressed) return;
+    if (resume_suppressed)
+    {
+        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
+            memset(&s_suspended_music, 0, sizeof(s_suspended_music));
+            xSemaphoreGive(s_mutex);
+        }
+        return;
+    }
 
     char error[128] = {};
+    bool success = false;
+
     if (pending.valid)
     {
-        if (!music_player_execute_ai_action(&pending.action, 4000, error, sizeof(error)))
+        // Re-validate revision and suppression at execution point
+        bool still_valid = false;
+        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            still_valid = (s_music_handoff_revision == current_rev) && !s_music_resume_suppressed;
+            xSemaphoreGive(s_mutex);
+        }
+        if (!still_valid) return;
+
+        if (pending.action.type == AI_MUSIC_ACTION_RESUME)
+        {
+            // Decoder was destroyed by suspend_for_voice: restore decoder from suspended snapshot
+            if (suspended.valid)
+            {
+                MusicVoiceHandoff restore_snap = suspended;
+                restore_snap.resume_after_voice = true;
+                success = music_player_restore_after_voice(&restore_snap, 4000, error, sizeof(error));
+            }
+            else
+            {
+                success = music_player_execute_ai_action(&pending.action, 4000, error, sizeof(error));
+            }
+        }
+        else
+        {
+            success = music_player_execute_ai_action(&pending.action, 4000, error, sizeof(error));
+        }
+
+        if (!success)
         {
             add_message(false, error[0] ? error : "Không thể thực thi lệnh nhạc hoãn lại");
         }
     }
     else if (suspended.valid && suspended.resume_after_voice)
     {
-        if (!music_player_restore_after_voice(&suspended, 4000, error, sizeof(error)))
+        // Re-validate revision and suppression at execution point
+        bool still_valid = false;
+        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            still_valid = (s_music_handoff_revision == current_rev) && !s_music_resume_suppressed;
+            xSemaphoreGive(s_mutex);
+        }
+        if (!still_valid) return;
+
+        success = music_player_restore_after_voice(&suspended, 4000, error, sizeof(error));
+        if (!success)
         {
             add_message(false, error[0] ? error : "Không thể tiếp tục nhạc");
         }
+    }
+    else
+    {
+        success = true;
+    }
+
+    // Only clear pending/suspended if revision still matches (no newer action was queued)
+    if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (s_music_handoff_revision == current_rev)
+        {
+            memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
+            memset(&s_suspended_music, 0, sizeof(s_suspended_music));
+            s_music_resume_suppressed = false;
+            ++s_music_handoff_revision;
+        }
+        xSemaphoreGive(s_mutex);
     }
 }
 

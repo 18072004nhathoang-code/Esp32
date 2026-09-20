@@ -361,17 +361,24 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         connected_.store(false, std::memory_order_release);
         return;
     }
-    if (event_id != WEBSOCKET_EVENT_DATA || !event || !event->data_ptr ||
-        event->data_len <= 0 || event->payload_len <= 0 || event->payload_offset < 0) return;
+    if (event_id != WEBSOCKET_EVENT_DATA || !event ||
+        event->data_len < 0 || event->payload_len < 0 || event->payload_offset < 0) return;
+    if (event->data_len > 0 && !event->data_ptr) return;
 
     // 1. Separate control frames (CLOSE 0x08, PING 0x09, PONG 0x0A)
     const uint8_t raw_op = event->op_code;
     const bool is_fin = (raw_op & 0x80) != 0;
     const uint8_t pure_op = (raw_op & 0x0F);
 
-    if (pure_op == 0x08 || pure_op == 0x09 || pure_op == 0x0A)
+    if (pure_op == 0x08)
     {
-        // Control frames may carry payload (e.g. heartbeat ping/pong).
+        // CLOSE frame: handled as clean connection closure, not JSON error
+        connected_.store(false, std::memory_order_release);
+        return;
+    }
+    if (pure_op == 0x09 || pure_op == 0x0A)
+    {
+        // PING / PONG control frames may carry payload (RFC 6455 5.4).
         // Must NOT reset fragment assembler, must NOT drop downlink, must NOT cancel session.
         return;
     }
@@ -415,7 +422,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         return;
     }
 
-    const bool is_frame_end = (offset + length >= total);
+    const bool is_frame_end = (total == 0) || (offset + length >= total);
     const bool is_message_end = is_frame_end && is_fin;
     const uint8_t *payload = reinterpret_cast<const uint8_t *>(event->data_ptr);
 
@@ -469,7 +476,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     if (!is_message_end)
     {
         // Intermediate SDK buffer chunk within frame or non-final continuation frame
-        if (!fragment_assembler_->append(payload, length))
+        if (length > 0 && !fragment_assembler_->append(payload, length))
         {
             fragment_assembler_->reset();
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);

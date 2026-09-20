@@ -350,3 +350,90 @@ test("TTS prewarm concurrency is capped at 2 and evicted entries abort in-flight
     }
   }
 });
+
+test("in-flight prewarm entry consumed by /v1/tts does not leak totalCacheBytes", async () => {
+  let finishPrewarm = null;
+  const prewarmStarted = new Promise((resolve) => {
+    finishPrewarm = resolve;
+  });
+
+  const base = await start({
+    stt: async () => "xin chào",
+    llm: async () => ({ reply: "Xin chào bạn!", actions: [], sources: [] }),
+    tts: async (_text, _config, _context) => new Promise((resolve) => {
+      finishPrewarm = () => resolve(sampleWav());
+    }),
+  }, { ttsPrewarm: true });
+
+  // 1. Trigger /v1/query which triggers prewarm of "Xin chào bạn!"
+  const qres = await fetch(`${base}/v1/query`, {
+    method: "POST", headers: { "content-type": "audio/wav", authorization: `Bearer ${token}` }, body: sampleWav(),
+  });
+  assert.equal(qres.status, 200);
+
+  // Give prewarm a moment to be enqueued in cache
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 2. Client requests /v1/tts for "Xin chào bạn!" while prewarm is still in flight
+  const ttsReq = fetch(`${base}/v1/tts`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ text: "Xin chào bạn!" }),
+  });
+
+  // Small delay to ensure /v1/tts took the entry from cache
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 3. Resolve the in-flight prewarm promise
+  finishPrewarm();
+  const ttsRes = await ttsReq;
+  assert.equal(ttsRes.status, 200);
+
+  // 4. Inspect cache stats via /healthz: totalCacheBytes must be 0!
+  const hres = await fetch(`${base}/healthz`);
+  const health = await hres.json();
+  assert.equal(health.cache.entries, 0);
+  assert.equal(health.cache.bytes, 0);
+});
+
+test("client aborting /v1/tts while waiting for in-flight cache promise aborts job cleanly", async () => {
+  let prewarmAborted = false;
+  let resolveJob = null;
+
+  const base = await start({
+    stt: async () => "test",
+    llm: async () => ({ reply: "Chờ hủy", actions: [], sources: [] }),
+    tts: async (_text, _config, context) => new Promise((resolve) => {
+      resolveJob = resolve;
+      context.signal?.addEventListener("abort", () => {
+        prewarmAborted = true;
+      }, { once: true });
+    }),
+  }, { ttsPrewarm: true });
+
+  // 1. Trigger prewarm
+  await fetch(`${base}/v1/query`, {
+    method: "POST", headers: { "content-type": "audio/wav", authorization: `Bearer ${token}` }, body: sampleWav(),
+  });
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 2. Client initiates /v1/tts with an AbortController
+  const ac = new AbortController();
+  const ttsReq = fetch(`${base}/v1/tts`, {
+    method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ text: "Chờ hủy" }),
+    signal: ac.signal,
+  });
+
+  await new Promise((r) => setTimeout(r, 20));
+
+  // 3. Abort client request
+  ac.abort();
+
+  await assert.rejects(ttsReq);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  // Prewarm job controller should be aborted as orphaned consumer left
+  assert.equal(prewarmAborted, true);
+
+  if (resolveJob) resolveJob(sampleWav());
+});
+

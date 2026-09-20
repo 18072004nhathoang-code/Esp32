@@ -212,6 +212,15 @@ enum class AudioRecorderStatus : uint8_t
     STOPPED
 };
 
+enum class AudioCommandAckStatus : uint8_t
+{
+    NONE = 0,
+    STARTED,
+    STOP_ACCEPTED,
+    CANCEL_ACCEPTED,
+    REJECTED
+};
+
 inline AudioRecorderStatus evaluate_audio_recorder_status(
     uint32_t request_id,
     bool is_rec,
@@ -219,7 +228,7 @@ inline AudioRecorderStatus evaluate_audio_recorder_status(
     bool found_completion,
     AudioRecorderStatus completion_state,
     bool found_ack,
-    bool ack_ok,
+    AudioCommandAckStatus ack_status,
     bool in_mailbox,
     bool is_active_cmd)
 {
@@ -234,13 +243,42 @@ inline AudioRecorderStatus evaluate_audio_recorder_status(
     }
     if (found_ack)
     {
-        return ack_ok ? AudioRecorderStatus::STOPPED : AudioRecorderStatus::REJECTED;
+        if (ack_status == AudioCommandAckStatus::REJECTED)
+            return AudioRecorderStatus::REJECTED;
+        if (ack_status == AudioCommandAckStatus::STOP_ACCEPTED ||
+            ack_status == AudioCommandAckStatus::CANCEL_ACCEPTED)
+            return AudioRecorderStatus::STOPPED;
+        if (ack_status == AudioCommandAckStatus::STARTED)
+        {
+            if (is_active_cmd && (is_rec || owns_i2s))
+                return AudioRecorderStatus::BUSY;
+            return AudioRecorderStatus::STOPPED;
+        }
     }
     if (in_mailbox || (is_active_cmd && (is_rec || owns_i2s)))
     {
         return AudioRecorderStatus::BUSY;
     }
     return AudioRecorderStatus::UNKNOWN;
+}
+
+// Backward compatible overload for boolean ack
+inline AudioRecorderStatus evaluate_audio_recorder_status(
+    uint32_t request_id,
+    bool is_rec,
+    bool owns_i2s,
+    bool found_completion,
+    AudioRecorderStatus completion_state,
+    bool found_ack,
+    bool ack_ok,
+    bool in_mailbox,
+    bool is_active_cmd)
+{
+    return evaluate_audio_recorder_status(
+        request_id, is_rec, owns_i2s, found_completion, completion_state,
+        found_ack,
+        found_ack ? (ack_ok ? AudioCommandAckStatus::STOP_ACCEPTED : AudioCommandAckStatus::REJECTED) : AudioCommandAckStatus::NONE,
+        in_mailbox, is_active_cmd);
 }
 
 inline int format_map_tile_cache_path(char *buf, size_t buf_size, double lat, double lon, int zoom, const char *type_str)
@@ -252,7 +290,9 @@ inline int format_map_tile_cache_path(char *buf, size_t buf_size, double lat, do
 
 constexpr uint32_t power_manager_safe_elapsed(uint32_t now, uint32_t last_activity)
 {
-    return (now >= last_activity) ? (now - last_activity) : 0U;
+    // In 32-bit modulo arithmetic, if (now - last_activity) > 0x7FFFFFFF,
+    // last_activity is ahead of now (clock anomaly or concurrent activity feed during snapshot)
+    return ((now - last_activity) > 0x7FFFFFFFU) ? 0U : (now - last_activity);
 }
 
 constexpr bool power_manager_can_apply_transition(
@@ -263,3 +303,166 @@ constexpr bool power_manager_can_apply_transition(
 {
     return (current_revision == snapshot_revision) && (current_state == snapshot_state);
 }
+
+struct PowerBrightnessCoordinator
+{
+    uint32_t intent_revision{0};
+    uint32_t applied_revision{0};
+    uint8_t target_brightness{100};
+    uint8_t hardware_brightness{100};
+
+    void post_intent(uint8_t brightness)
+    {
+        target_brightness = brightness;
+        ++intent_revision;
+    }
+
+    bool get_next_hardware_target(uint8_t *out_brightness, uint32_t *out_revision)
+    {
+        if (intent_revision == applied_revision) return false;
+        *out_brightness = target_brightness;
+        *out_revision = intent_revision;
+        return true;
+    }
+
+    void commit_hardware_applied(uint32_t revision, uint8_t brightness)
+    {
+        if (revision > applied_revision)
+        {
+            applied_revision = revision;
+            hardware_brightness = brightness;
+        }
+    }
+};
+
+inline bool strip_url_credentials(const char *src_url,
+                                  char *out_url, size_t out_size,
+                                  char *out_user, size_t user_size,
+                                  char *out_pass, size_t pass_size,
+                                  bool *had_credentials)
+{
+    if (had_credentials) *had_credentials = false;
+    if (out_user && user_size > 0) out_user[0] = '\0';
+    if (out_pass && pass_size > 0) out_pass[0] = '\0';
+    if (!out_url || out_size == 0) return false;
+    out_url[0] = '\0';
+    if (!src_url || !*src_url) return true;
+
+    // Check scheme
+    const char *scheme_sep = strstr(src_url, "://");
+    const char *host_start = scheme_sep ? (scheme_sep + 3) : src_url;
+
+    // Look for userinfo ('@' before next '/' or '?')
+    const char *slash = strchr(host_start, '/');
+    const char *query = strchr(host_start, '?');
+    const char *authority_end = slash ? slash : (query ? query : (src_url + strlen(src_url)));
+    const char *at = strchr(host_start, '@');
+
+    size_t out_idx = 0;
+    if (scheme_sep)
+    {
+        size_t scheme_len = (scheme_sep + 3) - src_url;
+        if (scheme_len >= out_size) return false;
+        memcpy(out_url, src_url, scheme_len);
+        out_idx = scheme_len;
+        out_url[out_idx] = '\0';
+    }
+
+    const char *host_actual = host_start;
+    if (at && at < authority_end)
+    {
+        if (had_credentials) *had_credentials = true;
+        // Userinfo present: [user][:password]@
+        const char *colon = strchr(host_start, ':');
+        if (colon && colon < at)
+        {
+            // Both username and password
+            if (out_user && user_size > 0)
+            {
+                size_t ulen = colon - host_start;
+                if (ulen >= user_size) ulen = user_size - 1;
+                memcpy(out_user, host_start, ulen);
+                out_user[ulen] = '\0';
+            }
+            if (out_pass && pass_size > 0)
+            {
+                size_t plen = at - (colon + 1);
+                if (plen >= pass_size) plen = pass_size - 1;
+                memcpy(out_pass, colon + 1, plen);
+                out_pass[plen] = '\0';
+            }
+        }
+        else
+        {
+            // Only username
+            if (out_user && user_size > 0)
+            {
+                size_t ulen = at - host_start;
+                if (ulen >= user_size) ulen = user_size - 1;
+                memcpy(out_user, host_start, ulen);
+                out_user[ulen] = '\0';
+            }
+        }
+        host_actual = at + 1;
+    }
+
+    // Copy host and path up to query
+    const char *query_start = strchr(host_actual, '?');
+    const char *copy_end = query_start ? query_start : (src_url + strlen(src_url));
+
+    size_t host_path_len = copy_end - host_actual;
+    if (out_idx + host_path_len >= out_size) return false;
+    memcpy(out_url + out_idx, host_actual, host_path_len);
+    out_idx += host_path_len;
+    out_url[out_idx] = '\0';
+
+    // Parse and filter query parameters
+    if (query_start)
+    {
+        const char *p = query_start + 1;
+        bool first_param = true;
+        while (*p)
+        {
+            const char *next_amp = strchr(p, '&');
+            size_t param_len = next_amp ? (next_amp - p) : strlen(p);
+
+            const char *eq = strchr(p, '=');
+            size_t key_len = (eq && eq < (p + param_len)) ? (eq - p) : param_len;
+
+            bool is_secret = false;
+            const char *secret_keys[] = {"token", "pass", "password", "pwd", "auth", "key", "secret"};
+            for (const char *sk : secret_keys)
+            {
+                if (strlen(sk) == key_len && strncmp(p, sk, key_len) == 0)
+                {
+                    is_secret = true;
+                    if (had_credentials) *had_credentials = true;
+                    if (eq && out_pass && out_pass[0] == '\0' && pass_size > 0 &&
+                        (strcmp(sk, "pass") == 0 || strcmp(sk, "password") == 0 || strcmp(sk, "pwd") == 0))
+                    {
+                        size_t val_len = (p + param_len) - (eq + 1);
+                        if (val_len >= pass_size) val_len = pass_size - 1;
+                        memcpy(out_pass, eq + 1, val_len);
+                        out_pass[val_len] = '\0';
+                    }
+                    break;
+                }
+            }
+
+            if (!is_secret)
+            {
+                if (out_idx + 1 + param_len >= out_size) return false;
+                out_url[out_idx++] = first_param ? '?' : '&';
+                first_param = false;
+                memcpy(out_url + out_idx, p, param_len);
+                out_idx += param_len;
+                out_url[out_idx] = '\0';
+            }
+
+            if (!next_amp) break;
+            p = next_amp + 1;
+        }
+    }
+    return true;
+}
+

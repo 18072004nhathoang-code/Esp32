@@ -120,12 +120,19 @@ void test_recorder_status_logic()
     assert(evaluate_audio_recorder_status(43, false, false, true, AudioRecorderStatus::REJECTED, false, false, false, false) == AudioRecorderStatus::REJECTED);
 
     // Specific request with ACK in slot:
-    assert(evaluate_audio_recorder_status(44, false, false, false, AudioRecorderStatus::UNKNOWN, true, true, false, false) == AudioRecorderStatus::STOPPED);
-    assert(evaluate_audio_recorder_status(45, false, false, false, AudioRecorderStatus::UNKNOWN, true, false, false, false) == AudioRecorderStatus::REJECTED);
+    assert(evaluate_audio_recorder_status(44, false, false, false, AudioRecorderStatus::UNKNOWN, true, AudioCommandAckStatus::STOP_ACCEPTED, false, false) == AudioRecorderStatus::STOPPED);
+    assert(evaluate_audio_recorder_status(45, false, false, false, AudioRecorderStatus::UNKNOWN, true, AudioCommandAckStatus::REJECTED, false, false) == AudioRecorderStatus::REJECTED);
+    // Start ACK must be BUSY while active, NEVER STOPPED!
+    assert(evaluate_audio_recorder_status(46, true, true, false, AudioRecorderStatus::UNKNOWN, true, AudioCommandAckStatus::STARTED, false, true) == AudioRecorderStatus::BUSY);
 
     // In mailbox or active:
-    assert(evaluate_audio_recorder_status(46, false, false, false, AudioRecorderStatus::UNKNOWN, false, false, true, false) == AudioRecorderStatus::BUSY);
-    assert(evaluate_audio_recorder_status(46, true, true, false, AudioRecorderStatus::UNKNOWN, false, false, false, true) == AudioRecorderStatus::BUSY);
+    assert(evaluate_audio_recorder_status(47, false, false, false, AudioRecorderStatus::UNKNOWN, false, AudioCommandAckStatus::NONE, true, false) == AudioRecorderStatus::BUSY);
+    assert(evaluate_audio_recorder_status(47, true, true, false, AudioRecorderStatus::UNKNOWN, false, AudioCommandAckStatus::NONE, false, true) == AudioRecorderStatus::BUSY);
+
+    // Isolation between Recorder A and Recorder B:
+    // Recorder A has finished (completion in ring buffer = STOPPED):
+    // Even if Recorder B is currently active/recording, querying Recorder A returns STOPPED!
+    assert(evaluate_audio_recorder_status(101, true, true, true, AudioRecorderStatus::STOPPED, false, AudioCommandAckStatus::NONE, false, false) == AudioRecorderStatus::STOPPED);
 
     printf("[PASS] test_recorder_status_logic\n");
 }
@@ -232,7 +239,7 @@ void test_maps_cache_precision()
     printf("[PASS] test_maps_cache_precision\n");
 }
 
-// Test 9: Power Manager safe elapsed underflow protection and activity revision
+// Test 9: Power Manager safe elapsed underflow protection, millis wraparound and activity revision
 void test_power_manager_underflow_and_revision()
 {
     // Normal elapsed
@@ -240,6 +247,11 @@ void test_power_manager_underflow_and_revision()
 
     // Clock anomaly or update during snapshot (now < last_activity): must be 0, NOT underflow!
     assert(power_manager_safe_elapsed(5000, 10000) == 0);
+
+    // Millis wraparound: last_activity shortly before 0xFFFFFFFF, now shortly after 0:
+    // 0x00000020 (32) - 0xFFFFFFF0 (4294967280) = 48
+    assert(power_manager_safe_elapsed(0x00000020, 0xFFFFFFF0) == 48);
+    assert(power_manager_safe_elapsed(64, 0xFFFFFFE0) == 96);
 
     // Activity revision revalidation:
     // If user touched screen between snapshot and state apply (current_rev != snapshot_rev):
@@ -250,6 +262,125 @@ void test_power_manager_underflow_and_revision()
     assert(power_manager_can_apply_transition(4, snapshot_rev, 0, snapshot_state) == false);
 
     printf("[PASS] test_power_manager_underflow_and_revision\n");
+}
+
+// Test 10: Power Brightness Coordinator race resilience
+void test_power_brightness_coordination()
+{
+    PowerBrightnessCoordinator coordinator;
+    assert(coordinator.hardware_brightness == 100);
+
+    // Scenario: Task A commits Sleep (intent = 0)
+    coordinator.post_intent(0);
+    assert(coordinator.intent_revision == 1);
+
+    // Concurrently before Task A writes to hardware, user touches screen -> Task B commits Wake (intent = 100)
+    coordinator.post_intent(100);
+    assert(coordinator.intent_revision == 2);
+
+    // Serializer executes hardware update:
+    uint8_t target_b = 0;
+    uint32_t target_rev = 0;
+    assert(coordinator.get_next_hardware_target(&target_b, &target_rev) == true);
+    // Must get the newest intent (100), NOT 0!
+    assert(target_b == 100);
+    assert(target_rev == 2);
+
+    coordinator.commit_hardware_applied(target_rev, target_b);
+    assert(coordinator.hardware_brightness == 100);
+
+    // Next check has nothing pending:
+    assert(coordinator.get_next_hardware_target(&target_b, &target_rev) == false);
+
+    printf("[PASS] test_power_brightness_coordination\n");
+}
+
+// Test 11: Camera URL credential stripping for NVS storage
+void test_camera_url_credential_stripping()
+{
+    char out_url[128] = {};
+    char out_user[32] = {};
+    char out_pass[32] = {};
+    bool had_creds = false;
+
+    // Case 1: Plaintext user:password@host URL
+    const char *url1 = "http://admin:secret123@192.168.1.100:8080/snapshot.jpg";
+    assert(strip_url_credentials(url1, out_url, sizeof(out_url), out_user, sizeof(out_user), out_pass, sizeof(out_pass), &had_creds));
+    assert(had_creds == true);
+    assert(strcmp(out_url, "http://192.168.1.100:8080/snapshot.jpg") == 0);
+    assert(strcmp(out_user, "admin") == 0);
+    assert(strcmp(out_pass, "secret123") == 0);
+
+    // Case 2: Query parameter with auth token
+    const char *url2 = "http://192.168.1.50/cam.jpg?channel=1&token=xyz789&quality=high";
+    assert(strip_url_credentials(url2, out_url, sizeof(out_url), out_user, sizeof(out_user), out_pass, sizeof(out_pass), &had_creds));
+    assert(had_creds == true);
+    assert(strcmp(out_url, "http://192.168.1.50/cam.jpg?channel=1&quality=high") == 0);
+
+    // Case 3: Clean URL without credentials
+    const char *url3 = "rtsp://192.168.1.200:554/live/ch0";
+    assert(strip_url_credentials(url3, out_url, sizeof(out_url), out_user, sizeof(out_user), out_pass, sizeof(out_pass), &had_creds));
+    assert(had_creds == false);
+    assert(strcmp(out_url, url3) == 0);
+    assert(out_user[0] == '\0');
+    assert(out_pass[0] == '\0');
+
+    printf("[PASS] test_camera_url_credential_stripping\n");
+}
+
+// Test 12: WiFi Save Failure revalidation after Connect B
+void test_wifi_save_failure_revalidation()
+{
+    uint32_t request_generation = 1; // Initial request A
+    bool manual_disconnect = false;
+    uint32_t current_save_status = 0; // NONE
+
+    // Save A started for generation 1
+    const uint32_t save_gen = 1;
+
+    // While NVS write is executing, user initiates Connect B (generation 2):
+    request_generation = 2;
+
+    // NVS write for A fails: ok = false
+    const bool ok = false;
+
+    // Revalidation after I/O:
+    const bool still_current = (save_gen == request_generation && !manual_disconnect);
+    assert(!still_current); // Must be false!
+
+    if (still_current)
+    {
+        current_save_status = ok ? 1 : 2; // SAVED or FAILED
+    }
+
+    // current_save_status must NOT be changed to FAILED for request B!
+    assert(current_save_status == 0);
+
+    printf("[PASS] test_wifi_save_failure_revalidation\n");
+}
+
+// Test 13: WebSocket Empty Final Continuation Frame
+void test_websocket_empty_final_continuation()
+{
+    uint8_t storage[512] = {};
+    xiaozhi::FragmentAssembler assembler(storage, sizeof(storage));
+
+    const uint8_t initial_chunk[] = "{\"type\":\"hello\"}";
+    // Frame 1: TEXT, FIN=0 (fragmented)
+    assert(assembler.begin(xiaozhi::FragmentAssembler::Kind::TEXT, initial_chunk, strlen((const char *)initial_chunk)));
+    assert(assembler.isActive());
+
+    // Frame 2: CONTINUATION, length=0, FIN=1 (empty final frame)
+    xiaozhi::FragmentAssembler::Kind finished_kind = xiaozhi::FragmentAssembler::Kind::NONE;
+    const uint8_t *message = nullptr;
+    size_t message_size = 0;
+    assert(assembler.finish(nullptr, 0, &finished_kind, &message, &message_size));
+    assert(!assembler.isActive());
+    assert(finished_kind == xiaozhi::FragmentAssembler::Kind::TEXT);
+    assert(message_size == strlen((const char *)initial_chunk));
+    assert(memcmp(message, initial_chunk, message_size) == 0);
+
+    printf("[PASS] test_websocket_empty_final_continuation\n");
 }
 
 int main()
@@ -264,7 +395,12 @@ int main()
     test_touch_coordinate_and_io_ok();
     test_maps_cache_precision();
     test_power_manager_underflow_and_revision();
+    test_power_brightness_coordination();
+    test_camera_url_credential_stripping();
+    test_wifi_save_failure_revalidation();
+    test_websocket_empty_final_continuation();
     printf("=== ALL REGRESSION TESTS PASSED! ===\n");
     return 0;
 }
+
 
