@@ -350,7 +350,7 @@ static void map_download_task(void *pvParameters)
                     target_lat, target_lon, target_zoom, MAP_TILE_WIDTH, MAP_TILE_HEIGHT, target_type, GOOGLE_MAPS_STATIC_API_KEY, GMP_SOLUTION_ID);
 
             // Bảo mật: Không in khóa API plaintext ra log Serial
-            Serial.printf("[MAP_TASK] 🌐 Tải bản đồ (Lat: %.4f, Lon: %.4f, Zoom: %d, Type: %s)\n",
+            Serial.printf("[MAP_TASK] 🌐 Tải bản đồ (Lat: %.5f, Lon: %.5f, Zoom: %d, Type: %s)\n",
                           target_lat, target_lon, target_zoom, target_type);
 
             HTTPClient http;

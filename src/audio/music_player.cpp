@@ -1161,15 +1161,21 @@ bool music_player_restore_after_voice(const MusicVoiceHandoff *handoff, uint32_t
     }
     else
     {
-        if (handoff->track_index < 0 || handoff->track_index >= total_tracks_found)
+        int track_idx = handoff->track_index;
+        if (track_idx < 0 || track_idx >= total_tracks_found)
+        {
+            track_idx = player_state.current_track_idx;
+            if (track_idx < 0 || track_idx >= total_tracks_found) track_idx = 0;
+        }
+        if (total_tracks_found <= 0 || track_idx < 0 || track_idx >= total_tracks_found)
         {
             if (error && error_size) strlcpy(error, "Bài hát không còn trên thẻ SD", error_size);
             xSemaphoreGive(music_ai_action_mutex);
             return false;
         }
         play.type = MUSIC_CMD_PLAY_INDEX;
-        play.track_idx = handoff->track_index;
-        strlcpy(play.filepath, playlist[handoff->track_index].filepath, sizeof(play.filepath));
+        play.track_idx = track_idx;
+        strlcpy(play.filepath, playlist[track_idx].filepath, sizeof(play.filepath));
     }
     bool ok = execute_music_command_wait_locked(play, timeout_ms);
     if (ok && !handoff->is_stream && handoff->position_sec > 0)

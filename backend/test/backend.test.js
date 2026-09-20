@@ -301,3 +301,52 @@ test("TTS prewarm is disabled by default and concurrency is bounded", async () =
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(ttsCalls, 0);
 });
+
+test("TTS prewarm concurrency is capped at 2 and evicted entries abort in-flight jobs", async () => {
+  let activePrewarms = 0;
+  let maxConcurrentPrewarms = 0;
+  let abortedPrewarms = 0;
+  const resolvers = [];
+  let queryCounter = 0;
+
+  const base = await start({
+    stt: async () => "xin chào",
+    llm: async () => ({ reply: `Reply ${++queryCounter}`, actions: [], sources: [] }),
+    tts: async (_text, _config, context) => new Promise((resolve) => {
+      activePrewarms++;
+      if (activePrewarms > maxConcurrentPrewarms) maxConcurrentPrewarms = activePrewarms;
+      context.signal?.addEventListener("abort", () => {
+        abortedPrewarms++;
+      }, { once: true });
+      resolvers.push(() => {
+        activePrewarms--;
+        resolve(sampleWav());
+      });
+    }),
+  }, { maxConcurrentRequests: 5, ttsPrewarm: true });
+
+  try {
+    // Make 3 queries in parallel
+    const req1 = fetch(`${base}/v1/query`, {
+      method: "POST", headers: { "content-type": "audio/wav", authorization: `Bearer ${token}` }, body: sampleWav(),
+    });
+    const req2 = fetch(`${base}/v1/query`, {
+      method: "POST", headers: { "content-type": "audio/wav", authorization: `Bearer ${token}` }, body: sampleWav(),
+    });
+    const req3 = fetch(`${base}/v1/query`, {
+      method: "POST", headers: { "content-type": "audio/wav", authorization: `Bearer ${token}` }, body: sampleWav(),
+    });
+
+    await Promise.all([req1, req2, req3]);
+    // Give a small tick for prewarm tasks to start
+    await new Promise((r) => setTimeout(r, 25));
+
+    // Max concurrent prewarms should be capped at 2
+    assert.equal(maxConcurrentPrewarms, 2);
+  } finally {
+    // Clean up resolvers so test runner can exit
+    while (resolvers.length > 0) {
+      resolvers.pop()();
+    }
+  }
+});

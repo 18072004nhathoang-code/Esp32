@@ -90,7 +90,15 @@ static uint32_t s_seen_uplink_drops = 0;
 static uint32_t s_seen_downlink_drops = 0;
 static size_t s_capture_offset = 0;
 static size_t s_capture_frame_fill = 0;
-static MusicVoiceHandoff s_music_handoff = {};
+struct PendingMusicAction
+{
+    bool valid;
+    AiMusicAction action;
+    uint32_t revision;
+};
+static MusicVoiceHandoff s_suspended_music = {};
+static PendingMusicAction s_pending_music_action = {};
+static uint32_t s_music_handoff_revision = 0;
 static bool s_music_resume_suppressed = false;
 static uint32_t s_audio_output_session = 0;
 static uint32_t s_record_control_request = 0;
@@ -213,18 +221,48 @@ void mcp_worker(void *)
                 job.tool == xiaozhi::McpTool::MUSIC_RESUME || job.tool == xiaozhi::McpTool::MUSIC_STOP ||
                 job.tool == xiaozhi::McpTool::MUSIC_VOLUME)
             {
-                if ((job.tool == xiaozhi::McpTool::MUSIC_PLAY || job.tool == xiaozhi::McpTool::MUSIC_RESUME) &&
-                    ai_voice_get_state() != AI_STATE_IDLE && ai_voice_get_state() != AI_STATE_ERROR)
+                const bool voice_active = (ai_voice_get_state() != AI_STATE_IDLE && ai_voice_get_state() != AI_STATE_ERROR);
+                if (voice_active)
                 {
-                    // Defer music start until voice turn finishes to prevent stealing I2S before TTS plays
-                    s_music_handoff.valid = true;
-                    s_music_handoff.resume_after_voice = true;
-                    s_music_handoff.is_stream = (job.music_action.source_id[0] != '\0');
-                    s_music_handoff.track_index = -1;
-                    strlcpy(s_music_handoff.source_id, job.music_action.source_id, sizeof(s_music_handoff.source_id));
-                    s_music_resume_suppressed = false;
-                    res.is_error = false;
-                    strlcpy(res.text, "Lệnh nhạc đã được thiết bị ghi nhận", sizeof(res.text));
+                    if (job.tool == xiaozhi::McpTool::MUSIC_PLAY || job.tool == xiaozhi::McpTool::MUSIC_RESUME)
+                    {
+                        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            s_pending_music_action.valid = true;
+                            s_pending_music_action.action = job.music_action;
+                            s_pending_music_action.action.type = (job.tool == xiaozhi::McpTool::MUSIC_PLAY)
+                                ? AI_MUSIC_ACTION_PLAY : AI_MUSIC_ACTION_RESUME;
+                            s_pending_music_action.revision = ++s_music_handoff_revision;
+                            s_music_resume_suppressed = false;
+                            xSemaphoreGive(s_mutex);
+                        }
+                        res.is_error = false;
+                        strlcpy(res.text, "Lệnh nhạc đã được ghi nhận và hoãn lại (DEFERRED)", sizeof(res.text));
+                    }
+                    else if (job.tool == xiaozhi::McpTool::MUSIC_PAUSE || job.tool == xiaozhi::McpTool::MUSIC_STOP)
+                    {
+                        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+                        {
+                            s_music_resume_suppressed = true;
+                            s_pending_music_action.valid = false;
+                            s_suspended_music.resume_after_voice = false;
+                            s_pending_music_action.revision = ++s_music_handoff_revision;
+                            xSemaphoreGive(s_mutex);
+                        }
+                        res.is_error = false;
+                        strlcpy(res.text, "Lệnh dừng nhạc đã được thực thi (APPLIED)", sizeof(res.text));
+                    }
+                    else if (job.tool == xiaozhi::McpTool::MUSIC_VOLUME)
+                    {
+                        char action_error[128] = {};
+                        const bool device_ack = music_player_execute_ai_action(&job.music_action, 1000,
+                                                                               action_error, sizeof(action_error));
+                        res.is_error = !device_ack;
+                        if (device_ack)
+                            strlcpy(res.text, "Lệnh âm lượng đã được áp dụng (APPLIED)", sizeof(res.text));
+                        else
+                            snprintf(res.text, sizeof(res.text), "Lỗi thực thi âm lượng (FAILED): %s", action_error[0] ? action_error : "Thất bại");
+                    }
                 }
                 else
                 {
@@ -233,7 +271,10 @@ void mcp_worker(void *)
                                                                            action_error, sizeof(action_error));
                     const bool executed = xiaozhi::mcp_result_success(true, device_ack);
                     res.is_error = !executed;
-                    strlcpy(res.text, executed ? "Lệnh nhạc đã được thiết bị ACK" : action_error, sizeof(res.text));
+                    if (executed)
+                        strlcpy(res.text, "Lệnh nhạc đã được thiết bị thực thi (APPLIED)", sizeof(res.text));
+                    else
+                        snprintf(res.text, sizeof(res.text), "Lỗi thực thi lệnh nhạc (FAILED): %s", action_error[0] ? action_error : "Thất bại");
                 }
             }
             else if (job.tool == xiaozhi::McpTool::CAMERA_OPEN)
@@ -368,14 +409,39 @@ void stop_output(bool drain)
 
 void resume_music_if_needed()
 {
-    if (s_music_handoff.valid && !s_music_resume_suppressed)
+    PendingMusicAction pending = {};
+    MusicVoiceHandoff suspended = {};
+    bool resume_suppressed = false;
+
+    if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
-        char error[128] = {};
-        if (!music_player_restore_after_voice(&s_music_handoff, 4000, error, sizeof(error)))
-            add_message(false, error[0] ? error : "Không thể tiếp tục nhạc");
+        pending = s_pending_music_action;
+        suspended = s_suspended_music;
+        resume_suppressed = s_music_resume_suppressed;
+        memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
+        memset(&s_suspended_music, 0, sizeof(s_suspended_music));
+        s_music_resume_suppressed = false;
+        ++s_music_handoff_revision;
+        xSemaphoreGive(s_mutex);
     }
-    memset(&s_music_handoff, 0, sizeof(s_music_handoff));
-    s_music_resume_suppressed = false;
+
+    if (resume_suppressed) return;
+
+    char error[128] = {};
+    if (pending.valid)
+    {
+        if (!music_player_execute_ai_action(&pending.action, 4000, error, sizeof(error)))
+        {
+            add_message(false, error[0] ? error : "Không thể thực thi lệnh nhạc hoãn lại");
+        }
+    }
+    else if (suspended.valid && suspended.resume_after_voice)
+    {
+        if (!music_player_restore_after_voice(&suspended, 4000, error, sizeof(error)))
+        {
+            add_message(false, error[0] ? error : "Không thể tiếp tục nhạc");
+        }
+    }
 }
 
 void release_flush_lease()
@@ -397,8 +463,14 @@ void finalize_cleanup(uint32_t generation)
     }
     else
     {
-        memset(&s_music_handoff, 0, sizeof(s_music_handoff));
-        s_music_resume_suppressed = false;
+        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
+            memset(&s_suspended_music, 0, sizeof(s_suspended_music));
+            s_music_resume_suppressed = false;
+            ++s_music_handoff_revision;
+            xSemaphoreGive(s_mutex);
+        }
     }
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
@@ -583,7 +655,12 @@ bool begin_output()
         char error[128] = {};
         if (music_player_suspend_for_voice(&handoff, 3000, error, sizeof(error)))
         {
-            if (!s_music_resume_suppressed) s_music_handoff = handoff;
+            if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+            {
+                if (!s_music_resume_suppressed) s_suspended_music = handoff;
+                ++s_music_handoff_revision;
+                xSemaphoreGive(s_mutex);
+            }
         }
         else
         {
@@ -610,19 +687,23 @@ void handle_music_handoff(const char *tool_name)
     if (strcmp(tool_name, "self.music.stop") == 0 ||
         strcmp(tool_name, "self.music.pause") == 0)
     {
-        s_music_resume_suppressed = true;
-        memset(&s_music_handoff, 0, sizeof(s_music_handoff));
-    }
-    else if ((strcmp(tool_name, "self.music.play") == 0 ||
-              strcmp(tool_name, "self.music.resume") == 0) &&
-             music_player_is_playing() && !music_player_is_paused())
-    {
-        MusicVoiceHandoff handoff = {};
-        char error[128] = {};
-        if (music_player_suspend_for_voice(&handoff, 3000, error, sizeof(error)))
+        if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            s_music_handoff = handoff;
+            s_music_resume_suppressed = true;
+            s_pending_music_action.valid = false;
+            s_suspended_music.resume_after_voice = false;
+            ++s_music_handoff_revision;
+            xSemaphoreGive(s_mutex);
+        }
+    }
+    else if (strcmp(tool_name, "self.music.play") == 0 ||
+             strcmp(tool_name, "self.music.resume") == 0)
+    {
+        if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
+        {
             s_music_resume_suppressed = false;
+            ++s_music_handoff_revision;
+            xSemaphoreGive(s_mutex);
         }
     }
 }
@@ -1266,17 +1347,30 @@ bool start_session(uint32_t generation)
     s_frames_encoded = 0;
     s_frames_enqueued = 0;
     s_transport.resetAudioCounters();
-    memset(&s_music_handoff, 0, sizeof(s_music_handoff));
-    s_music_resume_suppressed = false;
+    if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        memset(&s_suspended_music, 0, sizeof(s_suspended_music));
+        memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
+        s_music_resume_suppressed = false;
+        ++s_music_handoff_revision;
+        xSemaphoreGive(s_mutex);
+    }
     if (music_player_is_playing() || music_player_is_paused())
     {
+        MusicVoiceHandoff handoff = {};
         char error[128] = {};
-        if (!music_player_suspend_for_voice(&s_music_handoff, 3000,
+        if (!music_player_suspend_for_voice(&handoff, 3000,
                                             error, sizeof(error)))
         {
             set_error(error[0] ? error : "Không giải phóng được nhạc để thu giọng nói");
             begin_cleanup(generation, true, false);
             return false;
+        }
+        if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+        {
+            s_suspended_music = handoff;
+            ++s_music_handoff_revision;
+            xSemaphoreGive(s_mutex);
         }
     }
     if (cancellation_requested(generation)) { cancel_session(generation); return false; }

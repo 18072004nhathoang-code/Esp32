@@ -8,6 +8,7 @@
 #include "../display/lvgl_port.h"
 #include "../storage/storage_manager.h"
 #include "service_state_logic.h"
+#include "firmware_contracts.h"
 
 static bool s_cache_ready = false;
 
@@ -132,9 +133,7 @@ bool sd_map_cache_is_available(void)
 
 void sd_map_cache_get_filename(char *out_path, size_t max_len, double lat, double lon, int zoom, const char *maptype)
 {
-    if (!out_path || max_len == 0) return;
-    const char *type = (maptype && strlen(maptype) > 0) ? maptype : "roadmap";
-    snprintf(out_path, max_len, "%s/%.4f_%.4f_z%d_%s.jpg", SD_MAPS_DIR, lat, lon, zoom, type);
+    format_map_tile_cache_path(out_path, max_len, lat, lon, zoom, maptype);
 }
 
 bool sd_map_cache_exists(double lat, double lon, int zoom, const char *maptype)

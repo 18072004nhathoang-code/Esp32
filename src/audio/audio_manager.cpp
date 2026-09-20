@@ -113,9 +113,32 @@ struct AudioCommandAck
     size_t sample_count;
 };
 static AudioCommandAck recording_acks[8] = {};
+static AudioRecorderCompletionRecord s_recorder_completions[16] = {};
+static size_t s_recorder_completion_count = 0;
 static uint32_t last_completed_recording_generation = 0;
 static uint32_t last_completed_snapshot_generation = 0;
 static size_t last_completed_sample_count = 0;
+
+static void record_recorder_completion_locked(uint32_t request_id, uint32_t start_id,
+                                              uint32_t control_id, uint32_t session_id,
+                                              AudioRecorderStatus terminal_state,
+                                              uint8_t terminal_reason,
+                                              uint32_t snapshot_generation,
+                                              size_t sample_count)
+{
+    if (request_id == 0 && start_id == 0 && control_id == 0) return;
+    const size_t idx = s_recorder_completion_count %
+        (sizeof(s_recorder_completions) / sizeof(s_recorder_completions[0]));
+    s_recorder_completions[idx].request_id = request_id ? request_id : (control_id ? control_id : start_id);
+    s_recorder_completions[idx].start_id = start_id;
+    s_recorder_completions[idx].control_id = control_id;
+    s_recorder_completions[idx].session_id = session_id;
+    s_recorder_completions[idx].terminal_state = terminal_state;
+    s_recorder_completions[idx].terminal_reason = terminal_reason;
+    s_recorder_completions[idx].snapshot_generation = snapshot_generation;
+    s_recorder_completions[idx].sample_count = sample_count;
+    ++s_recorder_completion_count;
+}
 
 enum RecordingControlType : uint8_t
 {
@@ -186,6 +209,10 @@ static void acknowledge_recording_command(uint32_t generation, bool ok,
     slot.snapshot_valid = snapshot_valid;
     slot.snapshot_generation = snapshot_generation;
     slot.sample_count = sample_count;
+    record_recorder_completion_locked(
+        generation, 0, generation, audio_get_owner_session(AUDIO_OWNER_RECORDER),
+        ok ? AudioRecorderStatus::STOPPED : AudioRecorderStatus::REJECTED,
+        ok ? 0 : 1, snapshot_generation, sample_count);
     portEXIT_CRITICAL(&audio_command_mux);
 }
 
@@ -2185,28 +2212,55 @@ AudioRecorderStatus audio_get_recorder_status(uint32_t request_id)
 
     if (request_id == 0)
     {
-        if (!is_rec && !owns_i2s) return AudioRecorderStatus::STOPPED;
-        return AudioRecorderStatus::BUSY;
+        return evaluate_audio_recorder_status(0, is_rec, owns_i2s, false, AudioRecorderStatus::UNKNOWN, false, false, false, false);
     }
 
     portENTER_CRITICAL(&audio_command_mux);
+    const bool is_active_cmd = (request_id == active_recording_command_generation ||
+                                request_id == recording_command_generation);
+    const bool in_mailbox = (audio_control_mailbox.recording_pending &&
+                             audio_control_mailbox.recording_request_id == request_id);
+
+    // 1. Kiểm tra lịch sử hoàn tất của đúng request_id (không bị ảnh hưởng bởi phiên ghi âm mới)
+    for (size_t i = 0; i < sizeof(s_recorder_completions) / sizeof(s_recorder_completions[0]); ++i)
+    {
+        if (s_recorder_completions[i].request_id == request_id ||
+            (s_recorder_completions[i].control_id != 0 && s_recorder_completions[i].control_id == request_id) ||
+            (s_recorder_completions[i].start_id != 0 && s_recorder_completions[i].start_id == request_id))
+        {
+            const AudioRecorderStatus state = s_recorder_completions[i].terminal_state;
+            portEXIT_CRITICAL(&audio_command_mux);
+            return evaluate_audio_recorder_status(request_id, is_rec, owns_i2s, true, state, false, false, in_mailbox, is_active_cmd);
+        }
+    }
+
+    // 2. Kiểm tra slot ACK nếu request_id chưa bị ghi đè
     const AudioCommandAck &slot = recording_acks[request_id %
         (sizeof(recording_acks) / sizeof(recording_acks[0]))];
     const bool found = (slot.generation == request_id);
     const bool ok = slot.ok;
-    const bool in_mailbox = (audio_control_mailbox.recording_pending &&
-                             audio_control_mailbox.recording_request_id == request_id);
     portEXIT_CRITICAL(&audio_command_mux);
 
-    if (found)
-    {
-        if (!ok) return AudioRecorderStatus::REJECTED;
-        if (!is_rec && !owns_i2s) return AudioRecorderStatus::STOPPED;
-        return AudioRecorderStatus::BUSY;
-    }
+    return evaluate_audio_recorder_status(request_id, is_rec, owns_i2s, false, AudioRecorderStatus::UNKNOWN, found, ok, in_mailbox, is_active_cmd);
+}
 
-    if (in_mailbox || is_rec || owns_i2s) return AudioRecorderStatus::BUSY;
-    return AudioRecorderStatus::UNKNOWN;
+bool audio_get_recorder_completion(uint32_t request_id, AudioRecorderCompletionRecord *out_record)
+{
+    if (request_id == 0 || !out_record) return false;
+    portENTER_CRITICAL(&audio_command_mux);
+    for (size_t i = 0; i < sizeof(s_recorder_completions) / sizeof(s_recorder_completions[0]); ++i)
+    {
+        if (s_recorder_completions[i].request_id == request_id ||
+            (s_recorder_completions[i].control_id != 0 && s_recorder_completions[i].control_id == request_id) ||
+            (s_recorder_completions[i].start_id != 0 && s_recorder_completions[i].start_id == request_id))
+        {
+            *out_record = s_recorder_completions[i];
+            portEXIT_CRITICAL(&audio_command_mux);
+            return true;
+        }
+    }
+    portEXIT_CRITICAL(&audio_command_mux);
+    return false;
 }
 
 static bool start_playback_transaction(uint32_t expected_generation)

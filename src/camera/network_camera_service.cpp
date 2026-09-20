@@ -381,6 +381,7 @@ bool NetworkCameraService::saveProfileToNVS()
     bool saved = true;
     saved = (prefs.putString("name", prof.name) == strlen(prof.name)) && saved;
     saved = (prefs.putString("ip", prof.ip) == strlen(prof.ip)) && saved;
+    saved = (prefs.putString("custom_url", prof.custom_url) == strlen(prof.custom_url)) && saved;
     saved = (prefs.putUShort("http_port", prof.http_port) > 0) && saved;
     saved = (prefs.putUShort("rtsp_port", prof.rtsp_port) > 0) && saved;
     saved = (prefs.putUShort("onvif_port", prof.onvif_port) > 0) && saved;
@@ -403,7 +404,8 @@ bool NetworkCameraService::loadProfileFromNVS()
     if (!prefs.begin("netcam", true)) return false;
 
     String ip = prefs.getString("ip", "");
-    if (ip.length() == 0)
+    String custom_url = prefs.getString("custom_url", "");
+    if (ip.length() == 0 && custom_url.length() == 0)
     {
         prefs.end();
         return false;
@@ -415,6 +417,7 @@ bool NetworkCameraService::loadProfileFromNVS()
     String name = prefs.getString("name", "IP Cam");
     strncpy(prof.name, name.c_str(), sizeof(prof.name) - 1);
     strncpy(prof.ip, ip.c_str(), sizeof(prof.ip) - 1);
+    strncpy(prof.custom_url, custom_url.c_str(), sizeof(prof.custom_url) - 1);
     prof.http_port = prefs.getUShort("http_port", 80);
     prof.rtsp_port = prefs.getUShort("rtsp_port", 554);
     prof.onvif_port = prefs.getUShort("onvif_port", 8000);
@@ -434,6 +437,18 @@ bool NetworkCameraService::loadProfileFromNVS()
     {
         _profile = prof;
         _configured = true;
+        if (_profile.protocol == CAM_PROTO_HTTP_SNAPSHOT)
+        {
+            _snapshot_status = CAM_STATUS_READY;
+        }
+        else if (_profile.protocol == CAM_PROTO_MJPEG)
+        {
+            _mjpeg_status = CAM_STATUS_NOT_IMPLEMENTED;
+        }
+        else if (_profile.protocol == CAM_PROTO_RTSP)
+        {
+            _rtsp_status = CAM_STATUS_NOT_IMPLEMENTED;
+        }
         if (strlen(_profile.username) > 0 && strlen(_profile.password) == 0)
         {
             _runtime_state = CAM_STATE_PASSWORD_REQUIRED;
@@ -445,8 +460,10 @@ bool NetworkCameraService::loadProfileFromNVS()
         xSemaphoreGive(_config_mutex);
     }
 
-    Serial.printf("[NET_CAM] Đã nạp profile camera '%s' tại %s (password không lưu)\n",
-                  prof.name, prof.ip);
+    Serial.printf("[NET_CAM] Đã nạp profile camera '%s' tại %s%s%s (password không lưu)\n",
+                  prof.name, prof.ip[0] ? prof.ip : "",
+                  (prof.ip[0] && prof.custom_url[0]) ? " / " : "",
+                  prof.custom_url[0] ? prof.custom_url : "");
     return true;
 }
 

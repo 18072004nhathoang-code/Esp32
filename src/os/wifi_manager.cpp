@@ -197,7 +197,15 @@ static bool commit_credentials_to_nvs(const char *ssid, const char *pass)
         const WifiCredentialBlob &cur = (active_slot == 0) ? b0 : b1;
         if (wifi_credentials_match(cur, ssid, safe_pass))
         {
-            if (prefs.isKey(WIFI_PREFS_KEY_FORGOTTEN)) prefs.remove(WIFI_PREFS_KEY_FORGOTTEN);
+            if (prefs.isKey(WIFI_PREFS_KEY_FORGOTTEN))
+            {
+                prefs.remove(WIFI_PREFS_KEY_FORGOTTEN);
+                if (prefs.isKey(WIFI_PREFS_KEY_FORGOTTEN))
+                {
+                    prefs.end();
+                    return false;
+                }
+            }
             prefs.end();
             return true;
         }
@@ -302,12 +310,16 @@ static bool save_credentials_direct(uint32_t generation, const char *ssid, const
         ok = commit_credentials_to_nvs(ssid, pass);
     }
     unlock_prefs();
-    if (ok)
+    lock_wifi();
+    if (ok && generation == request_generation && !manual_disconnect)
     {
-        lock_wifi();
         current_save_status = WIFI_SAVED;
-        unlock_wifi();
     }
+    else if (!ok && current)
+    {
+        current_save_status = WIFI_SAVE_FAILED;
+    }
+    unlock_wifi();
     return ok;
 }
 
@@ -318,8 +330,16 @@ static bool clear_credentials_direct(void)
     bool ok = prefs.begin(WIFI_PREFS_NAMESPACE, false);
     if (ok)
     {
-        // 1. Đặt marker forgotten bền vững trước khi xóa các key
-        prefs.putBool(WIFI_PREFS_KEY_FORGOTTEN, true);
+        // 1. Đặt marker forgotten bền vững và xác minh trước khi xóa bất kỳ key nào
+        const size_t wb = prefs.putBool(WIFI_PREFS_KEY_FORGOTTEN, true);
+        const bool written_ok = (wb > 0) && prefs.getBool(WIFI_PREFS_KEY_FORGOTTEN, false);
+        if (!written_ok)
+        {
+            // Dừng ngay lập tức để bảo vệ credentials tốt hiện có nếu ghi flash thất bại!
+            prefs.end();
+            unlock_prefs();
+            return false;
+        }
 
         // 2. Xóa hai slot blob
         if (prefs.isKey(WIFI_PREFS_KEY_SLOT0)) prefs.remove(WIFI_PREFS_KEY_SLOT0);
@@ -697,7 +717,10 @@ static void wifi_service_task(void *pvParameters)
                         if (clear_and_verify_wifi_forgotten())
                         {
                             lock_wifi();
-                            current_save_status = WIFI_SAVED;
+                            if (active_generation_snapshot == request_generation && !manual_disconnect)
+                            {
+                                current_save_status = WIFI_SAVED;
+                            }
                             unlock_wifi();
                         }
                     }

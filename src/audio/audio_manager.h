@@ -8,6 +8,7 @@
 
 #include <Arduino.h>
 #include "board_config.h"
+#include "firmware_contracts.h"
 
 // Định nghĩa chân phần cứng Audio (lấy từ board profile thông qua board_config.h)
 #ifndef AUDIO_I2S_BCLK
@@ -195,17 +196,21 @@ bool audio_wait_recording_command_ack(uint32_t request_id, uint32_t timeout_ms,
                                       bool *operation_ok = nullptr,
                                       uint32_t *snapshot_generation = nullptr,
                                       size_t *sample_count = nullptr);
-/** Stop a recording and discard it without scheduling a WAV export. */
-enum class AudioRecorderStatus : uint8_t
+struct AudioRecorderCompletionRecord
 {
-    UNKNOWN = 0,
-    BUSY,
-    REJECTED,
-    STOPPED
+    uint32_t request_id;
+    uint32_t start_id;
+    uint32_t control_id;
+    uint32_t session_id;
+    AudioRecorderStatus terminal_state;
+    uint8_t terminal_reason;
+    uint32_t snapshot_generation;
+    size_t sample_count;
 };
 
 /** Query verified recorder status distinguishing UNKNOWN, BUSY, REJECTED, and STOPPED. */
 AudioRecorderStatus audio_get_recorder_status(uint32_t request_id = 0);
+bool audio_get_recorder_completion(uint32_t request_id, AudioRecorderCompletionRecord *out_record);
 
 void audio_cancel_recording(void);
 bool audio_is_recording(void);

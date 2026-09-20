@@ -67,6 +67,7 @@ bool power_manager_is_rendering_paused(void);
  * @brief Lấy số giây người dùng không chạm vào màn hình
  */
 uint32_t power_manager_get_inactivity_seconds(void);
+uint32_t power_manager_get_activity_revision(void);
 
 /**
  * @brief Thiết lập ngưỡng thời gian Dimming và Sleep tùy biến (giây)

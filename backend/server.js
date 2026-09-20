@@ -154,21 +154,76 @@ export function createServer(config, dependencies = {}) {
   const stt = dependencies.stt || transcribeGemini;
   const llm = dependencies.llm || queryDeepSeek;
   const tts = dependencies.tts || ttsGemini;
+  const MAX_CACHE_ENTRIES = 20;
+  const MAX_CACHE_BYTES = 4 * 1024 * 1024;
+  const MAX_PREWARM_CONCURRENT = 2;
   const ttsCache = new Map();
+  let totalCacheBytes = 0;
+  let activePrewarmCount = 0;
   let activeRequests = 0;
+
+  function evict(key) {
+    const entry = ttsCache.get(key);
+    if (!entry) return;
+    ttsCache.delete(key);
+    if (entry.bytes) {
+      totalCacheBytes = Math.max(0, totalCacheBytes - entry.bytes);
+    }
+    if (entry.controller && !entry.controller.signal.aborted) {
+      try {
+        entry.controller.abort(new Error("evicted from cache"));
+      } catch {}
+    }
+  }
+
+  function trimCache() {
+    while (ttsCache.size > MAX_CACHE_ENTRIES || totalCacheBytes > MAX_CACHE_BYTES) {
+      const oldest = ttsCache.keys().next().value;
+      if (oldest === undefined) break;
+      evict(oldest);
+    }
+  }
 
   function prewarmTts(text) {
     if (!config.ttsPrewarm || !text || ttsCache.has(text)) return;
-    const signal = AbortSignal.timeout(config.timeoutMs);
-    const promise = Promise.resolve(tts(text, config, { signal })).then((wav) => {
-      parsePcm16Mono16kWav(wav);
-      return wav;
-    }).catch(() => {
-      ttsCache.delete(text);
-      return null;
-    });
-    ttsCache.set(text, promise);
-    if (ttsCache.size > 20) ttsCache.delete(ttsCache.keys().next().value);
+    if (activePrewarmCount >= MAX_PREWARM_CONCURRENT) return;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      try {
+        controller.abort(new ServiceError("AI_TIMEOUT", "Prewarm TTS timeout.", 504));
+      } catch {}
+    }, config.timeoutMs);
+
+    activePrewarmCount++;
+    const entry = {
+      controller,
+      bytes: 0,
+      promise: null,
+    };
+
+    entry.promise = Promise.resolve()
+      .then(() => tts(text, config, { signal: controller.signal }))
+      .then((wav) => {
+        parsePcm16Mono16kWav(wav);
+        entry.bytes = wav.length;
+        totalCacheBytes += wav.length;
+        trimCache();
+        return wav;
+      })
+      .catch(() => {
+        if (ttsCache.get(text) === entry) {
+          evict(text);
+        }
+        return null;
+      })
+      .finally(() => {
+        clearTimeout(timer);
+        activePrewarmCount = Math.max(0, activePrewarmCount - 1);
+      });
+
+    ttsCache.set(text, entry);
+    trimCache();
   }
 
   return http.createServer(async (req, res) => {
@@ -224,8 +279,16 @@ export function createServer(config, dependencies = {}) {
       const text = boundedText(input.text, config.maxTextBytes);
       let wav;
       if (ttsCache.has(text)) {
-        wav = await ttsCache.get(text);
+        const entry = ttsCache.get(text);
         ttsCache.delete(text);
+        if (entry.bytes) {
+          totalCacheBytes = Math.max(0, totalCacheBytes - entry.bytes);
+        }
+        try {
+          wav = await entry.promise;
+        } catch {
+          wav = null;
+        }
       }
       if (!wav) wav = await tts(text, config, context);
       try { parsePcm16Mono16kWav(wav); } catch {

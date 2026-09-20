@@ -364,9 +364,12 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     if (event_id != WEBSOCKET_EVENT_DATA || !event || !event->data_ptr ||
         event->data_len <= 0 || event->payload_len <= 0 || event->payload_offset < 0) return;
 
-    // 1. Separate control frames (CLOSE 0x08, PING 0x09, PONG 0x0a)
-    const uint8_t op = event->op_code;
-    if (op == 0x08 || op == 0x09 || op == 0x0a)
+    // 1. Separate control frames (CLOSE 0x08, PING 0x09, PONG 0x0A)
+    const uint8_t raw_op = event->op_code;
+    const bool is_fin = (raw_op & 0x80) != 0;
+    const uint8_t pure_op = (raw_op & 0x0F);
+
+    if (pure_op == 0x08 || pure_op == 0x09 || pure_op == 0x0A)
     {
         // Control frames may carry payload (e.g. heartbeat ping/pong).
         // Must NOT reset fragment assembler, must NOT drop downlink, must NOT cancel session.
@@ -374,7 +377,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     }
 
     // 2. Validate data frame opcodes (TEXT 0x01, BINARY 0x02, CONTINUATION 0x00)
-    if (op != 0x00 && op != 0x01 && op != 0x02)
+    if (pure_op != 0x00 && pure_op != 0x01 && pure_op != 0x02)
     {
         if (rx_mutex_ && xSemaphoreTake(rx_mutex_, pdMS_TO_TICKS(50)) == pdTRUE)
         {
@@ -412,13 +415,15 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         return;
     }
 
+    const bool is_frame_end = (offset + length >= total);
+    const bool is_message_end = is_frame_end && is_fin;
     const uint8_t *payload = reinterpret_cast<const uint8_t *>(event->data_ptr);
 
     // Differentiate:
     // A. Unfragmented single-frame message:
-    if (op != 0x00 && offset == 0 && length == total && !fragment_assembler_->isActive())
+    if (pure_op != 0x00 && offset == 0 && is_message_end && !fragment_assembler_->isActive())
     {
-        const XiaozhiInboundKind inbound_kind = (op == 0x02)
+        const XiaozhiInboundKind inbound_kind = (pure_op == 0x02)
             ? XiaozhiInboundKind::BINARY : XiaozhiInboundKind::TEXT;
         (void)enqueueInbound(inbound_kind, payload, length);
         xSemaphoreGive(rx_mutex_);
@@ -426,20 +431,32 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     }
 
     // B. Start of a new message (initial frame):
-    if (op != 0x00 && offset == 0)
+    if (pure_op != 0x00 && offset == 0)
     {
-        const xiaozhi::FragmentAssembler::Kind kind = (op == 0x02)
+        const xiaozhi::FragmentAssembler::Kind kind = (pure_op == 0x02)
             ? xiaozhi::FragmentAssembler::Kind::BINARY : xiaozhi::FragmentAssembler::Kind::TEXT;
         if (!fragment_assembler_->begin(kind, payload, length))
         {
             fragment_assembler_->reset();
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         }
+        else if (is_message_end)
+        {
+            xiaozhi::FragmentAssembler::Kind finished_kind = xiaozhi::FragmentAssembler::Kind::NONE;
+            const uint8_t *message = nullptr;
+            size_t size = 0;
+            if (fragment_assembler_->finish(nullptr, 0, &finished_kind, &message, &size))
+            {
+                (void)enqueueInbound(finished_kind == xiaozhi::FragmentAssembler::Kind::TEXT
+                    ? XiaozhiInboundKind::TEXT : XiaozhiInboundKind::BINARY, message, size);
+            }
+            fragment_assembler_->reset();
+        }
         xSemaphoreGive(rx_mutex_);
         return;
     }
 
-    // C. Continuation: either SDK buffer chunk (offset > 0) OR WS continuation frame (op == 0x00)
+    // C. Continuation: either SDK buffer chunk (offset > 0) OR WS continuation frame (pure_op == 0x00)
     if (!fragment_assembler_->isActive())
     {
         // Continuation received without active initial frame
@@ -449,10 +466,9 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         return;
     }
 
-    const bool is_frame_end = (offset + length >= total);
-    if (!is_frame_end)
+    if (!is_message_end)
     {
-        // Intermediate SDK buffer chunk within frame
+        // Intermediate SDK buffer chunk within frame or non-final continuation frame
         if (!fragment_assembler_->append(payload, length))
         {
             fragment_assembler_->reset();
@@ -461,7 +477,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     }
     else
     {
-        // Reached end of frame (end of chunked frame or continuation frame)
+        // Reached end of message
         xiaozhi::FragmentAssembler::Kind kind = xiaozhi::FragmentAssembler::Kind::NONE;
         const uint8_t *message = nullptr;
         size_t size = 0;

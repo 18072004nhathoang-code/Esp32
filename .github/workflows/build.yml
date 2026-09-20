@@ -76,6 +76,8 @@ jobs:
           /tmp/xiaozhi_protocol_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_session_logic_test.cpp -o /tmp/xiaozhi_session_logic_test
           /tmp/xiaozhi_session_logic_test
+          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/system_defects_regression_test.cpp -o /tmp/system_defects_regression_test
+          /tmp/system_defects_regression_test
 
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p

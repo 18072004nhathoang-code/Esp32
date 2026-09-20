@@ -205,20 +205,29 @@ public:
 
     bool append(const uint8_t *data, size_t size)
     {
-        if (kind_ == Kind::NONE || failed_ || !data || size > capacity_ - size_)
+        if (kind_ == Kind::NONE || failed_ || size > capacity_ - size_)
         {
             failed_ = true;
             return false;
         }
-        memcpy(storage_ + size_, data, size);
-        size_ += size;
+        if (size > 0)
+        {
+            if (!data)
+            {
+                failed_ = true;
+                return false;
+            }
+            memcpy(storage_ + size_, data, size);
+            size_ += size;
+        }
         return true;
     }
 
     bool finish(const uint8_t *data, size_t size, Kind *kind,
                 const uint8_t **message, size_t *message_size)
     {
-        if (!append(data, size) || !kind || !message || !message_size) return false;
+        if (size > 0 && !append(data, size)) return false;
+        if (!kind || !message || !message_size || failed_ || kind_ == Kind::NONE) return false;
         *kind = kind_;
         *message = storage_;
         *message_size = size_;

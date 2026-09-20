@@ -1,5 +1,6 @@
 #include "xiaozhi_protocol_logic.h"
 #include "xiaozhi_session_logic.h"
+#include "firmware_contracts.h"
 
 #include <cassert>
 #include <cstdio>
@@ -28,7 +29,6 @@ void test_websocket_framing_and_assembler()
 
     // Simulate an interleaved PONG with payload (RFC 6455 5.4 control frame)
     // Control frames must NOT reset the active assembler!
-    const uint8_t pong_payload[] = "heartbeat_timestamp_12345";
     // In onEvent, op == 0x0A returns early, assembler remains untouched:
     assert(assembler.isActive());
 
@@ -93,7 +93,6 @@ void test_capture_samples_calculation()
     // If snapshot samples > 0, total_samples = snap_samples
     size_t snap_samples = 48000;
     size_t s_capture_offset = 48000;
-    size_t s_capture_frame_fill = 960;
     size_t total = snap_samples > 0 ? snap_samples : s_capture_offset;
     assert(total == 48000);
 
@@ -105,29 +104,28 @@ void test_capture_samples_calculation()
     printf("[PASS] test_capture_samples_calculation\n");
 }
 
-// Test 4: AudioRecorderStatus and Bounded Recovery
-enum class MockRecorderStatus : uint8_t { UNKNOWN = 0, BUSY, REJECTED, STOPPED };
-
+// Test 4: AudioRecorderStatus and Bounded Recovery using production contract
 void test_recorder_status_logic()
 {
-    auto evaluate_status = [](bool is_recording, bool owns_i2s, bool found, bool ack_ok, bool in_mailbox) -> MockRecorderStatus {
-        if (!is_recording && !owns_i2s && (!found || ack_ok) && !in_mailbox)
-            return MockRecorderStatus::STOPPED;
-        if (found && !ack_ok)
-            return MockRecorderStatus::REJECTED;
-        if (in_mailbox || is_recording || owns_i2s)
-            return MockRecorderStatus::BUSY;
-        return MockRecorderStatus::UNKNOWN;
-    };
+    // Idle system (request 0): stopped
+    assert(evaluate_audio_recorder_status(0, false, false, false, AudioRecorderStatus::UNKNOWN, false, false, false, false) == AudioRecorderStatus::STOPPED);
+    // Active recording (request 0): busy
+    assert(evaluate_audio_recorder_status(0, true, true, false, AudioRecorderStatus::UNKNOWN, false, false, false, false) == AudioRecorderStatus::BUSY);
+    // Recording task stopped, but still owns I2S (request 0): BUSY (must not be treated as STOPPED!)
+    assert(evaluate_audio_recorder_status(0, false, true, false, AudioRecorderStatus::UNKNOWN, false, false, false, false) == AudioRecorderStatus::BUSY);
 
-    // Idle system: stopped
-    assert(evaluate_status(false, false, true, true, false) == MockRecorderStatus::STOPPED);
-    // Active recording: busy
-    assert(evaluate_status(true, true, true, true, false) == MockRecorderStatus::BUSY);
-    // Recording task stopped, but still owns I2S: BUSY (must not be treated as STOPPED!)
-    assert(evaluate_status(false, true, true, true, false) == MockRecorderStatus::BUSY);
-    // Rejected start: REJECTED
-    assert(evaluate_status(false, false, true, false, false) == MockRecorderStatus::REJECTED);
+    // Specific request with completion record in ring buffer:
+    assert(evaluate_audio_recorder_status(42, false, false, true, AudioRecorderStatus::STOPPED, false, false, false, false) == AudioRecorderStatus::STOPPED);
+    assert(evaluate_audio_recorder_status(42, true, true, true, AudioRecorderStatus::STOPPED, false, false, false, false) == AudioRecorderStatus::STOPPED); // Even if new recording started, request 42 is STOPPED!
+    assert(evaluate_audio_recorder_status(43, false, false, true, AudioRecorderStatus::REJECTED, false, false, false, false) == AudioRecorderStatus::REJECTED);
+
+    // Specific request with ACK in slot:
+    assert(evaluate_audio_recorder_status(44, false, false, false, AudioRecorderStatus::UNKNOWN, true, true, false, false) == AudioRecorderStatus::STOPPED);
+    assert(evaluate_audio_recorder_status(45, false, false, false, AudioRecorderStatus::UNKNOWN, true, false, false, false) == AudioRecorderStatus::REJECTED);
+
+    // In mailbox or active:
+    assert(evaluate_audio_recorder_status(46, false, false, false, AudioRecorderStatus::UNKNOWN, false, false, true, false) == AudioRecorderStatus::BUSY);
+    assert(evaluate_audio_recorder_status(46, true, true, false, AudioRecorderStatus::UNKNOWN, false, false, false, true) == AudioRecorderStatus::BUSY);
 
     printf("[PASS] test_recorder_status_logic\n");
 }
@@ -217,6 +215,43 @@ void test_touch_coordinate_and_io_ok()
     printf("[PASS] test_touch_coordinate_and_io_ok\n");
 }
 
+// Test 8: Maps Static tile cache precision contract
+void test_maps_cache_precision()
+{
+    char buf[128] = {};
+    const double lat = 16.054407;
+    const double lon = 108.202167;
+    const int zoom = 14;
+
+    format_map_tile_cache_path(buf, sizeof(buf), lat, lon, zoom, "roadmap");
+    assert(strcmp(buf, "/maps/16.05441_108.20217_z14_roadmap.jpg") == 0);
+
+    format_map_tile_cache_path(buf, sizeof(buf), 10.776889, 106.700806, 15, "satellite");
+    assert(strcmp(buf, "/maps/10.77689_106.70081_z15_satellite.jpg") == 0);
+
+    printf("[PASS] test_maps_cache_precision\n");
+}
+
+// Test 9: Power Manager safe elapsed underflow protection and activity revision
+void test_power_manager_underflow_and_revision()
+{
+    // Normal elapsed
+    assert(power_manager_safe_elapsed(10000, 5000) == 5000);
+
+    // Clock anomaly or update during snapshot (now < last_activity): must be 0, NOT underflow!
+    assert(power_manager_safe_elapsed(5000, 10000) == 0);
+
+    // Activity revision revalidation:
+    // If user touched screen between snapshot and state apply (current_rev != snapshot_rev):
+    const uint32_t snapshot_rev = 3;
+    const uint8_t snapshot_state = 0; // ACTIVE
+    assert(power_manager_can_apply_transition(3, snapshot_rev, 0, snapshot_state) == true);
+    // User touch occurred -> revision incremented to 4:
+    assert(power_manager_can_apply_transition(4, snapshot_rev, 0, snapshot_state) == false);
+
+    printf("[PASS] test_power_manager_underflow_and_revision\n");
+}
+
 int main()
 {
     printf("=== Running System Defects Regression Tests ===\n");
@@ -227,6 +262,9 @@ int main()
     test_auto_stop_and_duplicate_stop();
     test_wifi_generation_revalidation();
     test_touch_coordinate_and_io_ok();
+    test_maps_cache_precision();
+    test_power_manager_underflow_and_revision();
     printf("=== ALL REGRESSION TESTS PASSED! ===\n");
     return 0;
 }
+

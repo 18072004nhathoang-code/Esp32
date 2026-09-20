@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 inline bool ui_screen_to_local(int32_t screen_x, int32_t screen_y,
@@ -201,4 +202,64 @@ constexpr bool complete_jpeg_signature(const uint8_t *data, size_t size)
 constexpr bool cache_temp_can_replace(bool exact_write, bool exact_size, bool backup_ready)
 {
     return exact_write && exact_size && backup_ready;
+}
+
+enum class AudioRecorderStatus : uint8_t
+{
+    UNKNOWN = 0,
+    BUSY,
+    REJECTED,
+    STOPPED
+};
+
+inline AudioRecorderStatus evaluate_audio_recorder_status(
+    uint32_t request_id,
+    bool is_rec,
+    bool owns_i2s,
+    bool found_completion,
+    AudioRecorderStatus completion_state,
+    bool found_ack,
+    bool ack_ok,
+    bool in_mailbox,
+    bool is_active_cmd)
+{
+    if (request_id == 0)
+    {
+        if (!is_rec && !owns_i2s) return AudioRecorderStatus::STOPPED;
+        return AudioRecorderStatus::BUSY;
+    }
+    if (found_completion)
+    {
+        return completion_state;
+    }
+    if (found_ack)
+    {
+        return ack_ok ? AudioRecorderStatus::STOPPED : AudioRecorderStatus::REJECTED;
+    }
+    if (in_mailbox || (is_active_cmd && (is_rec || owns_i2s)))
+    {
+        return AudioRecorderStatus::BUSY;
+    }
+    return AudioRecorderStatus::UNKNOWN;
+}
+
+inline int format_map_tile_cache_path(char *buf, size_t buf_size, double lat, double lon, int zoom, const char *type_str)
+{
+    if (!buf || buf_size == 0) return -1;
+    return snprintf(buf, buf_size, "/maps/%.5f_%.5f_z%d_%s.jpg", lat, lon, zoom,
+                    (type_str && type_str[0]) ? type_str : "roadmap");
+}
+
+constexpr uint32_t power_manager_safe_elapsed(uint32_t now, uint32_t last_activity)
+{
+    return (now >= last_activity) ? (now - last_activity) : 0U;
+}
+
+constexpr bool power_manager_can_apply_transition(
+    uint32_t current_revision,
+    uint32_t snapshot_revision,
+    uint8_t current_state,
+    uint8_t snapshot_state)
+{
+    return (current_revision == snapshot_revision) && (current_state == snapshot_state);
 }
