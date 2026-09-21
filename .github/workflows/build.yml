@@ -51,7 +51,7 @@ jobs:
       - name: Run behavioral regression tests
         run: node simulator/regression_test.js
 
-      - name: Run AI backend tests
+      - name: Run backend tests
         run: |
           npm ci --prefix backend
           npm test --prefix backend
