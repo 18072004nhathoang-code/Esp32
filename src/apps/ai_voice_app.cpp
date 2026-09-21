@@ -123,6 +123,21 @@ static void ptt_btn_event_cb(lv_event_t *e)
         lv_point_t pt = {0, 0};
         if (indev) lv_indev_get_point(indev, &pt);
 
+        const AIVoiceState current_state = ai_voice_get_state();
+        if (current_state == AI_STATE_SPEAKING || current_state == AI_STATE_PROCESSING)
+        {
+            log_i("Xiaozhi: [BARGE_IN] user interrupted state=%d x=%d y=%d",
+                  static_cast<int>(current_state), pt.x, pt.y);
+            ai_voice_cancel(AiVoiceStopReason::CANCEL);
+            is_button_held = false;
+            if (lbl_status_text)
+            {
+                lv_label_set_text(lbl_status_text, "Đã ngắt lời AI. Nhấn lại để nói.");
+                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
+            }
+            return;
+        }
+
         if (ai_voice_start_recording())
         {
             is_button_held = true;

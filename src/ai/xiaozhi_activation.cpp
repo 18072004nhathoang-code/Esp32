@@ -15,6 +15,7 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
+#include "xiaozhi_root_ca.h"
 
 #ifndef XIAOZHI_OTA_ENDPOINT
 #define XIAOZHI_OTA_ENDPOINT "https://api.tenclass.net/xiaozhi/ota/"
@@ -25,6 +26,13 @@
 
 namespace
 {
+static const char *get_ota_ca_cert()
+{
+    if (XIAOZHI_OTA_CA_CERT && XIAOZHI_OTA_CA_CERT[0] != '\0')
+        return XIAOZHI_OTA_CA_CERT;
+    return XIAOZHI_DEFAULT_ROOT_CA_CERT;
+}
+
 static const char *kNamespace = "xiaozhi";
 static const size_t kProvisionBodyLimit = 16U * 1024U;
 
@@ -154,7 +162,8 @@ bool xiaozhi_provision_once(XiaozhiProvisionResult *result,
     if (!result) return false;
     memset(result, 0, sizeof(*result));
     result->poll_after_ms = 10000;
-    if (strncmp(XIAOZHI_OTA_ENDPOINT, "https://", 8) != 0 || XIAOZHI_OTA_CA_CERT[0] == '\0')
+    const char *ca_cert = get_ota_ca_cert();
+    if (strncmp(XIAOZHI_OTA_ENDPOINT, "https://", 8) != 0 || !ca_cert || ca_cert[0] == '\0')
     {
         if (error && error_size) strlcpy(error, "Cần cấu hình Xiaozhi OTA CA hợp lệ", error_size);
         return false;
@@ -245,7 +254,7 @@ bool xiaozhi_provision_once(XiaozhiProvisionResult *result,
     serializeJson(info, request_body);
 
     WiFiClientSecure tls;
-    tls.setCACert(XIAOZHI_OTA_CA_CERT);
+    tls.setCACert(ca_cert);
     HTTPClient http;
     if (!http.begin(tls, XIAOZHI_OTA_ENDPOINT))
     {

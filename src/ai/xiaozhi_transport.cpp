@@ -69,7 +69,7 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
         return false;
     }
     if (!uplink_queue_) uplink_queue_ = xQueueCreate(8, sizeof(AudioPacket));
-    if (!inbound_queue_) inbound_queue_ = xQueueCreate(8, sizeof(InboundMessage *));
+    if (!inbound_queue_) inbound_queue_ = xQueueCreate(32, sizeof(InboundMessage *));
     if (!fragment_storage_)
         fragment_storage_ = static_cast<uint8_t *>(heap_caps_malloc(
             xiaozhi::kMaxJsonMessageBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
@@ -111,8 +111,8 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
     ws_config.ping_interval_sec = 15;
     ws_config.pingpong_timeout_sec = 5;
     ws_config.task_prio = 3;
-    ws_config.task_stack = 6144;
-    ws_config.buffer_size = 2048;
+    ws_config.task_stack = 8192;
+    ws_config.buffer_size = 4096;
     ws_config.user_context = this;
     websocket_ = esp_websocket_client_init(&ws_config);
     if (!websocket_ || esp_websocket_register_events(
@@ -131,14 +131,14 @@ void XiaozhiTransport::loop()
 {
     if (!connected() || !uplink_queue_ || !websocket_) return;
     AudioPacket packet = {};
-    if (xQueuePeek(uplink_queue_, &packet, 0) == pdTRUE)
+    while (xQueuePeek(uplink_queue_, &packet, 0) == pdTRUE)
     {
         const uint32_t active_gen = generation();
         if (packet.generation != active_gen || active_gen == 0)
         {
             xQueueReceive(uplink_queue_, &packet, 0);
             in_flight_started_ms_ = 0;
-            return;
+            continue;
         }
         const uint32_t now = millis();
         if (in_flight_started_ms_ == 0)
@@ -164,6 +164,7 @@ void XiaozhiTransport::loop()
             in_flight_started_ms_ = 0;
             dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
             close();
+            break;
         }
         else
         {
@@ -173,11 +174,8 @@ void XiaozhiTransport::loop()
                 in_flight_started_ms_ = 0;
                 dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
             }
+            break;
         }
-    }
-    else
-    {
-        in_flight_started_ms_ = 0;
     }
 }
 

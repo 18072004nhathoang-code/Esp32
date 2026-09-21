@@ -13,6 +13,7 @@
 #include "xiaozhi_mcp.h"
 #include "xiaozhi_transport.h"
 #include "xiaozhi_session_logic.h"
+#include "xiaozhi_root_ca.h"
 #include "../audio/audio_manager.h"
 #include "../audio/music_player.h"
 #include "../camera/camera_service.h"
@@ -37,6 +38,12 @@
 
 namespace
 {
+static const char *get_wss_ca_cert()
+{
+    if (XIAOZHI_WSS_CA_CERT && XIAOZHI_WSS_CA_CERT[0] != '\0')
+        return XIAOZHI_WSS_CA_CERT;
+    return XIAOZHI_DEFAULT_ROOT_CA_CERT;
+}
 enum class CommandType : uint8_t { START, STOP, CANCEL, RETRY_ACTIVATION, CANCEL_ACTIVATION };
 struct Command { CommandType type; uint32_t generation; AiVoiceStopReason stop_reason; };
 
@@ -338,7 +345,7 @@ void set_error(const char *message)
 
 bool current_generation(uint32_t generation)
 {
-    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const bool current = xiaozhi::session_event_is_current(
         generation, s_active_generation, s_cancelled_through);
     xSemaphoreGive(s_mutex);
@@ -348,7 +355,7 @@ bool current_generation(uint32_t generation)
 bool cancellation_requested(uint32_t generation)
 {
     if (!generation || !s_mutex ||
-        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const bool cancelled = xiaozhi::cancellation_applies(generation, s_cancelled_through);
     xSemaphoreGive(s_mutex);
     return cancelled;
@@ -357,7 +364,7 @@ bool cancellation_requested(uint32_t generation)
 bool active_generation_matches(uint32_t generation)
 {
     if (!generation || !s_mutex ||
-        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return false;
+        xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const bool matches = xiaozhi::cleanup_may_mutate(generation, s_active_generation);
     xSemaphoreGive(s_mutex);
     return matches;
@@ -365,7 +372,7 @@ bool active_generation_matches(uint32_t generation)
 
 uint32_t active_generation_snapshot()
 {
-    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) return 0;
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
     const uint32_t generation = s_active_generation;
     xSemaphoreGive(s_mutex);
     return generation;
@@ -953,12 +960,37 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
 
 bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
 {
-    if (!current_generation(generation) || ai_voice_get_state() != AI_STATE_SPEAKING) return false;
+    if (!current_generation(generation)) return false;
+    const AIVoiceState current_state = ai_voice_get_state();
+    if (current_state != AI_STATE_SPEAKING)
+    {
+        if (current_state == AI_STATE_PROCESSING)
+        {
+            if (s_timing.t_first_tts_ms == 0) s_timing.t_first_tts_ms = millis();
+            s_phase_tracker.on_tts_start(s_timing.t_first_tts_ms);
+            log_i("Xiaozhi: [TTS_START_IMPLICIT] audio frame received during PROCESSING gen=%u",
+                  static_cast<unsigned>(generation));
+            if (!begin_output())
+            {
+                set_error("Không lấy được I2S để phát Xiaozhi");
+                return false;
+            }
+            set_state(AI_STATE_SPEAKING);
+        }
+        else
+        {
+            return false;
+        }
+    }
     const uint8_t *opus = nullptr;
     size_t opus_size = 0;
     uint32_t timestamp = 0;
     if (!xiaozhi::unwrap_opus_packet(s_ws_config.version, data, size,
-                                      &opus, &opus_size, &timestamp)) return false;
+                                      &opus, &opus_size, &timestamp))
+    {
+        if (!xiaozhi::unwrap_opus_packet(1, data, size, &opus, &opus_size, &timestamp))
+            return false;
+    }
     (void)timestamp;
     const int decoded = s_codec.decode(opus, opus_size, s_decoded, kDecodedCapacity);
     if (decoded <= 0) return false;
@@ -984,7 +1016,8 @@ bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
 
 void process_inbound()
 {
-    static const size_t kMaxMessagesPerPass = 4;
+    static const size_t kMaxMessagesPerPass = 16;
+    static uint8_t s_consecutive_audio_errors = 0;
     size_t processed = 0;
     XiaozhiInboundKind kind = XiaozhiInboundKind::TEXT;
     size_t size = 0;
@@ -998,9 +1031,22 @@ void process_inbound()
         const bool ok = kind == XiaozhiInboundKind::TEXT
             ? handle_text_message(s_inbound, size, generation)
             : handle_audio_message(s_inbound, size, generation);
-        if (!ok && kind == XiaozhiInboundKind::BINARY &&
-            ai_voice_get_state() == AI_STATE_SPEAKING)
-            set_error("Gói Opus Xiaozhi lỗi hoặc phát I2S thất bại");
+        if (kind == XiaozhiInboundKind::BINARY)
+        {
+            if (!ok)
+            {
+                ++s_consecutive_audio_errors;
+                log_w("Xiaozhi: Audio packet decode/output failed (%u/5)", s_consecutive_audio_errors);
+                if (s_consecutive_audio_errors >= 5 && ai_voice_get_state() == AI_STATE_SPEAKING)
+                {
+                    set_error("Gói Opus Xiaozhi lỗi hoặc phát I2S thất bại");
+                }
+            }
+            else
+            {
+                s_consecutive_audio_errors = 0;
+            }
+        }
         if (current_generation(generation) && ai_voice_get_state() == AI_STATE_ERROR)
             begin_cleanup(generation, true, false);
     }
@@ -1082,7 +1128,7 @@ bool connect_session(uint32_t generation)
     for (uint8_t attempt = 0; attempt < 3 && current_generation(generation) && !xiaozhi::deadline_reached(millis(), connect_budget_deadline); ++attempt)
     {
         char error[128] = {};
-        if (!s_transport.begin(s_ws_config, XIAOZHI_WSS_CA_CERT,
+        if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
                                s_device_id, s_client_id, generation,
                                error, sizeof(error)))
         {
@@ -1717,7 +1763,7 @@ void worker(void *)
         generation = active_generation_snapshot();
 
         if (s_warm_connected && generation == 0 &&
-            static_cast<int32_t>(millis() - s_idle_since_ms) >= 30000)
+            (!s_transport.connected() || static_cast<int32_t>(millis() - s_idle_since_ms) >= 30000))
         {
             log_i("Xiaozhi warm connection idle timeout (30s): đóng socket WSS");
             s_transport.close();
@@ -1754,13 +1800,19 @@ void worker(void *)
             }
             process_inbound();
             if (s_transport.droppedUplink() != s_seen_uplink_drops ||
-                s_transport.droppedDownlink() != s_seen_downlink_drops)
+                s_transport.droppedDownlink() > s_seen_downlink_drops + 5)
             {
                 log_session_fault("WebSocket Xiaozhi quá tải hoặc mất gói", generation);
                 set_error("WebSocket Xiaozhi quá tải hoặc mất gói");
                 begin_cleanup(generation, true, false);
                 ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
                 continue;
+            }
+            if (s_transport.droppedDownlink() > s_seen_downlink_drops)
+            {
+                log_w("Xiaozhi: Nhận thấy %u gói downlink bị rớt (chấp nhận < 5)",
+                      static_cast<unsigned>(s_transport.droppedDownlink() - s_seen_downlink_drops));
+                s_seen_downlink_drops = s_transport.droppedDownlink();
             }
             if (!current_generation(generation))
             {
