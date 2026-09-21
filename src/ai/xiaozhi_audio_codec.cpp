@@ -38,11 +38,15 @@ bool XiaozhiAudioCodec::setDownlinkSampleRate(uint32_t sample_rate,
         if (error && error_size) strlcpy(error, "Tần số Opus downlink không hỗ trợ", error_size);
         return false;
     }
-    if (decoder_ && downlink_rate_ == sample_rate) return true;
+    // Cấu hình OpusDecoder luôn giải mã ra 16000 Hz để khớp trực tiếp với phần cứng I2S DAC ES8311.
+    // Thư viện libopus (RFC 6716) tích hợp sẵn bộ lọc sinc đa pha chất lượng cao (>64dB stopband),
+    // tự động chuyển đổi từ bất kỳ tần số đầu vào nào (8k/12k/16k/24k/48k) sang 16kHz sạch sẽ,
+    // loại bỏ hoàn toàn hiện tượng méo hài (aliasing) và tiếng nổ vi mô giữa các frame (phase discontinuity).
+    if (decoder_ && downlink_rate_ == 16000) return true;
     if (decoder_) opus_decoder_destroy(decoder_);
     decoder_ = nullptr;
     int code = OPUS_OK;
-    decoder_ = opus_decoder_create(static_cast<opus_int32>(sample_rate), 1, &code);
+    decoder_ = opus_decoder_create(16000, 1, &code);
     if (!decoder_ || code != OPUS_OK)
     {
         if (error && error_size) snprintf(error, error_size, "Opus decoder lỗi %d", code);
@@ -50,7 +54,7 @@ bool XiaozhiAudioCodec::setDownlinkSampleRate(uint32_t sample_rate,
         downlink_rate_ = 0;
         return false;
     }
-    downlink_rate_ = sample_rate;
+    downlink_rate_ = 16000;
     return true;
 }
 

@@ -145,19 +145,38 @@ static void ptt_btn_event_cb(lv_event_t *e)
                   static_cast<unsigned>(ai_voice_get_active_generation()),
                   pt.x, pt.y);
 
-            // Phản hồi ban đầu: Vàng hổ phách (Amber) thể hiện "Đang kết nối..."
-            lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
-            lv_obj_set_style_shadow_width(btn_push_to_talk, 12, 0);
-            lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
-            lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_60, 0);
-            if (lbl_ptt_icon)
+            // Phản hồi ban đầu: Nếu đã kết nối ấm thì Cyan tức thì, nếu đang kết nối thì Amber
+            if (ai_voice_is_connected())
             {
-                lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x1F2937), 0);
+                lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
+                lv_obj_set_style_shadow_width(btn_push_to_talk, 16, 0);
+                lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0x00F2FE), 0);
+                lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_80, 0);
+                if (lbl_ptt_icon)
+                {
+                    lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x0A0D14), 0);
+                }
+                if (lbl_status_text)
+                {
+                    lv_label_set_text(lbl_status_text, "Đang nghe... Nhả nút để gửi");
+                    lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
+                }
             }
-            if (lbl_status_text)
+            else
             {
-                lv_label_set_text(lbl_status_text, "Đang kết nối...");
-                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
+                lv_obj_set_style_bg_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+                lv_obj_set_style_shadow_width(btn_push_to_talk, 12, 0);
+                lv_obj_set_style_shadow_color(btn_push_to_talk, lv_color_hex(0xFFB300), 0);
+                lv_obj_set_style_shadow_opa(btn_push_to_talk, LV_OPA_60, 0);
+                if (lbl_ptt_icon)
+                {
+                    lv_obj_set_style_text_color(lbl_ptt_icon, lv_color_hex(0x1F2937), 0);
+                }
+                if (lbl_status_text)
+                {
+                    lv_label_set_text(lbl_status_text, "Đang kết nối...");
+                    lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
+                }
             }
         }
         else
@@ -383,13 +402,18 @@ void ai_voice_app_open(lv_obj_t *parent)
         lv_obj_add_state(btn_push_to_talk, LV_STATE_DISABLED);
         lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
     }
+    else
+    {
+        // Pre-connect WebSocket in background so PTT is ready instantly
+        ai_voice_preconnect();
+    }
 }
 
 /* Đóng và giải phóng tài nguyên */
 void ai_voice_app_close(void)
 {
     log_i("Xiaozhi: [APP_CLOSE]");
-    ai_voice_cancel(AiVoiceStopReason::APP_CLOSE);
+    ai_voice_on_app_closed();
     is_button_held = false;
     for (size_t i = 0; i < AI_MAX_CHAT_MESSAGES; ++i) rendered_bubbles[i] = nullptr;
     rendered_bubble_count = 0;
@@ -485,7 +509,12 @@ void ai_voice_app_update(void)
             else if (state == AI_STATE_ERROR)
                 lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
             else
-                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
+            {
+                if (ai_voice_is_connected())
+                    lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
+                else
+                    lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
+            }
         }
     }
 
@@ -555,7 +584,8 @@ void ai_voice_app_update(void)
                 if (h > 36) h = 36;
             }
             lv_obj_set_height(wave_bars[i], h);
-            lv_obj_set_y(wave_bars[i], 24 - (h / 2));
+            // Wave container height=44px, center at y=22. Center each bar vertically.
+            lv_obj_set_y(wave_bars[i], 22 - (h / 2));
         }
     }
 }

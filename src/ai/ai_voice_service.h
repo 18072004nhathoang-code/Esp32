@@ -123,5 +123,22 @@ bool ai_voice_get_activation(char *code, size_t code_size,
 bool ai_voice_retry_activation(void);
 bool ai_voice_cancel_activation(void);
 
+/**
+ * @brief Pre-connect WebSocket in background when entering AI Voice app.
+ * Ensures connection and session handshake are ready before user touches PTT button.
+ */
+bool ai_voice_preconnect(void);
+
+/**
+ * @brief Inform AI voice service that app was closed.
+ * Closes idle connection to release sockets and memory for other apps.
+ */
+void ai_voice_on_app_closed(void);
+
+/**
+ * @brief Check if WebSocket is warm-connected and ready for instant PTT speech.
+ */
+bool ai_voice_is_connected(void);
+
 /** Firmware-side regression for the exact ArduinoJson codec used by requests. */
 bool ai_voice_json_regression_test(void);

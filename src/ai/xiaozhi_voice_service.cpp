@@ -40,12 +40,21 @@ namespace
 {
 static const char *get_wss_ca_cert()
 {
-    if (XIAOZHI_WSS_CA_CERT && XIAOZHI_WSS_CA_CERT[0] != '\0')
-        return XIAOZHI_WSS_CA_CERT;
     return XIAOZHI_DEFAULT_ROOT_CA_CERT;
 }
-enum class CommandType : uint8_t { START, STOP, CANCEL, RETRY_ACTIVATION, CANCEL_ACTIVATION };
+enum class CommandType : uint8_t {
+    START,
+    STOP,
+    CANCEL,
+    RETRY_ACTIVATION,
+    CANCEL_ACTIVATION,
+    PRECONNECT,
+    DISCONNECT
+};
 struct Command { CommandType type; uint32_t generation; AiVoiceStopReason stop_reason; };
+
+static bool s_app_open = false;
+static uint32_t s_preconnect_generation = 0;
 
 static SemaphoreHandle_t s_mutex = nullptr;
 static QueueHandle_t s_commands = nullptr;
@@ -345,6 +354,8 @@ void set_error(const char *message)
 
 bool current_generation(uint32_t generation)
 {
+    if (generation == 0) return false;
+    if (s_preconnect_generation != 0 && generation == s_preconnect_generation) return true;
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const bool current = xiaozhi::session_event_is_current(
         generation, s_active_generation, s_cancelled_through);
@@ -636,7 +647,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
         stop_output(drain_output);
         release_flush_lease();
 #if XIAOZHI_ENABLE_WARM_REUSE
-        if (!preserve_error && !cancellation_requested(generation) && s_transport.connected())
+        if (!preserve_error && s_transport.connected())
         {
             s_transport.setGeneration(0);
             s_warm_connected = true;
@@ -647,16 +658,18 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
             s_transport.close();
             s_warm_connected = false;
             s_idle_since_ms = 0;
+            s_server_hello = false;
+            s_session_id[0] = '\0';
         }
 #else
         s_transport.close();
         s_warm_connected = false;
         s_idle_since_ms = 0;
+        s_server_hello = false;
+        s_session_id[0] = '\0';
 #endif
         s_codec.end();
         s_mcp.resetSession();
-        s_server_hello = false;
-        s_session_id[0] = '\0';
         s_capture_offset = 0;
         s_capture_frame_fill = 0;
         s_total_frames_sent = 0;
@@ -994,10 +1007,7 @@ bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
     (void)timestamp;
     const int decoded = s_codec.decode(opus, opus_size, s_decoded, kDecodedCapacity);
     if (decoded <= 0) return false;
-    const size_t output_count = xiaozhi_resample_to_16k(
-        s_decoded, static_cast<size_t>(decoded), s_downlink_rate,
-        s_resampled, kResampledCapacity);
-    if (output_count > 0 && audio_write_pcm16_mono(s_resampled, output_count, 250))
+    if (audio_write_pcm16_mono(s_decoded, static_cast<size_t>(decoded), 250))
     {
         const uint32_t now = millis();
         if (s_timing.t_first_pcm_ms == 0)
@@ -1084,12 +1094,24 @@ bool connect_session(uint32_t generation)
     if (s_warm_connected && s_transport.connected() &&
         xiaozhi::can_reuse_connection(s_transport.connected(), s_warm_connected,
                                        s_transport.uplinkPending(), s_transport.inboundPending(),
-                                       s_idle_since_ms, connect_start_ms, 30000))
+                                       s_idle_since_ms, connect_start_ms, 60000))
     {
         if (s_transport.setGeneration(generation))
         {
             s_timing.t_wss_connected_ms = millis();
-            log_i("Xiaozhi: Reusing warm WSS connection gen=%u epoch=%u",
+            // If hello was already completed (preconnected), we are INSTANTLY ready!
+            if (s_server_hello && s_session_id[0] != '\0')
+            {
+                s_timing.t_hello_ms = millis();
+                s_phase_tracker.record_progress(s_timing.t_hello_ms);
+                log_i("Xiaozhi: [WARM_READY] Reusing session='%s' gen=%u epoch=%u (INSTANT PTT)",
+                      s_session_id, static_cast<unsigned>(generation), static_cast<unsigned>(s_transport.connectionEpoch()));
+                s_seen_uplink_drops = s_transport.droppedUplink();
+                s_seen_downlink_drops = s_transport.droppedDownlink();
+                return true;
+            }
+
+            log_i("Xiaozhi: Reusing warm WSS socket, sending hello gen=%u epoch=%u",
                   static_cast<unsigned>(generation), static_cast<unsigned>(s_transport.connectionEpoch()));
             const uint32_t warm_deadline = millis() + s_deadlines.warm_connect_timeout_ms;
             StaticJsonDocument<512> hello;
@@ -1116,12 +1138,16 @@ bool connect_session(uint32_t generation)
         }
         s_transport.close();
         s_warm_connected = false;
+        s_server_hello = false;
+        s_session_id[0] = '\0';
     }
 #else
     if (s_transport.connected())
     {
         s_transport.close();
         s_warm_connected = false;
+        s_server_hello = false;
+        s_session_id[0] = '\0';
     }
 #endif
 
@@ -1556,7 +1582,17 @@ bool start_session(uint32_t generation)
 void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
 {
     static char last_logged_activation_code[24] = {};
-    if (s_configured || s_activation_cancelled || !wifi_manager_is_connected() ||
+    static bool last_wifi_state = false;
+    const bool wifi_now = wifi_manager_is_connected();
+    // Reset backoff when WiFi just reconnected so provisioning retries immediately
+    if (wifi_now && !last_wifi_state && !s_configured && !s_activation_cancelled)
+    {
+        next_poll_ms = 0;
+        backoff_ms = 3000;
+        log_i("Xiaozhi: WiFi reconnected — resetting provisioning backoff");
+    }
+    last_wifi_state = wifi_now;
+    if (s_configured || s_activation_cancelled || !wifi_now ||
         !elapsed(next_poll_ms) || active_generation_snapshot()) return;
     set_state(AI_STATE_NEEDS_USER_INPUT);
     log_i("Xiaozhi provisioning request: HTTPS OTA discovery");
@@ -1684,6 +1720,110 @@ bool run_codec_self_test()
     return ok;
 }
 
+static bool do_preconnect()
+{
+    if (!s_configured || !wifi_manager_is_connected() || active_generation_snapshot() != 0)
+        return false;
+
+    if (s_warm_connected && s_transport.connected() && s_server_hello && s_session_id[0] != '\0')
+    {
+        s_idle_since_ms = millis();
+        return true;
+    }
+
+    log_i("Xiaozhi: [PRECONNECT] Connecting WebSocket in background...");
+    uint32_t preconnect_gen = ++s_next_generation;
+    if (preconnect_gen == 0) preconnect_gen = ++s_next_generation;
+    s_preconnect_generation = preconnect_gen;
+
+    char error[128] = {};
+    if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
+                           s_device_id, s_client_id, preconnect_gen,
+                           error, sizeof(error)))
+    {
+        log_w("Xiaozhi preconnect begin failed: %s", error);
+        s_preconnect_generation = 0;
+        return false;
+    }
+
+    const uint32_t conn_deadline = millis() + 4000U;
+    while (!elapsed(conn_deadline))
+    {
+        if (s_transport.connected()) break;
+        if (active_generation_snapshot() != 0 || !s_app_open)
+        {
+            s_preconnect_generation = 0;
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+
+    if (!s_transport.connected())
+    {
+        log_w("Xiaozhi preconnect: timeout waiting for WebSocket connection");
+        s_transport.close();
+        s_preconnect_generation = 0;
+        return false;
+    }
+
+    StaticJsonDocument<512> hello;
+    hello["type"] = "hello";
+    hello["version"] = s_ws_config.version;
+    hello.createNestedObject("features")["mcp"] = true;
+    hello["transport"] = "websocket";
+    JsonObject audio = hello.createNestedObject("audio_params");
+    audio["format"] = "opus";
+    audio["sample_rate"] = 16000;
+    audio["channels"] = 1;
+    audio["frame_duration"] = 60;
+    String body;
+    serializeJson(hello, body);
+
+    s_server_hello = false;
+    if (!s_transport.sendText(body.c_str()))
+    {
+        log_w("Xiaozhi preconnect: failed to send hello");
+        s_transport.close();
+        s_preconnect_generation = 0;
+        return false;
+    }
+
+    const uint32_t hello_deadline = millis() + 4000U;
+    while (!elapsed(hello_deadline) && !s_server_hello)
+    {
+        s_transport.loop();
+        process_inbound();
+        if (s_server_hello) break;
+        if (active_generation_snapshot() != 0 || !s_app_open)
+        {
+            s_preconnect_generation = 0;
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+
+    if (!s_server_hello || s_session_id[0] == '\0')
+    {
+        log_w("Xiaozhi preconnect: server did not send valid hello response");
+        s_transport.close();
+        s_preconnect_generation = 0;
+        return false;
+    }
+
+    s_warm_connected = true;
+    s_idle_since_ms = millis();
+    s_transport.setGeneration(0);
+    s_preconnect_generation = 0;
+    if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
+    {
+        if (s_state == AI_STATE_NEEDS_USER_INPUT || s_state == AI_STATE_ERROR)
+            s_state = AI_STATE_IDLE;
+        xSemaphoreGive(s_mutex);
+    }
+    log_i("Xiaozhi: [PRECONNECT_OK] WSS ready, session='%s' (PTT ready!)", s_session_id);
+    return true;
+}
+
 void worker(void *)
 {
     uint32_t next_poll_ms = 0;
@@ -1747,6 +1887,27 @@ void worker(void *)
                 s_activation_cancelled = true;
                 set_state(AI_STATE_NEEDS_USER_INPUT);
             }
+            else if (command.type == CommandType::PRECONNECT)
+            {
+                if (s_configured && wifi_manager_is_connected() && active_generation_snapshot() == 0)
+                {
+                    if (!s_warm_connected || !s_transport.connected() || !s_server_hello)
+                    {
+                        do_preconnect();
+                    }
+                }
+            }
+            else if (command.type == CommandType::DISCONNECT)
+            {
+                if (active_generation_snapshot() == 0 && s_transport.connected())
+                {
+                    s_transport.close();
+                    s_warm_connected = false;
+                    s_server_hello = false;
+                    s_session_id[0] = '\0';
+                    log_i("Xiaozhi: Disconnected on app close");
+                }
+            }
             else if (command.type == CommandType::START && current_generation(command.generation))
                 (void)start_session(command.generation);
             else if (command.type == CommandType::STOP && current_generation(command.generation))
@@ -1763,11 +1924,26 @@ void worker(void *)
         generation = active_generation_snapshot();
 
         if (s_warm_connected && generation == 0 &&
-            (!s_transport.connected() || static_cast<int32_t>(millis() - s_idle_since_ms) >= 30000))
+            (!s_transport.connected() || static_cast<int32_t>(millis() - s_idle_since_ms) >= 60000))
         {
-            log_i("Xiaozhi warm connection idle timeout (30s): đóng socket WSS");
+            log_i("Xiaozhi warm connection idle timeout (60s): đóng socket WSS");
             s_transport.close();
             s_warm_connected = false;
+            s_server_hello = false;
+            s_session_id[0] = '\0';
+        }
+
+        // Auto-preconnect in background when app is open, WiFi connected, Xiaozhi configured, but not warm-connected
+        if (s_app_open && s_configured && wifi_manager_is_connected() &&
+            (!s_warm_connected || !s_transport.connected() || !s_server_hello) &&
+            generation == 0 && !s_cleanup_pending)
+        {
+            static uint32_t s_last_preconnect_try = 0;
+            if (millis() - s_last_preconnect_try >= 4000U)
+            {
+                s_last_preconnect_try = millis();
+                do_preconnect();
+            }
         }
 
         if (s_tts_stopping && generation && !s_cleanup_pending)
@@ -1967,7 +2143,12 @@ bool ai_voice_start_recording(void)
 {
     if (!s_task || !s_configured || !wifi_manager_is_connected())
     {
-        set_error(!s_configured ? "Xiaozhi chưa kích hoạt" : "WiFi chưa kết nối");
+        if (!s_task)
+            set_error("Xiaozhi service chưa khởi động");
+        else if (!s_configured)
+            set_error(s_activation_code[0] ? "Cần kích hoạt Xiaozhi trước" : "Xiaozhi chưa kích hoạt — Cần kết nối WiFi để đăng ký");
+        else
+            set_error("WiFi chưa kết nối — Kiểm tra cài đặt mạng");
         return false;
     }
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
@@ -2073,18 +2254,43 @@ AIVoiceState ai_voice_get_state(void)
     return state;
 }
 
+bool ai_voice_is_connected(void)
+{
+    return s_warm_connected && s_transport.connected() && s_server_hello;
+}
+
+bool ai_voice_preconnect(void)
+{
+    s_app_open = true;
+    if (s_task) xTaskNotifyGive(s_task);
+    return queue_command(CommandType::PRECONNECT, 0);
+}
+
+void ai_voice_on_app_closed(void)
+{
+    s_app_open = false;
+    ai_voice_cancel(AiVoiceStopReason::APP_CLOSE);
+    (void)queue_command(CommandType::DISCONNECT, 0);
+    if (s_task) xTaskNotifyGive(s_task);
+}
+
 const char *ai_voice_get_state_text(void)
 {
     switch (ai_voice_get_state())
     {
         case AI_STATE_STARTING: return "Đang kết nối Xiaozhi...";
-        case AI_STATE_LISTENING: return "Đang nghe và gửi Opus...";
+        case AI_STATE_LISTENING: return "Đang nghe... Nhả nút để gửi";
         case AI_STATE_PROCESSING: return "Xiaozhi đang xử lý...";
         case AI_STATE_SPEAKING: return "Xiaozhi đang trả lời...";
         case AI_STATE_CANCELING: return "Đang hủy phiên Xiaozhi...";
-        case AI_STATE_NEEDS_USER_INPUT: return s_activation_code[0] ? "Nhập mã kích hoạt Xiaozhi" : s_last_error;
-        case AI_STATE_ERROR: return s_last_error;
-        default: return "Giữ nút để nói với Xiaozhi";
+        case AI_STATE_NEEDS_USER_INPUT:
+            if (s_activation_code[0]) return "Nhập mã kích hoạt Xiaozhi";
+            if (!wifi_manager_is_connected()) return "WiFi chưa kết nối";
+            return s_last_error[0] ? s_last_error : "Đang chờ kích hoạt Xiaozhi...";
+        case AI_STATE_ERROR: return s_last_error[0] ? s_last_error : "Lỗi không xác định";
+        default:
+            if (ai_voice_is_connected()) return "Sẵn sàng • Giữ nút để nói";
+            return "Giữ nút để nói với Xiaozhi";
     }
 }
 

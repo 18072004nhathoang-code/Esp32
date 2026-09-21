@@ -700,8 +700,8 @@ bool audio_install_duplex_driver(void)
         .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 6,
-        .dma_buf_len = 128,
+        .dma_buf_count = 8,
+        .dma_buf_len = 256,
         .use_apll = true,
         .tx_desc_auto_clear = true,
         .fixed_mclk = 0,
@@ -1458,8 +1458,9 @@ static void audio_background_task(void *pvParameters)
             }
         }
 
-        // 0b. Nếu I2S đang được Music Player sử dụng hoặc driver chưa cài đặt, nhường bus hoàn toàn
-        if (audio_get_current_owner() == AUDIO_OWNER_MUSIC || !audio_is_driver_installed())
+        // 0b. Nếu I2S đang được Music Player hoặc AI Voice sử dụng hoặc driver chưa cài đặt, nhường bus hoàn toàn
+        const AudioOwner current_owner = audio_get_current_owner();
+        if (current_owner == AUDIO_OWNER_MUSIC || current_owner == AUDIO_OWNER_AI_VOICE || !audio_is_driver_installed())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -2660,16 +2661,21 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         return false;
 
     bool ok = true;
-    int16_t stereo[256];
+    int16_t stereo[512];
     size_t offset = 0;
     while (offset < count)
     {
         size_t chunk = count - offset;
-        if (chunk > 128) chunk = 128;
+        if (chunk > 256) chunk = 256;
         for (size_t i = 0; i < chunk; ++i)
         {
-            stereo[i * 2] = samples[offset + i];
-            stereo[i * 2 + 1] = samples[offset + i];
+            // Giảm biên độ nhẹ 0.85x (~ -1.4dB) để bảo vệ loa nhỏ 1W và tránh clipping méo tiếng
+            // khi âm thanh TTS đạt đỉnh 0 dBFS trên bộ khuếch đại FM8002E.
+            int32_t s = (static_cast<int32_t>(samples[offset + i]) * 218) >> 8;
+            if (s > 32767) s = 32767;
+            else if (s < -32768) s = -32768;
+            stereo[i * 2] = static_cast<int16_t>(s);
+            stereo[i * 2 + 1] = static_cast<int16_t>(s);
         }
         if (!write_stereo_frames(stereo, chunk, timeout_ms))
         {
