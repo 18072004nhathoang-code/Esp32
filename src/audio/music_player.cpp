@@ -214,6 +214,30 @@ static void apply_music_stop(uint32_t target_session, uint32_t target_generation
     if (stopped) (void)release_music_audio();
 }
 
+/* Hàm cấp phát và giải phóng Audio decoder ưu tiên trên Octal PSRAM */
+static Audio *allocate_audio_decoder(void)
+{
+    void *mem = heap_caps_malloc(sizeof(Audio), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mem)
+    {
+        mem = malloc(sizeof(Audio));
+    }
+    if (!mem)
+    {
+        Serial.println("[MUSIC_AUDIO] ❌ Không thể cấp phát bộ nhớ cho Audio decoder!");
+        return nullptr;
+    }
+    return new (mem) Audio();
+}
+
+static void free_audio_decoder(Audio *&decoder)
+{
+    if (!decoder) return;
+    decoder->~Audio();
+    free(decoder);
+    decoder = nullptr;
+}
+
 /* Hàm hỗ trợ dừng và dọn dẹp Audio engine nội bộ trên Core 0 */
 static bool internal_stop_audio_locked(void)
 {
@@ -241,8 +265,7 @@ static bool internal_stop_audio_locked(void)
         }
         (void)decoder_lifecycle.finish_stop(generation, true);
         audio_drain_tx(300);
-        delete audio;
-        audio = nullptr;
+        free_audio_decoder(audio);
     }
     else
     {
@@ -357,7 +380,7 @@ static void music_audio_task(void *pvParameters)
                                     xSemaphoreGive(audio_mutex);
                                     break;
                                 }
-                                audio = new(std::nothrow) Audio();
+                                audio = allocate_audio_decoder();
                                 if (audio && audio->isInitialized())
                                 {
                                     Serial.printf("[MUSIC_AUDIO][STACK] PeriodicTask high-water=%u bytes\n",
@@ -401,8 +424,7 @@ static void music_audio_task(void *pvParameters)
                                     Serial.println("[MUSIC_AUDIO] Play FAILED: Audio allocation/init");
                                     if (audio)
                                     {
-                                        delete audio;
-                                        audio = nullptr;
+                                        free_audio_decoder(audio);
                                     }
                                     (void)decoder_lifecycle.finish_start(starting_generation, false);
                                     release_music_audio();
@@ -543,7 +565,7 @@ static void music_audio_task(void *pvParameters)
                                 xSemaphoreGive(audio_mutex);
                                 break;
                             }
-                            audio = new(std::nothrow) Audio();
+                            audio = allocate_audio_decoder();
                             if (audio && audio->isInitialized())
                             {
                                 const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
@@ -573,8 +595,7 @@ static void music_audio_task(void *pvParameters)
                                 if (audio)
                                 {
                                     audio->shutdown(500);
-                                    delete audio;
-                                    audio = nullptr;
+                                    free_audio_decoder(audio);
                                 }
                                 (void)decoder_lifecycle.finish_start(generation, false);
                             }
@@ -791,6 +812,10 @@ void music_player_scan_sd(void)
     player_state.total_tracks = total_tracks_found;
     if (total_tracks_found > 0)
     {
+        if (player_state.current_track_idx < 0 || player_state.current_track_idx >= total_tracks_found)
+        {
+            player_state.current_track_idx = 0;
+        }
         player_state.total_duration_sec = playlist[player_state.current_track_idx].duration_sec;
     }
     else

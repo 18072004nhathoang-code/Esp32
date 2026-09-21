@@ -508,12 +508,33 @@ void music_app_update(void)
         lv_label_set_text(lbl_play_icon, is_playing ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
     }
 
-    // 3. Cập nhật tiêu đề bài hát hiện tại
+    // 3. Cập nhật tiêu đề bài hát và thông tin metadata hiện tại
     int cur_idx = music_player_get_current_index();
     const MusicTrack *track = music_player_get_track(cur_idx);
-    if (lbl_track_title && track)
+    if (lbl_track_title)
     {
-        lv_label_set_text(lbl_track_title, track->title);
+        if (track)
+            lv_label_set_text(lbl_track_title, track->title);
+        else
+            lv_label_set_text(lbl_track_title, storage_is_available() ? "Thư mục /music trống" : "Không có thẻ MicroSD");
+    }
+    if (lbl_track_meta)
+    {
+        const int total_tracks = music_player_get_track_count();
+        if (total_tracks > 0 && cur_idx >= 0)
+        {
+            lv_label_set_text_fmt(lbl_track_meta, "Bài %d / %d • %s",
+                                  cur_idx + 1, total_tracks,
+                                  is_playing ? "Đang phát" : "Tạm dừng");
+            lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(is_playing ? COLOR_ACCENT_GREEN : COLOR_TEXT_MUTED), 0);
+        }
+        else
+        {
+            lv_label_set_text_fmt(lbl_track_meta, "%s • %d bài",
+                                  storage_is_available() ? "MicroSD" : "Không có thẻ SD",
+                                  total_tracks);
+            lv_obj_set_style_text_color(lbl_track_meta, lv_color_hex(COLOR_TEXT_MUTED), 0);
+        }
     }
 
     // 4. Cập nhật thanh trượt tiến trình và thời gian

@@ -602,11 +602,13 @@ bool map_tile_downloader_copy_front(lv_color_t *dest, size_t count_pixels)
     size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
     size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
     if (copy_rows == 0 || copy_cols == 0 || count_pixels < (copy_rows * (size_t)MAP_CANVAS_WIDTH)) return false;
+    const size_t src_y_offset = (MAP_TILE_HEIGHT > copy_rows) ? (MAP_TILE_HEIGHT - copy_rows) / 2 : 0;
+    const size_t src_x_offset = (MAP_TILE_WIDTH > copy_cols) ? (MAP_TILE_WIDTH - copy_cols) / 2 : 0;
     if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
         for (size_t r = 0; r < copy_rows; r++)
         {
-            memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));
+            memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[(r + src_y_offset) * MAP_TILE_WIDTH + src_x_offset], copy_cols * sizeof(lv_color_t));
         }
         xSemaphoreGive(tile_swap_mutex);
         return true;
@@ -621,13 +623,15 @@ bool map_tile_downloader_consume_front(lv_color_t *dest, size_t count_pixels,
     size_t copy_rows = (MAP_CANVAS_HEIGHT < MAP_TILE_HEIGHT) ? MAP_CANVAS_HEIGHT : MAP_TILE_HEIGHT;
     size_t copy_cols = (MAP_CANVAS_WIDTH < MAP_TILE_WIDTH) ? MAP_CANVAS_WIDTH : MAP_TILE_WIDTH;
     if (copy_rows == 0 || copy_cols == 0 || count_pixels < (copy_rows * (size_t)MAP_CANVAS_WIDTH)) return false;
+    const size_t src_y_offset = (MAP_TILE_HEIGHT > copy_rows) ? (MAP_TILE_HEIGHT - copy_rows) / 2 : 0;
+    const size_t src_x_offset = (MAP_TILE_WIDTH > copy_cols) ? (MAP_TILE_WIDTH - copy_cols) / 2 : 0;
     if (tile_swap_mutex && xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
     {
         if (has_new_tile)
         {
             for (size_t r = 0; r < copy_rows; r++)
             {
-                memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[r * MAP_TILE_WIDTH], copy_cols * sizeof(lv_color_t));
+                memcpy(&dest[r * MAP_CANVAS_WIDTH], &tile_buf_front[(r + src_y_offset) * MAP_TILE_WIDTH + src_x_offset], copy_cols * sizeof(lv_color_t));
             }
             if (out_source)
             {

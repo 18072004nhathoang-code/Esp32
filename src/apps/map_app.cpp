@@ -329,6 +329,87 @@ static void btn_next_city_cb(lv_event_t *e)
     }
 }
 
+// Trạng thái cảm ứng kéo thả (Touch Drag / Pan) và Chạm đúp (Double-Tap Zoom)
+static lv_point_t s_touch_start = {0, 0};
+static uint32_t s_touch_start_ms = 0;
+static uint32_t s_last_tap_ms = 0;
+static lv_point_t s_last_tap_point = {0, 0};
+static bool s_is_dragging_map = false;
+
+static void map_canvas_touch_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+    lv_point_t p = {0, 0};
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED)
+    {
+        s_touch_start = p;
+        s_touch_start_ms = millis();
+        s_is_dragging_map = false;
+
+        // Kiểm tra double-tap (< 350ms và khoảng cách < 25px)
+        const uint32_t dt = s_touch_start_ms - s_last_tap_ms;
+        const int32_t ddx = p.x - s_last_tap_point.x;
+        const int32_t ddy = p.y - s_last_tap_point.y;
+        if (dt < 350 && (ddx * ddx + ddy * ddy) < (25 * 25))
+        {
+            s_last_tap_ms = 0;
+            map_app_zoom_in();
+            return;
+        }
+    }
+    else if (code == LV_EVENT_PRESSING)
+    {
+        int32_t dx = p.x - s_touch_start.x;
+        int32_t dy = p.y - s_touch_start.y;
+        if ((dx * dx + dy * dy) >= (16 * 16))
+        {
+            s_is_dragging_map = true;
+        }
+    }
+    else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST)
+    {
+        const uint32_t now = millis();
+        int32_t dx = p.x - s_touch_start.x;
+        int32_t dy = p.y - s_touch_start.y;
+
+        if (s_is_dragging_map && (dx * dx + dy * dy) >= (16 * 16))
+        {
+            double scale = 360.0 / (256.0 * (1ULL << (cur_zoom < 22 ? cur_zoom : 21)));
+            double delta_lon = -dx * scale;
+            double lat_rad = cur_lat * (M_PI / 180.0);
+            double cos_lat = cos(lat_rad);
+            if (cos_lat < 0.1) cos_lat = 0.1;
+            double delta_lat = dy * scale * cos_lat;
+
+            double old_lat = cur_lat;
+            double old_lon = cur_lon;
+            cur_lat += delta_lat;
+            cur_lon += delta_lon;
+            if (cur_lat > 85.0) cur_lat = 85.0;
+            if (cur_lat < -85.0) cur_lat = -85.0;
+            if (cur_lon > 180.0) cur_lon -= 360.0;
+            if (cur_lon < -180.0) cur_lon += 360.0;
+
+            if (!trigger_map_reload())
+            {
+                cur_lat = old_lat;
+                cur_lon = old_lon;
+            }
+            s_last_tap_ms = 0;
+        }
+        else
+        {
+            s_last_tap_ms = now;
+            s_last_tap_point = s_touch_start;
+        }
+        s_is_dragging_map = false;
+    }
+}
+
 void map_app_open(lv_obj_t *parent)
 {
     app_container = parent;
@@ -362,6 +443,8 @@ void map_app_open(lv_obj_t *parent)
     lv_canvas_set_buffer(map_canvas, canvas_buffer, MAP_CANVAS_WIDTH, MAP_CANVAS_HEIGHT, LV_IMG_CF_TRUE_COLOR);
     lv_obj_set_pos(map_canvas, 0, 0);
     lv_obj_set_size(map_canvas, MAP_CANVAS_WIDTH, MAP_CANVAS_HEIGHT);
+    lv_obj_add_flag(map_canvas, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(map_canvas, map_canvas_touch_cb, LV_EVENT_ALL, nullptr);
 
     // 4. FLOATING HUD TOP: Nút chuyển đổi kiểu bản đồ (Roadmap / Satellite)
     hud_type_btn = lv_btn_create(parent);
@@ -377,7 +460,6 @@ void map_app_open(lv_obj_t *parent)
     lv_obj_add_event_cb(hud_type_btn, btn_toggle_type_cb, LV_EVENT_CLICKED, nullptr);
     if (!map_tile_downloader_supports_satellite())
         lv_obj_add_state(hud_type_btn, LV_STATE_DISABLED);
-
     hud_lbl_type = lv_label_create(hud_type_btn);
     lv_label_set_text(hud_lbl_type, "Road");
     lv_obj_set_style_text_color(hud_lbl_type, lv_color_hex(0x00E676), 0);
