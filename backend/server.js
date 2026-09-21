@@ -55,7 +55,7 @@ export function configFromEnv(env = process.env) {
     throw new Error("DEEPSEEK_MODEL must use the API model ID deepseek-flash");
   }
   if (!env.DEEPSEEK_API_KEY) {
-    console.warn("[WARN] DEEPSEEK_API_KEY chưa cấu hình. Endpoint /v1/query sẽ không khả dụng, nhưng /youtube/stream vẫn hoạt động bình thường.");
+    throw new Error("DEEPSEEK_API_KEY is required for the selected DeepSeek LLM provider");
   }
   if ((sttProvider === "gemini" || ttsProvider === "gemini") && !env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is required for the selected Gemini STT/TTS provider");
