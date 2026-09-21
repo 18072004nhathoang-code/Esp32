@@ -6,6 +6,7 @@ import { queryDeepSeek } from "./lib/deepseek.js";
 import { ServiceError, publicError } from "./lib/errors.js";
 import { transcribeGemini, ttsGemini } from "./lib/gemini.js";
 import { boundedText, parseMusicSources, parsePcm16Mono16kWav } from "./lib/protocol.js";
+import { streamYouTubeAudio } from "./lib/youtube.js";
 
 function loadEnvFile(path) {
   if (!fs.existsSync(path)) return;
@@ -53,7 +54,9 @@ export function configFromEnv(env = process.env) {
   if (deepseekModel !== "deepseek-flash") {
     throw new Error("DEEPSEEK_MODEL must use the API model ID deepseek-flash");
   }
-  if (!env.DEEPSEEK_API_KEY) throw new Error("DEEPSEEK_API_KEY is required for AI_LLM_PROVIDER=deepseek");
+  if (!env.DEEPSEEK_API_KEY) {
+    console.warn("[WARN] DEEPSEEK_API_KEY chưa cấu hình. Endpoint /v1/query sẽ không khả dụng, nhưng /youtube/stream vẫn hoạt động bình thường.");
+  }
   if ((sttProvider === "gemini" || ttsProvider === "gemini") && !env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY is required for the selected Gemini STT/TTS provider");
   }
@@ -260,6 +263,16 @@ export function createServer(config, dependencies = {}) {
         cache: { entries: ttsCache.size, bytes: totalCacheBytes },
       });
     }
+
+    const parsedUrl = new URL(req.url, "http://localhost");
+    if ((req.method === "GET" || req.method === "HEAD") && parsedUrl.pathname === "/youtube/stream") {
+      const q = parsedUrl.searchParams.get("q") || "";
+      if (!q.trim()) {
+        return sendJson(res, 400, { error: { code: "INVALID_QUERY", message: "Thiếu từ khóa tìm kiếm bài hát (?q=...)" } });
+      }
+      return streamYouTubeAudio(q.trim(), req, res);
+    }
+
     if (req.method !== "POST" || (req.url !== "/v1/query" && req.url !== "/v1/tts")) {
       return sendJson(res, 404, { error: { code: "NOT_FOUND", message: "Endpoint không tồn tại." } });
     }

@@ -360,15 +360,25 @@ bool parse_ai_response_json(const uint8_t *data, size_t size, AiQueryResponse *r
             if (item.isNull() || !item["type"].is<const char *>()) return false;
             for (JsonPair field : item)
                 if (strcmp(field.key().c_str(), "type") != 0 && strcmp(field.key().c_str(), "source_id") != 0 &&
-                    strcmp(field.key().c_str(), "value") != 0) return false;
+                    strcmp(field.key().c_str(), "query") != 0 && strcmp(field.key().c_str(), "value") != 0) return false;
             AiMusicAction &action = response->actions[response->action_count];
             action.type = ai_music_action_type(item["type"].as<const char *>());
-            if (action.type == AI_MUSIC_ACTION_PLAY && item.containsKey("source_id"))
+            if (action.type == AI_MUSIC_ACTION_PLAY)
             {
-                if (!item["source_id"].is<const char *>()) return false;
-                const char *source = item["source_id"].as<const char *>();
-                if (!source || strlen(source) >= sizeof(action.source_id)) return false;
-                strlcpy(action.source_id, source, sizeof(action.source_id));
+                if (item.containsKey("source_id"))
+                {
+                    if (!item["source_id"].is<const char *>()) return false;
+                    const char *source = item["source_id"].as<const char *>();
+                    if (!source || strlen(source) >= sizeof(action.source_id)) return false;
+                    strlcpy(action.source_id, source, sizeof(action.source_id));
+                }
+                if (item.containsKey("query"))
+                {
+                    if (!item["query"].is<const char *>()) return false;
+                    const char *q = item["query"].as<const char *>();
+                    if (!q || strlen(q) >= sizeof(action.query)) return false;
+                    strlcpy(action.query, q, sizeof(action.query));
+                }
             }
             if (action.type == AI_MUSIC_ACTION_VOLUME)
             {

@@ -59,11 +59,17 @@ export function sanitizeActions(value, configuredSources) {
       return { type: entry.type, value: entry.value };
     }
     if (entry.type === "music.play") {
-      if (keys.some((key) => key !== "type" && key !== "source_id")) throw new Error("invalid play action");
+      if (keys.some((key) => key !== "type" && key !== "source_id" && key !== "query")) throw new Error("invalid play action");
       if (entry.source_id != null && (!sourceIds.has(entry.source_id) || utf8Bytes(entry.source_id) > 31)) {
         throw new Error("unknown music source");
       }
-      return entry.source_id ? { type: entry.type, source_id: entry.source_id } : { type: entry.type };
+      if (entry.query != null && (typeof entry.query !== "string" || utf8Bytes(entry.query) > 63)) {
+        throw new Error("invalid music query");
+      }
+      const res = { type: entry.type };
+      if (entry.source_id) res.source_id = entry.source_id;
+      if (entry.query) res.query = entry.query;
+      return res;
     }
     if (keys.some((key) => key !== "type")) throw new Error("invalid music action fields");
     return { type: entry.type };

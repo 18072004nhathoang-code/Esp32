@@ -178,7 +178,7 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                                    "self.music.stop", "self.music.set_volume", "self.camera.open",
                                    "self.camera.start", "self.camera.stop", "self.camera.refresh",
                                    "self.camera.get_status", "self.clock.get_time"};
-            const char *descriptions[] = {"Phát nhạc từ SD hoặc source_id đã cấu hình",
+            const char *descriptions[] = {"Phát nhạc từ YouTube hoặc thẻ SD. Truyền tên bài hát cần phát vào trường query.",
                 "Tạm dừng nhạc", "Tiếp tục nhạc", "Dừng nhạc", "Đặt âm lượng nhạc 0-100",
                 "Mở ứng dụng Camera trên màn hình", "Khởi động dịch vụ Camera đã cấu hình",
                 "Dừng dịch vụ Camera", "Kết nối lại Camera đã cấu hình",
@@ -193,8 +193,14 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                 JsonObject properties = schema.createNestedObject("properties");
                 if (i == 0)
                 {
+                    JsonObject query_field = properties.createNestedObject("query");
+                    query_field["type"] = "string";
+                    query_field["description"] = "Tên bài hát hoặc từ khóa tìm kiếm phát từ YouTube";
+                    query_field["maxLength"] = 63;
+
                     JsonObject source = properties.createNestedObject("source_id");
                     source["type"] = "string";
+                    source["description"] = "ID nguồn nhạc trực tuyến (nếu có)";
                     source["maxLength"] = 31;
                 }
                 else if (i == 4)
@@ -235,8 +241,14 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
         if (tool_type == xiaozhi::McpTool::MUSIC_PLAY)
         {
             action.type = AI_MUSIC_ACTION_PLAY;
-            const char *fields[] = {"source_id"};
-            args_ok = args.isNull() || only_fields(args, fields, 1);
+            const char *fields[] = {"source_id", "query"};
+            args_ok = args.isNull() || only_fields(args, fields, 2);
+            if (!args["query"].isNull())
+            {
+                const char *q = args["query"].as<const char *>();
+                args_ok = args_ok && q && *q && strlen(q) < sizeof(action.query);
+                if (args_ok) strlcpy(action.query, q, sizeof(action.query));
+            }
             if (!args["source_id"].isNull())
             {
                 const char *source = args["source_id"].as<const char *>();

@@ -24,6 +24,36 @@
 #ifndef AI_MUSIC_STREAM_CA_CERT
 #define AI_MUSIC_STREAM_CA_CERT ""
 #endif
+#ifndef YOUTUBE_STREAM_ENDPOINT
+#define YOUTUBE_STREAM_ENDPOINT "http://192.168.1.28:8787/youtube/stream"
+#endif
+
+static void url_encode(const char *src, char *dst, size_t dst_size)
+{
+    if (!src || !dst || dst_size == 0) return;
+    static const char hex[] = "0123456789ABCDEF";
+    size_t d = 0;
+    for (size_t s = 0; src[s] && d + 4 < dst_size; ++s)
+    {
+        const unsigned char c = static_cast<unsigned char>(src[s]);
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            dst[d++] = c;
+        }
+        else if (c == ' ')
+        {
+            dst[d++] = '+';
+        }
+        else
+        {
+            dst[d++] = '%';
+            dst[d++] = hex[(c >> 4) & 0x0F];
+            dst[d++] = hex[c & 0x0F];
+        }
+    }
+    dst[d] = '\0';
+}
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
@@ -121,10 +151,12 @@ static void load_stream_sources(void)
         const char *id = source["id"] | "";
         const char *url = source["url"] | "";
         const size_t id_length = strlen(id);
+        const bool is_https = (strncmp(url, "https://", 8) == 0);
+        const bool is_http = (strncmp(url, "http://", 7) == 0);
         if (id_length == 0 || id_length >= sizeof(stream_sources[0].id) ||
-            strncmp(url, "https://", 8) != 0 || strlen(url) >= sizeof(stream_sources[0].url))
+            (!is_https && !is_http) || strlen(url) >= sizeof(stream_sources[0].url))
         {
-            Serial.println("[MUSIC_PLAYER] Ignoring invalid/non-HTTPS stream source");
+            Serial.println("[MUSIC_PLAYER] Ignoring invalid stream source URL");
             continue;
         }
         bool duplicate = false;
@@ -550,7 +582,9 @@ static void music_audio_task(void *pvParameters)
 
                 case MUSIC_CMD_PLAY_STREAM:
                 {
-                    if (AI_MUSIC_STREAM_CA_CERT[0] == '\0' || strncmp(cmd.filepath, "https://", 8) != 0)
+                    const bool is_https = (strncmp(cmd.filepath, "https://", 8) == 0);
+                    const bool is_http = (strncmp(cmd.filepath, "http://", 7) == 0);
+                    if (!is_http && (!is_https || AI_MUSIC_STREAM_CA_CERT[0] == '\0'))
                         break;
                     const bool newly_acquired = !music_owns_audio;
                     if (!acquire_music_audio()) break;
@@ -570,7 +604,7 @@ static void music_audio_task(void *pvParameters)
                             {
                                 const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                      AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
-                                audio->setCACert(AI_MUSIC_STREAM_CA_CERT);
+                                if (is_https) audio->setCACert(AI_MUSIC_STREAM_CA_CERT);
                                 audio->setVolume(21);
                                 audio_set_volume(player_state.volume);
                                 if (pins_ok && audio_codec_configure_for_stream(44100, 128) &&
@@ -1071,7 +1105,18 @@ bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeou
     switch (action->type)
     {
         case AI_MUSIC_ACTION_PLAY:
-            if (action->source_id[0])
+            if (action->query[0])
+            {
+                cmd.type = MUSIC_CMD_PLAY_STREAM;
+                strlcpy(cmd.source_id, "youtube", sizeof(cmd.source_id));
+                char encoded[160] = {};
+                url_encode(action->query, encoded, sizeof(encoded));
+                snprintf(cmd.filepath, sizeof(cmd.filepath), "%s?q=%s",
+                         YOUTUBE_STREAM_ENDPOINT, encoded);
+                Serial.printf("[MUSIC_PLAYER] AI YouTube request: '%s' -> %s\n",
+                              action->query, cmd.filepath);
+            }
+            else if (action->source_id[0])
             {
                 const MusicStreamSource *source = find_stream_source(action->source_id);
                 if (!source)
