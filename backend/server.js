@@ -24,7 +24,7 @@ function integerSetting(value, fallback, minimum, maximum, name) {
 export function configFromEnv(env = process.env) {
   return Object.freeze({
     port: integerSetting(env.PORT, 8787, 1, 65535, "PORT"),
-    host: env.HOST || "127.0.0.1",
+    host: env.HOST || "0.0.0.0",
     ytDlpPath: env.YT_DLP_PATH || "",
   });
 }

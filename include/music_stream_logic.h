@@ -22,3 +22,8 @@ inline bool music_stream_url_supported(const char *url,bool https_ca_configured)
     if(strncmp(url,"http://",7)==0)return true;
     return https_ca_configured&&strncmp(url,"https://",8)==0;
 }
+
+inline bool music_playback_needs_storage(int current_track_idx)
+{
+    return current_track_idx >= 0;
+}

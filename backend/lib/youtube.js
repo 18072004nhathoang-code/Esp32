@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const EXTRACT_TIMEOUT_MS=15000;
 const MAX_STDOUT_BYTES=64*1024;
@@ -14,9 +17,20 @@ export function isAllowedYouTubeUrl(value) {
   } catch { return false; }
 }
 
-export function resolveYtDlpPath(config={}) {
+export function resolveYtDlpPath(config={}, runtime={}) {
   const configured=String(config.ytDlpPath||process.env.YT_DLP_PATH||"").trim();
-  return configured||"yt-dlp";
+  if(configured) return configured;
+  const platform=runtime.platform||process.platform;
+  const homeDir=runtime.homeDir||os.homedir();
+  const existsSync=runtime.existsSync||fs.existsSync;
+  const join=platform==="win32"?path.win32.join:path.posix.join;
+  const candidates=platform==="win32"
+    ? [join(homeDir,".platformio","penv","Scripts","yt-dlp.exe")]
+    : [join(homeDir,".platformio","penv","bin","yt-dlp"),join(homeDir,".local","bin","yt-dlp")];
+  for(const candidate of candidates){
+    try{if(existsSync(candidate)) return candidate;}catch{}
+  }
+  return "yt-dlp";
 }
 function sendError(res,status,code,message){
   if(res.destroyed||res.writableEnded||res.headersSent) return;

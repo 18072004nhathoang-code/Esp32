@@ -379,6 +379,9 @@ void test_music_stream_url_contracts()
     assert(!music_stream_url_supported("https://music.example/stream", false));
     assert(music_stream_url_supported("https://music.example/stream", true));
     assert(!music_stream_url_supported("file:///tmp/audio.mp3", true));
+    assert(music_playback_needs_storage(0));
+    assert(music_playback_needs_storage(7));
+    assert(!music_playback_needs_storage(-1));
     printf("[PASS] test_music_stream_url_contracts\n");
 }
 

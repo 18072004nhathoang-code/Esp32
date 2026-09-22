@@ -256,14 +256,23 @@ static bool internal_stop_audio_locked(void)
         audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
     if (audio)
     {
-        if (!storage_lock(200))
+        const bool needs_storage = music_playback_needs_storage(player_state.current_track_idx);
+        bool shutdown_ack = false;
+        if (needs_storage)
         {
-            (void)decoder_lifecycle.finish_stop(generation, false);
-            Serial.println("[MUSIC_AUDIO] Stop deferred: storage lock unavailable");
-            return false;
+            if (!storage_lock(200))
+            {
+                (void)decoder_lifecycle.finish_stop(generation, false);
+                Serial.println("[MUSIC_AUDIO] Stop deferred: storage lock unavailable");
+                return false;
+            }
+            shutdown_ack = audio->shutdown(1000);
+            storage_unlock();
         }
-        const bool shutdown_ack = audio->shutdown(1000);
-        storage_unlock();
+        else
+        {
+            shutdown_ack = audio->shutdown(1000);
+        }
         if (!shutdown_ack)
         {
             (void)decoder_lifecycle.finish_stop(generation, false);
@@ -597,7 +606,7 @@ static void music_audio_task(void *pvParameters)
                                     (void)decoder_lifecycle.finish_start(generation, true);
                                     audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
                                     command_ok = true;
-                                    Serial.printf("[MUSIC_AUDIO] ▶ HTTPS stream source: %s\n", cmd.source_id);
+                                    Serial.printf("[MUSIC_AUDIO] ▶ Network stream source: %s\n", cmd.source_id);
                                 }
                             }
                             if (!command_ok)
@@ -632,11 +641,19 @@ static void music_audio_task(void *pvParameters)
                     bool release_after_loop = false;
                     if (audio != nullptr && player_state.is_playing && !player_state.is_paused)
                     {
-                        // Khóa storage bảo vệ đọc SPI/SD trong suốt chu kỳ loop
-                        if (storage_lock(50))
+                        // Local files need the SD mutex. Network streams must not
+                        // stall behind SD/map I/O or the decoder can underrun.
+                        if (music_playback_needs_storage(player_state.current_track_idx))
+                        {
+                            if (storage_lock(50))
+                            {
+                                audio->loop();
+                                storage_unlock();
+                            }
+                        }
+                        else
                         {
                             audio->loop();
-                            storage_unlock();
                         }
 
                         const uint32_t decoded_rate = audio->getSampleRate();
