@@ -2297,6 +2297,9 @@ void ai_voice_on_app_closed(void)
 
 const char *ai_voice_get_state_text(void)
 {
+    // Legacy pointer API intentionally returns only immutable literals. Dynamic
+    // activation/error buffers are owned by the voice task and must be copied
+    // with ai_voice_copy_state_text() to avoid cross-core data races.
     switch (ai_voice_get_state())
     {
         case AI_STATE_STARTING: return "Đang kết nối Xiaozhi...";
@@ -2304,15 +2307,55 @@ const char *ai_voice_get_state_text(void)
         case AI_STATE_PROCESSING: return "Xiaozhi đang xử lý...";
         case AI_STATE_SPEAKING: return "Xiaozhi đang trả lời...";
         case AI_STATE_CANCELING: return "Đang hủy phiên Xiaozhi...";
-        case AI_STATE_NEEDS_USER_INPUT:
-            if (s_activation_code[0]) return "Nhập mã kích hoạt Xiaozhi";
-            if (!wifi_manager_is_connected()) return "WiFi chưa kết nối";
-            return s_last_error[0] ? s_last_error : "Đang chờ kích hoạt Xiaozhi...";
-        case AI_STATE_ERROR: return s_last_error[0] ? s_last_error : "Lỗi không xác định";
+        case AI_STATE_NEEDS_USER_INPUT: return "Xiaozhi cần thao tác người dùng";
+        case AI_STATE_ERROR: return "Lỗi AI Voice";
         default:
             if (ai_voice_is_connected()) return "Sẵn sàng • Giữ nút để nói";
             return "Giữ nút để nói với Xiaozhi";
     }
+}
+
+bool ai_voice_copy_state_text(char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return false;
+    out[0] = '\0';
+
+    AIVoiceState state = AI_STATE_ERROR;
+    bool activation_present = false;
+    char last_error[sizeof(s_last_error)] = {};
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE)
+    {
+        strlcpy(out, "AI Voice đang bận", out_size);
+        return false;
+    }
+    state = s_state;
+    activation_present = s_activation_code[0] != '\0';
+    strlcpy(last_error, s_last_error, sizeof(last_error));
+    xSemaphoreGive(s_mutex);
+
+    const char *text = nullptr;
+    switch (state)
+    {
+        case AI_STATE_STARTING: text = "Đang kết nối Xiaozhi..."; break;
+        case AI_STATE_LISTENING: text = "Đang nghe... Nhả nút để gửi"; break;
+        case AI_STATE_PROCESSING: text = "Xiaozhi đang xử lý..."; break;
+        case AI_STATE_SPEAKING: text = "Xiaozhi đang trả lời..."; break;
+        case AI_STATE_CANCELING: text = "Đang hủy phiên Xiaozhi..."; break;
+        case AI_STATE_NEEDS_USER_INPUT:
+            if (activation_present) text = "Nhập mã kích hoạt Xiaozhi";
+            else if (!wifi_manager_is_connected()) text = "WiFi chưa kết nối";
+            else text = last_error[0] ? last_error : "Đang chờ kích hoạt Xiaozhi...";
+            break;
+        case AI_STATE_ERROR:
+            text = last_error[0] ? last_error : "Lỗi không xác định";
+            break;
+        default:
+            text = ai_voice_is_connected() ? "Sẵn sàng • Giữ nút để nói"
+                                           : "Giữ nút để nói với Xiaozhi";
+            break;
+    }
+    strlcpy(out, text, out_size);
+    return true;
 }
 
 int ai_voice_get_message_count(void)

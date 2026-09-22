@@ -77,10 +77,14 @@ void health_app_update(const SystemStats &stats)
         (unsigned)(stats.free_heap/1024U),(unsigned)(il/1024U),(unsigned)(imin/1024U));
     if(s_psram)lv_label_set_text_fmt(s_psram,"Free %.1f MB • Largest %.1f MB\nLow-water %.1f MB",
         (double)stats.free_psram/1048576.0,(double)pl/1048576.0,(double)pmin/1048576.0);
+    char voice_state[96] = {};
+    if (ai_voice_is_connected()) strlcpy(voice_state, "WARM", sizeof(voice_state));
+    else if (!ai_voice_copy_state_text(voice_state, sizeof(voice_state)))
+        strlcpy(voice_state, "BUSY", sizeof(voice_state));
     if(s_services)lv_label_set_text_fmt(s_services,
         "WiFi %s • Audio %s\nMusic %s • Xiaozhi %s\nTasks %lu • CPU %s%u%%",
         wifi_manager_is_connected()?"OK":"OFF",owner_name(audio_get_current_owner()),
         music_player_is_playing()?"PLAY":(music_player_is_paused()?"PAUSE":"IDLE"),
-        ai_voice_is_connected()?"WARM":ai_voice_get_state_text(),
+        voice_state,
         (unsigned long)stats.task_count,stats.cpu_usage_available?"":"~",(unsigned)stats.cpu_usage_percent);
 }

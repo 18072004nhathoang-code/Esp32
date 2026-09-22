@@ -5,6 +5,15 @@ const EXTRACT_TIMEOUT_MS=15000;
 const MAX_STDOUT_BYTES=64*1024;
 const MAX_STDERR_BYTES=16*1024;
 
+export function isAllowedYouTubeUrl(value) {
+  try {
+    const url=new URL(String(value));
+    if(url.protocol!=="http:"&&url.protocol!=="https:") return false;
+    const host=url.hostname.toLowerCase();
+    return host==="youtu.be"||host==="youtube.com"||host.endsWith(".youtube.com");
+  } catch { return false; }
+}
+
 export function resolveYtDlpPath(config={}) {
   const configured=String(config.ytDlpPath||process.env.YT_DLP_PATH||"").trim();
   return configured||"yt-dlp";
@@ -17,7 +26,10 @@ function sendError(res,status,code,message){
 }
 export function streamYouTubeAudio(query,req,res,config={}){
   const ytdlpPath=resolveYtDlpPath(config);
-  const searchPattern=/^https?:\/\//i.test(query)?query:`ytsearch1:${query}`;
+  const directUrl=/^https?:\/\//i.test(query);
+  if(directUrl&&!isAllowedYouTubeUrl(query))
+    return sendError(res,400,"UNSUPPORTED_URL","Chỉ chấp nhận URL YouTube trực tiếp.");
+  const searchPattern=directUrl?query:`ytsearch1:${query}`;
   console.log(`[YOUTUBE] Resolving "${query}"`);
   const args=["--no-warnings","--no-playlist","--no-progress","--socket-timeout","10","-g","-f","ba[ext=m4a]/ba",searchPattern];
   const child=spawn(ytdlpPath,args,{windowsHide:true,stdio:["ignore","pipe","pipe"]});

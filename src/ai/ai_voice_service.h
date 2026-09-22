@@ -90,6 +90,8 @@ AIVoiceState ai_voice_get_state(void);
  * @brief Lấy chuỗi mô tả trạng thái (VD: "Đang lắng nghe...", "Đang suy nghĩ...")
  */
 const char* ai_voice_get_state_text(void);
+/** @brief Copy a coherent state description under the Xiaozhi mutex. */
+bool ai_voice_copy_state_text(char *out, size_t out_size);
 
 /**
  * @brief Lấy số lượng tin nhắn trong lịch sử hội thoại

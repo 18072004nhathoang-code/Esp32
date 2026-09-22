@@ -399,7 +399,10 @@ void ai_voice_app_open(lv_obj_t *parent)
 
     // 2.3 Nhãn trạng thái AI & Hướng dẫn sử dụng
     lbl_status_text = lv_label_create(bottom_bar);
-    lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
+    char initial_state_text[160] = {};
+    if (!ai_voice_copy_state_text(initial_state_text, sizeof(initial_state_text)))
+        strlcpy(initial_state_text, "AI Voice đang bận", sizeof(initial_state_text));
+    lv_label_set_text(lbl_status_text, initial_state_text);
     lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xA0AEC0), 0);
     lv_obj_set_style_text_font(lbl_status_text, UI_FONT_SMALL, 0);
     lv_obj_align(lbl_status_text, LV_ALIGN_RIGHT_MID, -4, 0);
@@ -506,7 +509,10 @@ void ai_voice_app_update(void)
         }
         else
         {
-            lv_label_set_text(lbl_status_text, ai_voice_get_state_text());
+            char state_text[160] = {};
+            if (!ai_voice_copy_state_text(state_text, sizeof(state_text)))
+                strlcpy(state_text, "AI Voice đang bận", sizeof(state_text));
+            lv_label_set_text(lbl_status_text, state_text);
             if (state == AI_STATE_LISTENING)
                 lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0x00F2FE), 0);
             else if (state == AI_STATE_PROCESSING)

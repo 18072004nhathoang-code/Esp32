@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { createServer, configFromEnv } from "../server.js";
-import { resolveYtDlpPath } from "../lib/youtube.js";
+import { resolveYtDlpPath, isAllowedYouTubeUrl } from "../lib/youtube.js";
 const servers=[];
 afterEach(async()=>{while(servers.length)await new Promise(resolve=>servers.pop().close(resolve));});
 async function start(config={}){const server=createServer(config);await new Promise(resolve=>server.listen(0,"127.0.0.1",resolve));servers.push(server);return `http://127.0.0.1:${server.address().port}`;}
@@ -13,3 +13,12 @@ test("unknown route returns 404",async()=>{const base=await start();const res=aw
 test("GET /youtube/stream without query returns 400",async()=>{const base=await start();const res=await fetch(`${base}/youtube/stream`);assert.equal(res.status,400);assert.equal((await res.json()).error.code,"INVALID_QUERY");});
 test("GET /youtube/stream with blank query returns 400",async()=>{const base=await start();const res=await fetch(`${base}/youtube/stream?q=   `);assert.equal(res.status,400);assert.equal((await res.json()).error.code,"INVALID_QUERY");});
 test("GET /youtube/stream rejects oversized query before spawning yt-dlp",async()=>{const base=await start();const res=await fetch(`${base}/youtube/stream?q=${"x".repeat(129)}`);assert.equal(res.status,400);assert.equal((await res.json()).error.code,"QUERY_TOO_LONG");});
+
+test("direct URL allowlist accepts YouTube only",()=>{
+  assert.equal(isAllowedYouTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),true);
+  assert.equal(isAllowedYouTubeUrl("https://music.youtube.com/watch?v=dQw4w9WgXcQ"),true);
+  assert.equal(isAllowedYouTubeUrl("https://youtu.be/dQw4w9WgXcQ"),true);
+  assert.equal(isAllowedYouTubeUrl("http://127.0.0.1:8080/private"),false);
+  assert.equal(isAllowedYouTubeUrl("https://youtube.com.evil.example/watch?v=x"),false);
+  assert.equal(isAllowedYouTubeUrl("file:///etc/passwd"),false);
+});
