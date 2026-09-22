@@ -1,140 +1,84 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import fs from "node:fs";
 
-function findYtDlp() {
-  if (process.env.YT_DLP_PATH && fs.existsSync(process.env.YT_DLP_PATH)) {
-    return process.env.YT_DLP_PATH;
-  }
-  const defaultPenv = "C:\\Users\\NNH\\.platformio\\penv\\Scripts\\yt-dlp.exe";
-  if (fs.existsSync(defaultPenv)) {
-    return defaultPenv;
-  }
-  return "yt-dlp";
+const EXTRACT_TIMEOUT_MS=15000;
+const MAX_STDOUT_BYTES=64*1024;
+const MAX_STDERR_BYTES=16*1024;
+
+export function resolveYtDlpPath(config={}) {
+  const configured=String(config.ytDlpPath||process.env.YT_DLP_PATH||"").trim();
+  return configured||"yt-dlp";
 }
-
-export function streamYouTubeAudio(query, req, res) {
-  const ytdlpPath = findYtDlp();
-  const searchPattern = query.startsWith("http") ? query : `ytsearch1:${query}`;
-  console.log(`[YOUTUBE] Searching: "${query}" using ${ytdlpPath}`);
-
-  const args = [
-    "-g",
-    "-f", "ba[ext=m4a]/ba",
-    searchPattern,
-    "--no-warnings",
-    "--no-playlist",
-  ];
-
-  const ytdlp = spawn(ytdlpPath, args, { windowsHide: true });
-  let stdoutData = "";
-  let stderrData = "";
-  let killed = false;
-
-  const abortYtDlp = () => {
-    if (!killed) {
-      killed = true;
-      try { ytdlp.kill(); } catch {}
-    }
-  };
-
-  req.once("close", abortYtDlp);
-
-  ytdlp.stdout.on("data", (chunk) => {
-    stdoutData += chunk;
+function sendError(res,status,code,message){
+  if(res.destroyed||res.writableEnded||res.headersSent) return;
+  const body=Buffer.from(JSON.stringify({error:{code,message}}));
+  res.writeHead(status,{"content-type":"application/json; charset=utf-8","content-length":body.length,"cache-control":"no-store"});
+  res.end(body);
+}
+export function streamYouTubeAudio(query,req,res,config={}){
+  const ytdlpPath=resolveYtDlpPath(config);
+  const searchPattern=/^https?:\/\//i.test(query)?query:`ytsearch1:${query}`;
+  console.log(`[YOUTUBE] Resolving "${query}"`);
+  const args=["--no-warnings","--no-playlist","--no-progress","--socket-timeout","10","-g","-f","ba[ext=m4a]/ba",searchPattern];
+  const child=spawn(ytdlpPath,args,{windowsHide:true,stdio:["ignore","pipe","pipe"]});
+  let stdoutData="",stderrData="",terminal=false;
+  const killChild=()=>{try{if(!child.killed) child.kill("SIGTERM");}catch{}};
+  let extractTimer;
+  const cleanup=()=>{res.removeListener("close",onClientGone);req.removeListener("aborted",onClientGone);if(extractTimer)clearTimeout(extractTimer);};
+  const onClientGone=()=>{if(terminal)return;terminal=true;cleanup();killChild();};
+  const fail=(status,code,message)=>{if(terminal)return;terminal=true;cleanup();killChild();sendError(res,status,code,message);};
+  res.once("close",onClientGone); req.once("aborted",onClientGone);
+  extractTimer=setTimeout(()=>fail(504,"YTDLP_TIMEOUT","yt-dlp phản hồi quá chậm"),EXTRACT_TIMEOUT_MS); extractTimer.unref?.();
+  child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+  child.stdout.on("data",chunk=>{
+    if(terminal)return;
+    if(Buffer.byteLength(stdoutData,"utf8")+Buffer.byteLength(chunk,"utf8")>MAX_STDOUT_BYTES)
+      return fail(502,"YTDLP_OUTPUT_TOO_LARGE","yt-dlp trả về dữ liệu bất thường");
+    stdoutData+=chunk;
   });
-
-  ytdlp.stderr.on("data", (chunk) => {
-    stderrData += chunk;
+  child.stderr.on("data",chunk=>{
+    if(terminal)return;
+    const room=MAX_STDERR_BYTES-Buffer.byteLength(stderrData,"utf8");
+    if(room>0) stderrData+=chunk.slice(0,room);
   });
-
-  ytdlp.on("error", (err) => {
-    console.error("[YOUTUBE] Spawn error:", err);
-    req.removeListener("close", abortYtDlp);
-    if (!res.headersSent && !res.writableEnded) {
-      res.writeHead(500, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ error: "Không khởi động được yt-dlp" }));
-    }
-  });
-
-  ytdlp.on("close", async (code) => {
-    req.removeListener("close", abortYtDlp);
-    if (killed || res.writableEnded) return;
-
-    if (code !== 0) {
+  child.once("error",err=>{console.error("[YOUTUBE] Spawn error:",err.message);fail(500,"YTDLP_START_FAILED","Không khởi động được yt-dlp");});
+  child.once("close",async code=>{
+    if(terminal)return; terminal=true; cleanup();
+    if(code!==0){
       console.error(`[YOUTUBE] yt-dlp exited with code ${code}: ${stderrData.trim()}`);
-      if (!res.headersSent && !res.writableEnded) {
-        res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ error: "Không tìm thấy hoặc không trích xuất được bài hát YouTube" }));
-      }
-      return;
+      return sendError(res,502,"YTDLP_FAILED","Không tìm thấy hoặc không trích xuất được bài hát YouTube");
     }
-
-    const streamUrl = stdoutData.split(/\r?\n/).find((line) => line.startsWith("http"));
-    if (!streamUrl) {
-      console.error("[YOUTUBE] No audio URL extracted from output:", stdoutData);
-      if (!res.headersSent && !res.writableEnded) {
-        res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ error: "Không lấy được link stream YouTube" }));
-      }
-      return;
-    }
-
-    console.log(`[YOUTUBE] Found stream URL, proxying to ESP32...`);
-    const controller = new AbortController();
-    const abortFetch = () => controller.abort();
-    req.once("close", abortFetch);
-
-    try {
-      const upstream = await fetch(streamUrl, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-
-      if (!upstream.ok) {
+    const streamUrl=stdoutData.split(/\r?\n/).map(x=>x.trim()).find(x=>/^https?:\/\//i.test(x));
+    if(!streamUrl) return sendError(res,404,"STREAM_URL_MISSING","Không lấy được link stream YouTube");
+    const controller=new AbortController();
+    const abortUpstream=()=>controller.abort();
+    res.once("close",abortUpstream); req.once("aborted",abortUpstream);
+    const fetchTimer=setTimeout(()=>controller.abort(),EXTRACT_TIMEOUT_MS); fetchTimer.unref?.();
+    try{
+      const headers={"User-Agent":"Mozilla/5.0 (ESP32 Mini OS YouTube Proxy)","Accept":"*/*"};
+      if(req.headers.range) headers.Range=req.headers.range;
+      const upstream=await fetch(streamUrl,{method:req.method==="HEAD"?"HEAD":"GET",signal:controller.signal,headers,redirect:"follow"});
+      clearTimeout(fetchTimer);
+      if(!upstream.ok){
+        res.removeListener("close",abortUpstream); req.removeListener("aborted",abortUpstream);
         console.error(`[YOUTUBE] Upstream returned status ${upstream.status}`);
-        req.removeListener("close", abortFetch);
-        if (!res.headersSent && !res.writableEnded) {
-          res.writeHead(upstream.status, { "Content-Type": "application/json; charset=utf-8" });
-          res.end(JSON.stringify({ error: "Lỗi khi tải stream âm thanh từ YouTube" }));
-        }
-        return;
+        return sendError(res,502,"UPSTREAM_REJECTED","Máy chủ âm thanh YouTube từ chối yêu cầu");
       }
-
-      const contentType = upstream.headers.get("content-type") || "audio/mp4";
-      const contentLength = upstream.headers.get("content-length");
-      const headers = {
-        "Content-Type": contentType,
-        "Accept-Ranges": "none",
-        "Cache-Control": "no-cache, no-store",
-        "Access-Control-Allow-Origin": "*",
-      };
-      if (contentLength) headers["Content-Length"] = contentLength;
-
-      res.writeHead(200, headers);
-      const nodeStream = Readable.fromWeb(upstream.body);
+      const out={"Content-Type":upstream.headers.get("content-type")||"audio/mp4","Cache-Control":"no-cache, no-store","Access-Control-Allow-Origin":"*"};
+      for(const h of ["content-length","content-range","accept-ranges"]){const v=upstream.headers.get(h);if(v)out[h]=v;}
+      res.writeHead(upstream.status,out);
+      if(req.method==="HEAD"||!upstream.body){
+        res.removeListener("close",abortUpstream); req.removeListener("aborted",abortUpstream);
+        if(upstream.body) await upstream.body.cancel().catch(()=>{});
+        return res.end();
+      }
+      const nodeStream=Readable.fromWeb(upstream.body);
+      nodeStream.once("error",err=>{console.error("[YOUTUBE] Stream pipe error:",err.message);controller.abort();if(!res.destroyed)res.destroy(err);});
       nodeStream.pipe(res);
-
-      nodeStream.on("error", (err) => {
-        console.error("[YOUTUBE] Stream pipe error:", err.message);
-        res.destroy();
-      });
-
-      res.on("close", () => {
-        req.removeListener("close", abortFetch);
-        controller.abort();
-      });
-    } catch (err) {
-      req.removeListener("close", abortFetch);
-      if (err.name !== "AbortError") {
-        console.error("[YOUTUBE] Fetch exception:", err);
-      }
-      if (!res.headersSent && !res.writableEnded) {
-        res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify({ error: "Không kết nối được tới máy chủ YouTube" }));
-      }
+    }catch(err){
+      clearTimeout(fetchTimer); res.removeListener("close",abortUpstream); req.removeListener("aborted",abortUpstream);
+      if(err?.name!=="AbortError")console.error("[YOUTUBE] Fetch exception:",err);
+      sendError(res,502,"UPSTREAM_UNAVAILABLE","Không kết nối được tới máy chủ âm thanh YouTube");
     }
   });
 }

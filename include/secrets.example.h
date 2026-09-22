@@ -96,7 +96,9 @@
 // same IDs in MUSIC_SOURCES_JSON. No model may supply a URL to the device.
 // Keep this on one line and use HTTPS sources only (maximum 8 entries).
 #define AI_MUSIC_STREAM_SOURCES_JSON "[]"
-// PEM trust anchor (or concatenated PEM roots) for the configured streams.
+// Local/LAN backend for AI-requested YouTube search; firmware appends ?q=...
+#define YOUTUBE_STREAM_ENDPOINT "http://192.168.1.28:8787/youtube/stream"
+// PEM trust anchor (or concatenated PEM roots) for configured HTTPS streams.
 #define AI_MUSIC_STREAM_CA_CERT ""
 
 // PEM CA certificate used to verify HTTPS IP-camera endpoints. Keep empty until

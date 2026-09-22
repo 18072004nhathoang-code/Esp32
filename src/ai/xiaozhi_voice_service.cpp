@@ -26,6 +26,7 @@
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <atomic>
 #include <cmath>
 
 #ifndef XIAOZHI_WSS_CA_CERT
@@ -53,7 +54,7 @@ enum class CommandType : uint8_t {
 };
 struct Command { CommandType type; uint32_t generation; AiVoiceStopReason stop_reason; };
 
-static bool s_app_open = false;
+static std::atomic<bool> s_app_open{false};
 static uint32_t s_preconnect_generation = 0;
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -69,7 +70,7 @@ static char s_last_error[160] = "Xiaozhi chưa khởi tạo";
 static char s_activation_code[32] = {};
 static char s_activation_message[160] = {};
 static bool s_activation_cancelled = false;
-static bool s_configured = false;
+static std::atomic<bool> s_configured{false};
 static xiaozhi::ProvisionedWebsocket s_ws_config = {};
 static uint32_t s_next_generation = 0;
 static uint32_t s_active_generation = 0;
@@ -80,7 +81,7 @@ static XiaozhiAudioCodec s_codec;
 static XiaozhiMcpServer s_mcp;
 static char s_device_id[18] = {};
 static char s_client_id[37] = {};
-static bool s_server_hello = false;
+static std::atomic<bool> s_server_hello{false};
 static char s_session_id[96] = {};
 static uint32_t s_downlink_rate = 16000;
 static xiaozhi::SessionPhaseTracker s_phase_tracker;
@@ -95,7 +96,7 @@ static uint32_t s_frames_enqueued = 0;
 #ifndef XIAOZHI_ENABLE_WARM_REUSE
 #define XIAOZHI_ENABLE_WARM_REUSE 1
 #endif
-static bool s_warm_connected = false;
+static std::atomic<bool> s_warm_connected{false};
 static uint32_t s_idle_since_ms = 0;
 static bool s_tts_stopping = false;
 static uint32_t s_tts_stop_ms = 0;
@@ -150,6 +151,23 @@ static const size_t kFramesPerWorkerPass = 2;
 
 enum class EncodeResult : uint8_t { QUEUED, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
 enum class PumpResult : uint8_t { PROGRESS, IDLE, COMPLETE, BACKPRESSURE, TIMEOUT, ERROR, HANDLED_ERROR, CANCELLED };
+
+struct PsramJsonAllocator
+{
+    void *allocate(size_t size)
+    {
+        void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!ptr) ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+        return ptr;
+    }
+    void deallocate(void *ptr) { free(ptr); }
+    void *reallocate(void *ptr, size_t new_size)
+    {
+        void *next = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!next) next = heap_caps_realloc(ptr, new_size, MALLOC_CAP_8BIT);
+        return next;
+    }
+};
 
 bool elapsed(uint32_t deadline) { return xiaozhi::deadline_reached(millis(), deadline); }
 
@@ -801,7 +819,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
               static_cast<unsigned>(size), static_cast<unsigned>(xiaozhi::kMaxJsonMessageBytes));
         return false;
     }
-    DynamicJsonDocument document(12288);
+    BasicJsonDocument<PsramJsonAllocator> document(12288);
     const DeserializationError json_err = deserializeJson(
         document, data, size, DeserializationOption::NestingLimit(10));
     if (json_err)
@@ -2138,6 +2156,15 @@ bool ai_voice_init(void)
 
 bool ai_voice_is_available(void) { return s_task != nullptr; }
 const char *ai_voice_get_last_error(void) { return s_last_error; }
+bool ai_voice_copy_last_error(char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return false;
+    out[0] = '\0';
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+    strlcpy(out, s_last_error, out_size);
+    xSemaphoreGive(s_mutex);
+    return true;
+}
 
 bool ai_voice_start_recording(void)
 {
@@ -2256,19 +2283,21 @@ AIVoiceState ai_voice_get_state(void)
 
 bool ai_voice_is_connected(void)
 {
-    return s_warm_connected && s_transport.connected() && s_server_hello;
+    return s_warm_connected.load(std::memory_order_acquire) &&
+           s_transport.connected() &&
+           s_server_hello.load(std::memory_order_acquire);
 }
 
 bool ai_voice_preconnect(void)
 {
-    s_app_open = true;
+    s_app_open.store(true, std::memory_order_release);
     if (s_task) xTaskNotifyGive(s_task);
     return queue_command(CommandType::PRECONNECT, 0);
 }
 
 void ai_voice_on_app_closed(void)
 {
-    s_app_open = false;
+    s_app_open.store(false, std::memory_order_release);
     ai_voice_cancel(AiVoiceStopReason::APP_CLOSE);
     (void)queue_command(CommandType::DISCONNECT, 0);
     if (s_task) xTaskNotifyGive(s_task);

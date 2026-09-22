@@ -39,6 +39,7 @@ struct MusicVoiceHandoff
     int track_index;
     uint32_t position_sec;
     char source_id[32];
+    char stream_url[256];
 };
 
 /**

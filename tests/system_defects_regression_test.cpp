@@ -1,6 +1,7 @@
 #include "xiaozhi_protocol_logic.h"
 #include "xiaozhi_session_logic.h"
 #include "firmware_contracts.h"
+#include "music_stream_logic.h"
 
 #include <cassert>
 #include <cstdio>
@@ -359,7 +360,29 @@ void test_wifi_save_failure_revalidation()
     printf("[PASS] test_wifi_save_failure_revalidation\n");
 }
 
-// Test 13: WebSocket Empty Final Continuation Frame
+void test_music_stream_url_contracts()
+{
+    char encoded[192] = {};
+    assert(music_url_encode_query("hello world/test", encoded, sizeof(encoded)));
+    assert(strcmp(encoded, "hello+world%2Ftest") == 0);
+
+    char worst_case[64] = {};
+    memset(worst_case, '%', sizeof(worst_case) - 1);
+    assert(music_url_encode_query(worst_case, encoded, sizeof(encoded)));
+    assert(strlen(encoded) == 189);
+
+    char too_small[8] = {};
+    assert(!music_url_encode_query("%%%%", too_small, sizeof(too_small)));
+    assert(too_small[0] == '\0');
+
+    assert(music_stream_url_supported("http://192.168.1.2:8787/youtube/stream?q=x", false));
+    assert(!music_stream_url_supported("https://music.example/stream", false));
+    assert(music_stream_url_supported("https://music.example/stream", true));
+    assert(!music_stream_url_supported("file:///tmp/audio.mp3", true));
+    printf("[PASS] test_music_stream_url_contracts\n");
+}
+
+// Test 14: WebSocket Empty Final Continuation Frame
 void test_websocket_empty_final_continuation()
 {
     uint8_t storage[512] = {};
@@ -398,6 +421,7 @@ int main()
     test_power_brightness_coordination();
     test_camera_url_credential_stripping();
     test_wifi_save_failure_revalidation();
+    test_music_stream_url_contracts();
     test_websocket_empty_final_continuation();
     printf("=== ALL REGRESSION TESTS PASSED! ===\n");
     return 0;

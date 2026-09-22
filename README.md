@@ -137,7 +137,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
    #define XIAOZHI_WSS_CA_CERT         "-----BEGIN CERTIFICATE-----..."
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
-4. Xiaozhi là provider mặc định. Device gọi endpoint kích hoạt chính thức bằng `Activation-Version: 1`, MAC thật làm `Device-Id`, UUID v4 bền vững trong namespace NVS `xiaozhi` làm `Client-Id`; URL/token/version WSS chỉ được nhận từ phản hồi activation rồi lưu NVS. UI hiển thị mã kích hoạt và polling có backoff, không chặn LVGL. Firmware bỏ qua hoàn toàn trường OTA firmware/assets và không ghi token vào log. `backend/` là gateway Gemini/DeepSeek cũ, vẫn có mã nguồn nhưng bị vô hiệu khi `AI_VOICE_PROVIDER_XIAOZHI=1`; không có fallback trả phí.
+4. Xiaozhi là provider mặc định. Device gọi endpoint kích hoạt chính thức bằng `Activation-Version: 1`, MAC thật làm `Device-Id`, UUID v4 bền vững trong namespace NVS `xiaozhi` làm `Client-Id`; URL/token/version WSS chỉ được nhận từ phản hồi activation rồi lưu NVS. UI hiển thị mã kích hoạt và polling có backoff, không chặn LVGL. Firmware bỏ qua hoàn toàn trường OTA firmware/assets và không ghi token vào log. `backend/` hiện là **YouTube Audio Proxy tối giản** dùng `yt-dlp` cho lệnh phát nhạc theo từ khóa; AI Voice Xiaozhi kết nối trực tiếp dịch vụ Xiaozhi và không gửi khóa LLM lên firmware.
 5. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
 6. **Giới hạn TLS của toolchain**: Platform Espressif32 6.8.1 dùng Arduino-ESP32 2.0.17 với `CONFIG_MBEDTLS_HAVE_TIME_DATE` tắt trong SDK prebuilt cho ESP32-S3. CA chain và hostname vẫn được kiểm tra, nhưng thời hạn not-before/not-after của chứng chỉ không được kiểm tra bởi build này. Firmware log rõ giới hạn khi boot và không gọi đây là full certificate validation. Bản production cần framework/SDK tự build có X.509 time validation và chỉ mở kết nối sau khi SNTP đã cung cấp thời gian hợp lệ.
 7. **Giới hạn bảo vệ secret trên thiết bị**: `.gitignore` chỉ ngăn commit file secret, không bảo vệ dữ liệu khỏi flash dump. Build PlatformIO thông thường không provision Secure Boot, Flash Encryption hoặc encrypted NVS. Xem `docs/PRODUCTION_SECURITY.md` trước khi phân phối thiết bị.
@@ -157,6 +157,20 @@ pio run -e esp32-s3-es3c28p -t upload
 pio device monitor -b 115200
 ```
 
+### Backend YouTube Audio Proxy
+
+```bash
+cd backend
+cp .env.example .env
+npm ci
+npm test
+node server.js
+```
+
+Cấu hình `YOUTUBE_STREAM_ENDPOINT` trong `include/secrets.h` trỏ tới
+`http://<IP-backend>:8787/youtube/stream`. Proxy hỗ trợ Range/206 khi upstream
+hỗ trợ, hủy `yt-dlp`/fetch khi client ESP32 ngắt kết nối và có timeout hữu hạn.
+
 ---
 
 ## 📱 7. Các phân hệ ứng dụng
@@ -173,6 +187,7 @@ pio device monitor -b 115200
 8. **Settings & Power**: Độ sáng, accent, auto-reconnect và timeout dim/display-sleep được lưu NVS. Power đọc ADC pin nếu board khai báo, báo `Uncalibrated` khi hệ số chia áp chưa xác minh, vô hiệu hóa pin/sạc trên board không có driver, đồng thời cung cấp display sleep và restart thật.
 9. **Typography & Vietnamese Localization**: UI dùng **Be Vietnam Pro SemiBold** (SIL OFL 1.1) với body/button 14px, secondary 12px và title 16px; glyph hệ thống dùng `LV_SYMBOL_*` và fallback LVGL. Font 10px cũ không được dùng cho nội dung chính.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, theo đúng một contact ID tới lúc phát release, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. Với profile hiện tại, invert X/Y của sensor rồi rotation 2 triệt tiêu nhau nên mapping cuối là `screen_x=raw_x`, `screen_y=raw_y` trong miền 240x320. LVGL luôn nhận tọa độ toàn màn hình; Touch Diagnostic đổi screen→local theo origin của overlay nội dung, chạy thụ động 40Hz, không calibration/NVS và không chặn boot.
+11. **System Health**: App chẩn đoán nhẹ, không tạo task riêng; hiển thị Free/Largest/Low-water của internal RAM và PSRAM, trạng thái WiFi/Audio/Music/Xiaozhi, task count và CPU. Status bar cũng hiển thị RAM nội bộ còn trống.
 
 Status bar dùng giờ SNTP thật theo UTC+7 (`--:--` trước khi đồng bộ); uptime vẫn hiển thị riêng trong System Monitor. SNTP được yêu cầu bất đồng bộ sau khi WiFi có IP và đồng bộ lại khi reconnect, không ghi NVS mỗi giây.
 

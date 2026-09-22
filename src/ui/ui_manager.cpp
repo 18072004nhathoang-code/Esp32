@@ -16,6 +16,7 @@
 #include "../apps/music_app.h"
 #include "../apps/ai_voice_app.h"
 #include "../apps/camera_app.h"
+#include "../apps/health_app.h"
 #include "../audio/audio_manager.h"
 #include "../audio/music_player.h"
 #include "../ai/ai_voice_service.h"
@@ -28,6 +29,7 @@
 #include "../camera/camera_service.h"
 #include "service_state_logic.h"
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -81,6 +83,7 @@ static uint32_t applied_settings_revision = 0;
 static bool applying_settings_runtime = false;
 static QueueHandle_t app_open_queue = nullptr;
 static QueueHandle_t app_open_ack_queue = nullptr;
+static SemaphoreHandle_t app_open_rpc_mutex = nullptr;
 static uint32_t next_app_open_request_id = 0;
 
 enum AppID : uintptr_t {
@@ -96,6 +99,7 @@ enum AppID : uintptr_t {
     APP_AI_VOICE = 9,
     APP_CAMERA = 10,
     APP_POWER = 11,
+    APP_HEALTH = 12,
     APP_COLOR_TEST = 13,
     APP_TOUCH_DEBUG = 14
 };
@@ -121,6 +125,7 @@ static void open_music_app(void);
 static void open_ai_voice_app(void);
 static void open_camera_app(void);
 static void open_power_app(void);
+static void open_health_app(void);
 static void close_current_app(void);
 static void prepare_app_window(const char *title, AppID app_id);
 
@@ -156,6 +161,7 @@ static void app_icon_event_cb(lv_event_t *e)
         case APP_AI_VOICE:    open_ai_voice_app(); break;
         case APP_CAMERA:      open_camera_app(); break;
         case APP_POWER:       open_power_app(); break;
+        case APP_HEALTH:      open_health_app(); break;
         case APP_COLOR_TEST:  prepare_app_window("Display Diagnostic", APP_COLOR_TEST); ui_color_test_open(app_content_container); break;
         case APP_TOUCH_DEBUG: prepare_app_window("Touch Diagnostic", APP_TOUCH_DEBUG); ui_touch_debug_open(app_content_container); break;
         default: break;
@@ -327,6 +333,12 @@ static void create_status_bar(void)
     lv_obj_set_style_text_font(lbl_clock, UI_FONT_12, 0);
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 12, 0);
 
+    lbl_ram_pill = lv_label_create(status_bar);
+    lv_label_set_text(lbl_ram_pill, "RAM --K");
+    lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_TEXT_MUTED), 0);
+    lv_obj_set_style_text_font(lbl_ram_pill, UI_FONT_SMALL, 0);
+    lv_obj_align(lbl_ram_pill, LV_ALIGN_CENTER, -2, 0);
+
     // Bên phải: Cụm chỉ số tối giản (Speaker khi phát, WiFi, Pin)
     lv_obj_t *right_cluster = lv_obj_create(status_bar);
     lv_obj_set_size(right_cluster, 76, 20);
@@ -471,7 +483,7 @@ static void create_desktop(void)
     create_grid_app_icon(desktop_view, LV_SYMBOL_IMAGE,    "Display",   lv_color_hex(COLOR_ACCENT_RED),    APP_COLOR_TEST,  1, 2);
     create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch",     lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_DEBUG, 2, 2);
 
-    // 5. FLOATING BOTTOM DOCK (Chứa 4 app hay dùng: WiFi, Music, Maps, Camera)
+    // 5. FLOATING BOTTOM DOCK (5 app thường dùng, hit target 36x36px)
     dock_bar = lv_obj_create(desktop_view);
     const int dock_width = SCREEN_WIDTH - 12;
     lv_obj_set_size(dock_bar, dock_width, 44);
@@ -488,11 +500,13 @@ static void create_desktop(void)
     lv_obj_set_style_pad_all(dock_bar, 0, 0);
     lv_obj_clear_flag(dock_bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    const int dock_gap = (dock_width - 4 * DOCK_ICON_BOX_SIZE) / 5;
-    create_dock_icon(dock_bar, LV_SYMBOL_WIFI,  lv_color_hex(COLOR_ACCENT_GREEN),  APP_WIFI,   dock_gap);
-    create_dock_icon(dock_bar, LV_SYMBOL_AUDIO, lv_color_hex(COLOR_ACCENT_PURPLE), APP_MUSIC,  dock_gap * 2 + DOCK_ICON_BOX_SIZE);
-    create_dock_icon(dock_bar, LV_SYMBOL_GPS,   lv_color_hex(COLOR_ACCENT_RED),    APP_MAP,    dock_gap * 3 + DOCK_ICON_BOX_SIZE * 2);
-    create_dock_icon(dock_bar, LV_SYMBOL_IMAGE, lv_color_hex(0xFF006E),            APP_CAMERA, dock_gap * 4 + DOCK_ICON_BOX_SIZE * 3);
+    const int dock_count = 5;
+    const int dock_gap = (dock_width - dock_count * DOCK_ICON_BOX_SIZE) / (dock_count + 1);
+    create_dock_icon(dock_bar, LV_SYMBOL_WIFI,    lv_color_hex(COLOR_ACCENT_GREEN),  APP_WIFI,   dock_gap);
+    create_dock_icon(dock_bar, LV_SYMBOL_AUDIO,   lv_color_hex(COLOR_ACCENT_PURPLE), APP_MUSIC,  dock_gap * 2 + DOCK_ICON_BOX_SIZE);
+    create_dock_icon(dock_bar, LV_SYMBOL_GPS,     lv_color_hex(COLOR_ACCENT_RED),    APP_MAP,    dock_gap * 3 + DOCK_ICON_BOX_SIZE * 2);
+    create_dock_icon(dock_bar, LV_SYMBOL_IMAGE,   lv_color_hex(0xFF006E),            APP_CAMERA, dock_gap * 4 + DOCK_ICON_BOX_SIZE * 3);
+    create_dock_icon(dock_bar, LV_SYMBOL_REFRESH, lv_color_hex(COLOR_ACCENT_CYAN),   APP_HEALTH, dock_gap * 5 + DOCK_ICON_BOX_SIZE * 4);
 }
 
 /* =========================================================================
@@ -577,6 +591,7 @@ static void invalidate_active_app_widgets(void)
         case APP_MUSIC: music_app_close(); break;
         case APP_AI_VOICE: ai_voice_app_close(); break;
         case APP_CAMERA: camera_app_close(); break;
+        case APP_HEALTH: health_app_close(); break;
         case APP_COLOR_TEST: ui_color_test_close(); break;
         case APP_TOUCH_DEBUG: ui_touch_debug_close(); break;
         default: break;
@@ -1232,24 +1247,37 @@ static void open_camera_app(void)
     camera_app_open(app_content_container);
 }
 
+static void open_health_app(void)
+{
+    prepare_app_window("System Health", APP_HEALTH);
+    health_app_open(app_content_container);
+}
+
 bool ui_open_camera_app(void)
 {
-    if (!app_open_queue || !app_open_ack_queue) return false;
+    if (!app_open_queue || !app_open_ack_queue || !app_open_rpc_mutex) return false;
+    const TickType_t timeout = pdMS_TO_TICKS(1500);
+    if (xSemaphoreTake(app_open_rpc_mutex, timeout) != pdTRUE) return false;
+
+    bool opened = false;
     AppOpenAck stale = {};
     while (xQueueReceive(app_open_ack_queue, &stale, 0) == pdTRUE) {}
-    const TickType_t timeout = pdMS_TO_TICKS(1500);
     const TickType_t started = xTaskGetTickCount();
     const AppOpenRequest request = {APP_CAMERA, ++next_app_open_request_id, started + timeout};
-    if (xQueueSend(app_open_queue, &request, 0) != pdTRUE) return false;
-    AppOpenAck ack = {};
-    while (true)
+
+    if (xQueueSend(app_open_queue, &request, 0) == pdTRUE)
     {
-        const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
-        if (elapsed_ticks >= timeout) return false;
-        if (xQueueReceive(app_open_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE)
-            return false;
-        if (ack.request_id == request.request_id) return ack.opened;
+        AppOpenAck ack = {};
+        while (true)
+        {
+            const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
+            if (elapsed_ticks >= timeout) break;
+            if (xQueueReceive(app_open_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE) break;
+            if (ack.request_id == request.request_id) { opened = ack.opened; break; }
+        }
     }
+    xSemaphoreGive(app_open_rpc_mutex);
+    return opened;
 }
 
 /* =========================================================================
@@ -1259,6 +1287,7 @@ void ui_init(void)
 {
     if (!app_open_queue) app_open_queue = xQueueCreate(4, sizeof(AppOpenRequest));
     if (!app_open_ack_queue) app_open_ack_queue = xQueueCreate(4, sizeof(AppOpenAck));
+    if (!app_open_rpc_mutex) app_open_rpc_mutex = xSemaphoreCreateMutex();
     theme_accent = lv_color_hex(settings_service_get().accent_rgb);
     applied_settings_revision = settings_service_get_completion_revision();
     if (lvgl_port_lock(1000))
@@ -1347,6 +1376,16 @@ void ui_update_periodic(const SystemStats &stats)
         char clock_text[6] = "--:--";
         time_service_format_clock(clock_text, sizeof(clock_text));
         lv_label_set_text(lbl_clock, clock_text);
+    }
+
+    if (lbl_ram_pill)
+    {
+        lv_label_set_text_fmt(lbl_ram_pill, "RAM %uK", static_cast<unsigned>(stats.free_heap / 1024U));
+        const uint8_t free_percent = stats.total_heap
+            ? static_cast<uint8_t>((static_cast<uint64_t>(stats.free_heap) * 100U) / stats.total_heap) : 0;
+        lv_obj_set_style_text_color(lbl_ram_pill,
+            lv_color_hex(free_percent < 10 ? COLOR_ACCENT_RED :
+                         (free_percent < 20 ? COLOR_ACCENT_AMBER : COLOR_TEXT_MUTED)), 0);
     }
 
     // Cập nhật biểu tượng Loa (chỉ hiện khi đang phát âm thanh)
@@ -1491,6 +1530,7 @@ void ui_update_periodic(const SystemStats &stats)
     music_app_update();
     ai_voice_app_update();
     camera_app_update();
+    health_app_update(stats);
 
     lvgl_port_unlock();
 }

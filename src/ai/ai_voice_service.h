@@ -63,6 +63,7 @@ struct ChatMessage
 bool ai_voice_init(void);
 bool ai_voice_is_available(void);
 const char *ai_voice_get_last_error(void);
+bool ai_voice_copy_last_error(char *out, size_t out_size);
 
 /**
  * @brief Bắt đầu ghi âm từ Micro MEMS khi nhấn giữ nút Push-to-Talk

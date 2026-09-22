@@ -14,6 +14,7 @@
 #include <ArduinoJson.h>
 #include "service_state_logic.h"
 #include "music_decoder_lifecycle.h"
+#include "music_stream_logic.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -27,33 +28,6 @@
 #ifndef YOUTUBE_STREAM_ENDPOINT
 #define YOUTUBE_STREAM_ENDPOINT "http://192.168.1.28:8787/youtube/stream"
 #endif
-
-static void url_encode(const char *src, char *dst, size_t dst_size)
-{
-    if (!src || !dst || dst_size == 0) return;
-    static const char hex[] = "0123456789ABCDEF";
-    size_t d = 0;
-    for (size_t s = 0; src[s] && d + 4 < dst_size; ++s)
-    {
-        const unsigned char c = static_cast<unsigned char>(src[s]);
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~')
-        {
-            dst[d++] = c;
-        }
-        else if (c == ' ')
-        {
-            dst[d++] = '+';
-        }
-        else
-        {
-            dst[d++] = '%';
-            dst[d++] = hex[(c >> 4) & 0x0F];
-            dst[d++] = hex[c & 0x0F];
-        }
-    }
-    dst[d] = '\0';
-}
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
@@ -115,6 +89,7 @@ static SemaphoreHandle_t music_ai_action_mutex = nullptr;
 static MusicStreamSource stream_sources[8] = {};
 static size_t stream_source_count = 0;
 static char current_stream_source_id[32] = {};
+static char current_stream_url[256] = {};
 static uint32_t next_music_request_id = 0;
 static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
@@ -435,7 +410,8 @@ static void music_audio_task(void *pvParameters)
                                     {
                                     player_state.current_track_idx = idx;
                                     current_stream_source_id[0] = '\0';
-                                        player_state.total_duration_sec = playlist[idx].duration_sec;
+                                    current_stream_url[0] = '\0';
+                                    player_state.total_duration_sec = playlist[idx].duration_sec;
                                         player_state.current_time_sec = 0;
                                         player_state.is_playing = true;
                                         player_state.is_paused = false;
@@ -583,8 +559,7 @@ static void music_audio_task(void *pvParameters)
                 case MUSIC_CMD_PLAY_STREAM:
                 {
                     const bool is_https = (strncmp(cmd.filepath, "https://", 8) == 0);
-                    const bool is_http = (strncmp(cmd.filepath, "http://", 7) == 0);
-                    if (!is_http && (!is_https || AI_MUSIC_STREAM_CA_CERT[0] == '\0'))
+                    if (!music_stream_url_supported(cmd.filepath, AI_MUSIC_STREAM_CA_CERT[0] != '\0'))
                         break;
                     const bool newly_acquired = !music_owns_audio;
                     if (!acquire_music_audio()) break;
@@ -613,6 +588,7 @@ static void music_audio_task(void *pvParameters)
                                     player_state.current_track_idx = -1;
                                     strlcpy(current_stream_source_id, cmd.source_id,
                                             sizeof(current_stream_source_id));
+                                    strlcpy(current_stream_url, cmd.filepath, sizeof(current_stream_url));
                                     player_state.current_time_sec = 0;
                                     player_state.total_duration_sec = 0;
                                     player_state.is_playing = true;
@@ -1109,12 +1085,27 @@ bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeou
             {
                 cmd.type = MUSIC_CMD_PLAY_STREAM;
                 strlcpy(cmd.source_id, "youtube", sizeof(cmd.source_id));
-                char encoded[160] = {};
-                url_encode(action->query, encoded, sizeof(encoded));
-                snprintf(cmd.filepath, sizeof(cmd.filepath), "%s?q=%s",
-                         YOUTUBE_STREAM_ENDPOINT, encoded);
-                Serial.printf("[MUSIC_PLAYER] AI YouTube request: '%s' -> %s\n",
-                              action->query, cmd.filepath);
+                if (YOUTUBE_STREAM_ENDPOINT[0] == '\0')
+                {
+                    if (error && error_size) strlcpy(error, "Chưa cấu hình YOUTUBE_STREAM_ENDPOINT", error_size);
+                    xSemaphoreGive(music_ai_action_mutex);
+                    return false;
+                }
+                char encoded[sizeof(action->query) * 3U] = {};
+                if (!music_url_encode_query(action->query, encoded, sizeof(encoded)))
+                {
+                    if (error && error_size) strlcpy(error, "Từ khóa YouTube quá dài sau URL encode", error_size);
+                    xSemaphoreGive(music_ai_action_mutex);
+                    return false;
+                }
+                const int written = snprintf(cmd.filepath, sizeof(cmd.filepath), "%s?q=%s", YOUTUBE_STREAM_ENDPOINT, encoded);
+                if (written < 0 || static_cast<size_t>(written) >= sizeof(cmd.filepath))
+                {
+                    if (error && error_size) strlcpy(error, "YOUTUBE_STREAM_ENDPOINT quá dài", error_size);
+                    xSemaphoreGive(music_ai_action_mutex);
+                    return false;
+                }
+                Serial.printf("[MUSIC_PLAYER] AI YouTube request: '%s'\n", action->query);
             }
             else if (action->source_id[0])
             {
@@ -1184,6 +1175,7 @@ bool music_player_suspend_for_voice(MusicVoiceHandoff *handoff, uint32_t timeout
         handoff->position_sec = player_state.current_time_sec;
         handoff->is_stream = player_state.current_track_idx < 0;
         strlcpy(handoff->source_id, current_stream_source_id, sizeof(handoff->source_id));
+        strlcpy(handoff->stream_url, current_stream_url, sizeof(handoff->stream_url));
         xSemaphoreGive(audio_mutex);
     }
     if (!has_decoder)
@@ -1218,16 +1210,24 @@ bool music_player_restore_after_voice(const MusicVoiceHandoff *handoff, uint32_t
     MusicCommand play = {};
     if (handoff->is_stream)
     {
-        const MusicStreamSource *source = find_stream_source(handoff->source_id);
-        if (!source)
-        {
-            if (error && error_size) strlcpy(error, "Nguồn stream không còn khả dụng", error_size);
-            xSemaphoreGive(music_ai_action_mutex);
-            return false;
-        }
         play.type = MUSIC_CMD_PLAY_STREAM;
-        strlcpy(play.filepath, source->url, sizeof(play.filepath));
-        strlcpy(play.source_id, source->id, sizeof(play.source_id));
+        if (handoff->stream_url[0] && music_stream_url_supported(handoff->stream_url, AI_MUSIC_STREAM_CA_CERT[0] != '\0'))
+        {
+            strlcpy(play.filepath, handoff->stream_url, sizeof(play.filepath));
+            strlcpy(play.source_id, handoff->source_id, sizeof(play.source_id));
+        }
+        else
+        {
+            const MusicStreamSource *source = find_stream_source(handoff->source_id);
+            if (!source)
+            {
+                if (error && error_size) strlcpy(error, "Nguồn stream không còn khả dụng", error_size);
+                xSemaphoreGive(music_ai_action_mutex);
+                return false;
+            }
+            strlcpy(play.filepath, source->url, sizeof(play.filepath));
+            strlcpy(play.source_id, source->id, sizeof(play.source_id));
+        }
     }
     else
     {

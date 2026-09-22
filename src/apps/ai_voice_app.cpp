@@ -112,6 +112,16 @@ static void add_chat_bubble(const ChatMessage *msg)
     lv_obj_scroll_to_view(bubble, LV_ANIM_ON);
 }
 
+static void show_ai_error(lv_obj_t *label)
+{
+    if (!label) return;
+    char error[160] = {};
+    if (!ai_voice_copy_last_error(error, sizeof(error)) || error[0] == '\0')
+        strlcpy(error, "AI Voice chưa sẵn sàng", sizeof(error));
+    lv_label_set_text(label, error);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xFF5252), 0);
+}
+
 /* Callback xử lý sự kiện nút Push-to-Talk (Nhấn giữ để Nói, nhả ra để Gửi) */
 static void ptt_btn_event_cb(lv_event_t *e)
 {
@@ -184,8 +194,7 @@ static void ptt_btn_event_cb(lv_event_t *e)
             is_button_held = false;
             if (lbl_status_text)
             {
-                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
-                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+                show_ai_error(lbl_status_text);
             }
         }
     }
@@ -203,8 +212,7 @@ static void ptt_btn_event_cb(lv_event_t *e)
 
             if (!ai_voice_stop_and_process(AiVoiceStopReason::USER_RELEASE) && lbl_status_text)
             {
-                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
-                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+                show_ai_error(lbl_status_text);
             }
 
             // Trở về kiểu dáng bình thường
@@ -232,8 +240,7 @@ static void ptt_btn_event_cb(lv_event_t *e)
 
             if (!ai_voice_stop_and_process(AiVoiceStopReason::PRESS_LOST) && lbl_status_text)
             {
-                lv_label_set_text(lbl_status_text, ai_voice_get_last_error());
-                lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFF5252), 0);
+                show_ai_error(lbl_status_text);
             }
 
             // Trở về kiểu dáng bình thường

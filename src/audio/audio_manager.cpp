@@ -1696,6 +1696,11 @@ bool audio_manager_init(void)
     {
         Serial.println("[AUDIO] ❌ Không thể tạo Audio_Task trên Core 0!");
         audio_uninstall_duplex_driver();
+        if (psram_record_buf)
+        {
+            free(psram_record_buf);
+            psram_record_buf = nullptr;
+        }
         return false;
     }
 

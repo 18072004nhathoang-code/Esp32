@@ -970,6 +970,15 @@ bool ai_voice_init(void)
 
 bool ai_voice_is_available(void) { return s_task != nullptr && configuration_ready(); }
 const char *ai_voice_get_last_error(void) { return s_last_error; }
+bool ai_voice_copy_last_error(char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return false;
+    out[0] = '\0';
+    if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
+    strlcpy(out, s_last_error, out_size);
+    xSemaphoreGive(s_mutex);
+    return true;
+}
 
 bool ai_voice_start_recording(void)
 {
