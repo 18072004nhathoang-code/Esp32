@@ -83,7 +83,6 @@ static char s_device_id[18] = {};
 static char s_client_id[37] = {};
 static std::atomic<bool> s_server_hello{false};
 static char s_session_id[96] = {};
-static uint32_t s_downlink_rate = 16000;
 static xiaozhi::SessionPhaseTracker s_phase_tracker;
 static xiaozhi::PhaseDeadlines s_deadlines;
 static xiaozhi::SessionTiming s_timing;
@@ -122,7 +121,6 @@ static uint32_t s_record_control_request = 0;
 static uint8_t *s_inbound = nullptr;
 static int16_t *s_capture_frame = nullptr;
 static int16_t *s_decoded = nullptr;
-static int16_t *s_resampled = nullptr;
 static int16_t *s_capture_chunk = nullptr;
 static uint8_t *s_opus_packet = nullptr;
 static uint8_t *s_framed_packet = nullptr;
@@ -142,7 +140,6 @@ static uint32_t s_last_diagnostic_ms = 0;
 static xiaozhi::BackpressureWindow s_backpressure;
 
 static const size_t kDecodedCapacity = 5760;
-static const size_t kResampledCapacity = 1920;
 static const uint32_t kBackpressureTimeoutMs = 1200;
 static const uint32_t kCleanupTimeoutMs = 5000;
 static const size_t kCaptureFrameSamples = 960;
@@ -852,7 +849,6 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
             return false;
         }
         strlcpy(s_session_id, session, sizeof(s_session_id));
-        s_downlink_rate = rate;
         char codec_error[96] = {};
         if (!s_codec.setDownlinkSampleRate(rate, codec_error, sizeof(codec_error)))
         {
@@ -2069,7 +2065,6 @@ void release_service_allocations()
     heap_caps_free(s_inbound);
     heap_caps_free(s_capture_frame);
     heap_caps_free(s_decoded);
-    heap_caps_free(s_resampled);
     heap_caps_free(s_capture_chunk);
     heap_caps_free(s_opus_packet);
     heap_caps_free(s_framed_packet);
@@ -2080,7 +2075,6 @@ void release_service_allocations()
     s_inbound = nullptr;
     s_capture_frame = nullptr;
     s_decoded = nullptr;
-    s_resampled = nullptr;
     s_capture_chunk = nullptr;
     s_opus_packet = nullptr;
     s_framed_packet = nullptr;
@@ -2100,8 +2094,6 @@ bool ai_voice_init(void)
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_decoded = static_cast<int16_t *>(heap_caps_malloc(kDecodedCapacity * sizeof(int16_t),
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    s_resampled = static_cast<int16_t *>(heap_caps_malloc(kResampledCapacity * sizeof(int16_t),
-        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_capture_chunk = static_cast<int16_t *>(heap_caps_malloc(
         kCaptureChunkSamples * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_opus_packet = static_cast<uint8_t *>(heap_caps_malloc(
@@ -2110,7 +2102,7 @@ bool ai_voice_init(void)
         xiaozhi::kMaxOpusPacketBytes + 16U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!s_mutex || !s_commands || !s_mcp_jobs || !s_mcp_results ||
         !s_inbound || !s_capture_frame || !s_decoded ||
-        !s_resampled || !s_capture_chunk || !s_opus_packet || !s_framed_packet)
+        !s_capture_chunk || !s_opus_packet || !s_framed_packet)
     {
         strlcpy(s_last_error, "Thiếu RAM/mutex/queue cho Xiaozhi", sizeof(s_last_error));
         s_state = AI_STATE_ERROR;
