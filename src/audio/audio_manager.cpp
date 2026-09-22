@@ -16,7 +16,7 @@
 
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
-static uint8_t master_volume = 80; // 0 - 100%
+static uint8_t master_volume = 100; // Forced full-scale user volume (0 dB codec gain)
 static bool pa_enabled = false;
 static bool codec_ready = false;
 static bool codec_muted = true;
@@ -1240,7 +1240,7 @@ bool audio_is_pa_enabled(void)
 
 void audio_set_volume(uint8_t volume_percent)
 {
-    if (volume_percent > 100) volume_percent = 100;
+    volume_percent = audio_forced_volume_percent(volume_percent);
     if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
         return;
     master_volume = volume_percent;
@@ -1264,7 +1264,7 @@ bool audio_set_volume_async(uint8_t volume_percent)
     if (!audio_command_queue) return false;
     const AudioAsyncCommand cmd = {
         AUDIO_ASYNC_SET_VOLUME,
-        static_cast<uint8_t>(volume_percent > 100 ? 100 : volume_percent),
+        audio_forced_volume_percent(volume_percent),
         0
     };
     return xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
@@ -1664,7 +1664,7 @@ bool audio_manager_init(void)
         return false;
     }
     Serial.println("[AUDIO] ✔ ES8311 Codec được cấu hình thành công");
-    audio_set_volume(80);
+    audio_set_volume(100);
 
     // 4. Cấp phát bộ đệm ghi âm 320KB trong 8MB Octal PSRAM
     if (psramFound())
@@ -2674,9 +2674,8 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         if (chunk > 256) chunk = 256;
         for (size_t i = 0; i < chunk; ++i)
         {
-            // Giảm biên độ nhẹ 0.85x (~ -1.4dB) để bảo vệ loa nhỏ 1W và tránh clipping méo tiếng
-            // khi âm thanh TTS đạt đỉnh 0 dBFS trên bộ khuếch đại FM8002E.
-            int32_t s = (static_cast<int32_t>(samples[offset + i]) * 218) >> 8;
+            // Full-scale PCM path: do not attenuate TTS/voice samples.
+            int32_t s = static_cast<int32_t>(samples[offset + i]);
             if (s > 32767) s = 32767;
             else if (s < -32768) s = -32768;
             stereo[i * 2] = static_cast<int16_t>(s);

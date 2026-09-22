@@ -42,7 +42,7 @@ static MusicPlayerState player_state = {
     .total_tracks = 0,
     .current_time_sec = 0,
     .total_duration_sec = 0,
-    .volume = 80
+    .volume = 100
 };
 
 // Các lệnh điều khiển phát nhạc đa luồng gửi qua FreeRTOS Queue
@@ -543,7 +543,7 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
                     {
-                        player_state.volume = (uint8_t)cmd.param;
+                        player_state.volume = audio_forced_volume_percent((uint8_t)cmd.param);
                         audio_set_volume(player_state.volume);
                         if (audio && player_state.is_playing && !player_state.is_paused)
                             audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
@@ -987,7 +987,7 @@ bool music_player_seek(uint32_t sec)
 
 bool music_player_set_volume(uint8_t vol_percent)
 {
-    if (vol_percent > 100) vol_percent = 100;
+    vol_percent = audio_forced_volume_percent(vol_percent);
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_SET_VOLUME;

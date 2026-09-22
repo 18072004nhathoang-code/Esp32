@@ -56,6 +56,15 @@ constexpr uint8_t es8311_volume_register(uint8_t percent)
                                (0xBFU - 0x47U)) / 99U);
 }
 
+// This Mini OS build intentionally runs the speaker at full user-scale volume.
+// 100% maps to ES8311 unity gain (0 dB, register 0xBF), not the codec's
+// positive-gain region above unity.
+constexpr uint8_t audio_forced_volume_percent(uint8_t requested)
+{
+    (void)requested;
+    return 100U;
+}
+
 constexpr bool audio_session_cleanup_allowed(uint32_t cleanup_session, uint32_t active_session)
 {
     return cleanup_session != 0 && cleanup_session == active_session;

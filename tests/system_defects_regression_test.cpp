@@ -382,6 +382,10 @@ void test_music_stream_url_contracts()
     assert(music_playback_needs_storage(0));
     assert(music_playback_needs_storage(7));
     assert(!music_playback_needs_storage(-1));
+    assert(audio_forced_volume_percent(0) == 100);
+    assert(audio_forced_volume_percent(25) == 100);
+    assert(audio_forced_volume_percent(100) == 100);
+    assert(es8311_volume_register(audio_forced_volume_percent(0)) == 0xBF);
     printf("[PASS] test_music_stream_url_contracts\n");
 }
 

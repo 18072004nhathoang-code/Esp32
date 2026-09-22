@@ -154,7 +154,7 @@ bool audio_speaker_self_test_async(void);
 bool audio_speaker_self_test_is_running(void);
 
 /**
- * @brief Điều chỉnh âm lượng phát ra loa (0 - 100%)
+ * @brief Yêu cầu âm lượng loa. Bản build này luôn ép đầu ra về 100% (ES8311 unity/0 dB).
  */
 void audio_set_volume(uint8_t volume_percent);
 bool audio_set_volume_async(uint8_t volume_percent);
