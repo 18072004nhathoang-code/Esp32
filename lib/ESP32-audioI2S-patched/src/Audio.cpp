@@ -6389,7 +6389,11 @@ bool Audio::startAudioTask() {
         return false;
     }
 
-    if(xTaskCreate(&Audio::taskWrapper, "PeriodicTask", 3300, ctx, 4, &m_audioTaskHandle) != pdPASS) {
+    // Mini OS reserves Core 1 for LVGL. Keep decoder/I2S work on Core 0 so
+    // starting network music cannot compete with the UI render task at the
+    // same priority and make the touchscreen/display appear frozen.
+    if(xTaskCreatePinnedToCore(&Audio::taskWrapper, "PeriodicTask", 3300, ctx, 4,
+                               &m_audioTaskHandle, 0) != pdPASS) {
         delete ctx;
         m_f_audioTaskIsRunning = false;
         m_audioTaskHandle = nullptr;
@@ -6455,8 +6459,12 @@ void Audio::taskWrapper(void *param) {
 }
 
 void Audio::audioTask() {
+    log_i("PeriodicTask running on core %d", xPortGetCoreID());
+    const TickType_t period_ticks = pdMS_TO_TICKS(7);
     while (m_f_audioTaskIsRunning) {
-        vTaskDelay(7 / portTICK_PERIOD_MS);  // periodically every 7 ms
+        // Never allow integer conversion to turn the intended sleep into a
+        // zero-tick hot loop on a lower FreeRTOS tick rate.
+        vTaskDelay(period_ticks > 0 ? period_ticks : 1);
         performAudioTask();
     }
     const uint32_t exiting_generation = m_audioTaskExit.generation();
