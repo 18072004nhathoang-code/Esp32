@@ -504,8 +504,12 @@ void ai_voice_app_update(void)
     {
         if (state == AI_STATE_STARTING)
         {
-            lv_label_set_text(lbl_status_text, "Đang kết nối...");
-            lv_obj_set_style_text_color(lbl_status_text, lv_color_hex(0xFFB300), 0);
+            const bool connected = ai_voice_is_connected();
+            lv_label_set_text(lbl_status_text,
+                              connected ? "Đang mở microphone..." : "Đang kết nối...");
+            lv_obj_set_style_text_color(lbl_status_text,
+                                        connected ? lv_color_hex(0x00F2FE)
+                                                  : lv_color_hex(0xFFB300), 0);
         }
         else
         {

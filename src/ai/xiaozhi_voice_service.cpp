@@ -1764,11 +1764,17 @@ static bool do_preconnect()
     while (!elapsed(conn_deadline))
     {
         if (s_transport.connected()) break;
-        if (active_generation_snapshot() != 0 || !s_app_open)
+        const uint32_t active = active_generation_snapshot();
+        if (!s_app_open.load(std::memory_order_acquire) ||
+            (active != 0 && cancellation_requested(active)))
         {
+            s_transport.close();
             s_preconnect_generation = 0;
             return false;
         }
+        // If PTT starts while the socket is still connecting, keep this
+        // handshake alive. Restarting the WebSocket here adds several seconds
+        // of STARTING latency and can make the UI look permanently stuck.
         vTaskDelay(pdMS_TO_TICKS(15));
     }
 
@@ -1808,11 +1814,16 @@ static bool do_preconnect()
         s_transport.loop();
         process_inbound();
         if (s_server_hello) break;
-        if (active_generation_snapshot() != 0 || !s_app_open)
+        const uint32_t active = active_generation_snapshot();
+        if (!s_app_open.load(std::memory_order_acquire) ||
+            (active != 0 && cancellation_requested(active)))
         {
+            s_transport.close();
             s_preconnect_generation = 0;
             return false;
         }
+        // A PTT press during hello negotiation is a handoff request, not a
+        // reason to discard the almost-ready socket.
         vTaskDelay(pdMS_TO_TICKS(5));
     }
 
@@ -1824,9 +1835,28 @@ static bool do_preconnect()
         return false;
     }
 
+    const uint32_t handoff_generation = active_generation_snapshot();
+    if (handoff_generation != 0)
+    {
+        if (cancellation_requested(handoff_generation) ||
+            !s_transport.setGeneration(handoff_generation))
+        {
+            s_transport.close();
+            s_warm_connected = false;
+            s_server_hello = false;
+            s_session_id[0] = '\0';
+            s_preconnect_generation = 0;
+            return false;
+        }
+        log_i("Xiaozhi: [PRECONNECT_HANDOFF] socket -> PTT gen=%u",
+              static_cast<unsigned>(handoff_generation));
+    }
+    else
+    {
+        s_transport.setGeneration(0);
+    }
     s_warm_connected = true;
     s_idle_since_ms = millis();
-    s_transport.setGeneration(0);
     s_preconnect_generation = 0;
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
@@ -2283,8 +2313,9 @@ bool ai_voice_is_connected(void)
 bool ai_voice_preconnect(void)
 {
     s_app_open.store(true, std::memory_order_release);
-    if (s_task) xTaskNotifyGive(s_task);
-    return queue_command(CommandType::PRECONNECT, 0);
+    const bool queued = queue_command(CommandType::PRECONNECT, 0);
+    if (queued && s_task) xTaskNotifyGive(s_task);
+    return queued;
 }
 
 void ai_voice_on_app_closed(void)
@@ -2302,7 +2333,8 @@ const char *ai_voice_get_state_text(void)
     // with ai_voice_copy_state_text() to avoid cross-core data races.
     switch (ai_voice_get_state())
     {
-        case AI_STATE_STARTING: return "Đang kết nối Xiaozhi...";
+        case AI_STATE_STARTING:
+            return ai_voice_is_connected() ? "Đang mở microphone..." : "Đang kết nối Xiaozhi...";
         case AI_STATE_LISTENING: return "Đang nghe... Nhả nút để gửi";
         case AI_STATE_PROCESSING: return "Xiaozhi đang xử lý...";
         case AI_STATE_SPEAKING: return "Xiaozhi đang trả lời...";
@@ -2336,7 +2368,9 @@ bool ai_voice_copy_state_text(char *out, size_t out_size)
     const char *text = nullptr;
     switch (state)
     {
-        case AI_STATE_STARTING: text = "Đang kết nối Xiaozhi..."; break;
+        case AI_STATE_STARTING:
+            text = ai_voice_is_connected() ? "Đang mở microphone..." : "Đang kết nối Xiaozhi...";
+            break;
         case AI_STATE_LISTENING: text = "Đang nghe... Nhả nút để gửi"; break;
         case AI_STATE_PROCESSING: text = "Xiaozhi đang xử lý..."; break;
         case AI_STATE_SPEAKING: text = "Xiaozhi đang trả lời..."; break;
