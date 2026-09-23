@@ -741,8 +741,17 @@ bool audio_install_duplex_driver(void)
     return true;
 }
 
+// Bộ lọc âm học thời gian thực tối ưu giọng nói AI cho loa nhỏ:
+// 1. High-Pass filter (~100 Hz) triệt tiêu tiếng ù nền, DC offset và hiện tượng màng loa rung quá giới hạn
+// 2. Vocal clarity shaper: Tăng cường nhẹ dải tần trung-cao (~2.5 - 3.5 kHz) giúp phát âm tiếng Việt rõ ràng, thanh thoát
+// 3. Soft-knee saturation limiter: Làm tròn đỉnh biên độ cực đại, chống hiện tượng clipping méo vỡ tiếng khi âm lượng lớn
+static int32_t s_voice_hpf_x = 0;
+static int32_t s_voice_hpf_y = 0;
+
 bool audio_drain_tx(uint32_t timeout_ms)
 {
+    s_voice_hpf_x = 0;
+    s_voice_hpf_y = 0;
     if (timeout_ms == 0) return false;
     // Arduino-ESP32's legacy I2S API has no wait_tx_done. Queue a silence
     // marker behind all existing PCM, then allow the bounded DMA depth to run.
@@ -2674,12 +2683,32 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         if (chunk > 256) chunk = 256;
         for (size_t i = 0; i < chunk; ++i)
         {
-            // Full-scale PCM path: do not attenuate TTS/voice samples.
-            int32_t s = static_cast<int32_t>(samples[offset + i]);
-            if (s > 32767) s = 32767;
-            else if (s < -32768) s = -32768;
-            stereo[i * 2] = static_cast<int16_t>(s);
-            stereo[i * 2 + 1] = static_cast<int16_t>(s);
+            int32_t x = static_cast<int32_t>(samples[offset + i]);
+
+            // 1. Single-pole High-Pass Filter (alpha = 31/32 ~= 0.96875, fc ~= 80-120 Hz)
+            int32_t y = x - s_voice_hpf_x + ((31 * s_voice_hpf_y) >> 5);
+            int32_t delta = y - s_voice_hpf_y;
+            s_voice_hpf_x = x;
+            s_voice_hpf_y = y;
+
+            // 2. High-mid vocal presence emphasis (~1.5dB boost ở dải phát âm nguyên âm/phụ âm)
+            int32_t enhanced = y + (delta >> 3);
+
+            // 3. Soft saturation limiter (chống clipping méo tiếng)
+            if (enhanced > 30000)
+            {
+                enhanced = 30000 + ((enhanced - 30000) >> 2);
+                if (enhanced > 32767) enhanced = 32767;
+            }
+            else if (enhanced < -30000)
+            {
+                enhanced = -30000 + ((enhanced - -30000) >> 2);
+                if (enhanced < -32768) enhanced = -32768;
+            }
+
+            int16_t out_s = static_cast<int16_t>(enhanced);
+            stereo[i * 2] = out_s;
+            stereo[i * 2 + 1] = out_s;
         }
         if (!write_stereo_frames(stereo, chunk, timeout_ms))
         {

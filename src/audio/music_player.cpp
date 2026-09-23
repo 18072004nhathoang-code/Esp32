@@ -403,7 +403,9 @@ static void music_audio_task(void *pvParameters)
                                                   static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark()));
                                     const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                          AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
-                                    audio->setVolume(21); // unity in decoder; ES8311 owns user volume
+                                    audio->forceMono(true);   // Trộn stereo (L+R)/2 ra loa đơn để âm thanh dày và đầy đủ
+                                    audio->setTone(-3, 3, 1); // EQ acoustic: -3dB bass (chống rè loa nhỏ), +3dB mid (vocal rõ nét), +1dB treble (trong trẻo)
+                                    audio->setVolume(20);     // 1dB headroom an toàn chống méo tiếng / clipping
                                     audio_set_volume(player_state.volume);
 
                                     // Kết nối FS với khóa bảo vệ storage (Thứ tự khóa: audio_mutex TRƯỚC, storage_lock SAU -> Zero Deadlock)
@@ -589,7 +591,9 @@ static void music_audio_task(void *pvParameters)
                                 const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                      AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
                                 if (is_https) audio->setCACert(AI_MUSIC_STREAM_CA_CERT);
-                                audio->setVolume(21);
+                                audio->forceMono(true);   // Trộn stereo (L+R)/2 ra loa đơn để âm thanh dày và đầy đủ
+                                audio->setTone(-3, 3, 1); // EQ acoustic: -3dB bass (chống rè loa nhỏ), +3dB mid (vocal rõ nét), +1dB treble (trong trẻo)
+                                audio->setVolume(20);     // 1dB headroom an toàn chống méo tiếng / clipping
                                 audio_set_volume(player_state.volume);
                                 if (pins_ok && audio_codec_configure_for_stream(44100, 128) &&
                                     audio->connecttohost(cmd.filepath))
