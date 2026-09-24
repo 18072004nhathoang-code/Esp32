@@ -34,7 +34,8 @@ XiaozhiTransport::XiaozhiTransport()
     : websocket_(nullptr), uplink_queue_(nullptr), inbound_queue_(nullptr), rx_mutex_(nullptr),
       fragment_storage_(nullptr), fragment_assembler_(nullptr), connected_(false),
       connection_epoch_(0), generation_(0), dropped_uplink_(0), dropped_downlink_(0),
-      frames_sent_(0), bytes_sent_(0), last_audio_sent_ms_(0), inbound_bytes_(0), closing_(false)
+      stale_downlink_(0), frames_sent_(0), bytes_sent_(0), last_audio_sent_ms_(0),
+      inbound_bytes_(0), closing_(false)
 {
 }
 
@@ -263,7 +264,10 @@ bool XiaozhiTransport::queueAudio(const uint8_t *data, size_t size, uint32_t gen
     packet.size = static_cast<uint16_t>(size);
     memcpy(packet.data, data, size);
     if (xQueueSend(uplink_queue_, &packet, 0) != pdTRUE)
+    {
+        dropped_uplink_.fetch_add(1, std::memory_order_relaxed);
         return false;
+    }
     return true;
 }
 
@@ -292,6 +296,7 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     if (gen == 0)
     {
         // Detached or idle between turns; drop late callbacks to prevent polluting future turns
+        stale_downlink_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     const size_t allocation = sizeof(InboundMessage) + size;
@@ -356,7 +361,10 @@ void XiaozhiTransport::clearInbound()
     while (xQueueReceive(inbound_queue_, &message, 0) == pdTRUE)
     {
         if (message)
+        {
             inbound_bytes_.fetch_sub(sizeof(InboundMessage) + message->size, std::memory_order_acq_rel);
+            stale_downlink_.fetch_add(1, std::memory_order_relaxed);
+        }
         free(message);
     }
 }

@@ -89,7 +89,7 @@ void health_app_update(const SystemStats &stats)
             min_stack=health.tasks[i].stack_free_bytes;
     if(min_stack==UINT32_MAX)min_stack=0;
     if(s_services)lv_label_set_text_fmt(s_services,
-        "WiFi %s • Audio %s\nMusic %s • Xiaozhi %s\nQ %lu/%lu • drops %lu/%lu\nStack %uK • LVGL %uK/%u%%",
+        "WiFi %s • Audio %s\nMusic %s • Xiaozhi %s\nQ %lu/%lu • drops %lu/%lu/%lu\nStack %uK • LVGL %uK/%u%%",
         wifi_manager_is_connected()?"OK":"OFF",owner_name(audio_get_current_owner()),
         music_player_is_playing()?"PLAY":(music_player_is_paused()?"PAUSE":"IDLE"),
         voice_state,
@@ -97,6 +97,7 @@ void health_app_update(const SystemStats &stats)
         (unsigned long)health.voice_inbound_queue_depth,
         (unsigned long)health.voice_uplink_drops,
         (unsigned long)health.voice_inbound_drops,
+        (unsigned long)health.voice_stale_inbound_drops,
         (unsigned)(min_stack/1024U),
         (unsigned)(health.lvgl_free_bytes/1024U),
         (unsigned)health.lvgl_fragmentation_percent);

@@ -9,8 +9,9 @@
 #include "../storage/storage_manager.h"
 #include "service_state_logic.h"
 #include "firmware_contracts.h"
+#include <atomic>
 
-static bool s_cache_ready = false;
+static std::atomic<bool> s_cache_ready{false};
 
 static bool sd_acquire_bus(uint32_t timeout_ms = 1000)
 {
@@ -92,7 +93,7 @@ static void recover_cache_suffix_locked(fs::FS &fs, const char *suffix)
 
 bool sd_map_cache_init(void)
 {
-    s_cache_ready = false;
+    s_cache_ready.store(false, std::memory_order_release);
     if (!storage_is_available())
     {
         Serial.println("[SD_CACHE] Đang khởi tạo thẻ nhớ MicroSD FAT32...");
@@ -121,14 +122,14 @@ bool sd_map_cache_init(void)
     }
 
     sd_release_bus();
-    s_cache_ready = ready;
+    s_cache_ready.store(ready, std::memory_order_release);
     if (!ready) Serial.println("[SD_CACHE] ⚠️ Không thể tạo/xác minh thư mục /maps!");
     return ready;
 }
 
 bool sd_map_cache_is_available(void)
 {
-    return storage_is_available() && s_cache_ready;
+    return storage_is_available() && s_cache_ready.load(std::memory_order_acquire);
 }
 
 void sd_map_cache_get_filename(char *out_path, size_t max_len, double lat, double lon, int zoom, const char *maptype)

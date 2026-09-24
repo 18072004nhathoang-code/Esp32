@@ -6,8 +6,9 @@
 #include "storage_manager.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include <atomic>
 
-static bool s_storage_ready = false;
+static std::atomic<bool> s_storage_ready{false};
 static SemaphoreHandle_t s_storage_mutex = nullptr;
 
 bool storage_lock(uint32_t timeout_ms)
@@ -26,7 +27,7 @@ void storage_unlock(void)
 
 bool storage_init(void)
 {
-    if (s_storage_ready) return true;
+    if (s_storage_ready.load(std::memory_order_acquire)) return true;
 
     if (!s_storage_mutex)
     {
@@ -48,7 +49,7 @@ bool storage_init(void)
     {
         uint64_t total_mb = SD_MMC.cardSize() / (1024 * 1024);
         Serial.printf("[STORAGE] ✔ Thẻ MicroSD SDMMC 4-bit sẵn sàng: %llu MB FAT32\n", total_mb);
-        s_storage_ready = true;
+        s_storage_ready.store(true, std::memory_order_release);
         return true;
     }
 
@@ -59,18 +60,18 @@ bool storage_init(void)
     {
         uint64_t total_mb = SD_MMC.cardSize() / (1024 * 1024);
         Serial.printf("[STORAGE] ✔ Thẻ MicroSD SDMMC 1-bit sẵn sàng: %llu MB FAT32\n", total_mb);
-        s_storage_ready = true;
+        s_storage_ready.store(true, std::memory_order_release);
         return true;
     }
 
     Serial.println("[STORAGE] ⚠️ Không phát hiện thẻ nhớ SD qua giao diện SDMMC.");
-    s_storage_ready = false;
+    s_storage_ready.store(false, std::memory_order_release);
     return false;
 }
 
 bool storage_is_available(void)
 {
-    return s_storage_ready;
+    return s_storage_ready.load(std::memory_order_acquire);
 }
 
 fs::FS& storage_get_fs(void)
@@ -80,12 +81,12 @@ fs::FS& storage_get_fs(void)
 
 uint64_t storage_get_total_mb(void)
 {
-    if (!s_storage_ready) return 0;
+    if (!s_storage_ready.load(std::memory_order_acquire)) return 0;
     return SD_MMC.cardSize() / (1024 * 1024);
 }
 
 uint64_t storage_get_free_mb(void)
 {
-    if (!s_storage_ready) return 0;
+    if (!s_storage_ready.load(std::memory_order_acquire)) return 0;
     return (SD_MMC.totalBytes() - SD_MMC.usedBytes()) / (1024 * 1024);
 }

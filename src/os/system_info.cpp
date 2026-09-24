@@ -132,6 +132,7 @@ RuntimeHealthSnapshot system_get_runtime_health(void)
     health.voice_inbound_queue_depth = voice.inbound_depth;
     health.voice_uplink_drops = voice.uplink_drops;
     health.voice_inbound_drops = voice.inbound_drops;
+    health.voice_stale_inbound_drops = voice.stale_inbound_drops;
     health.lvgl_stats_available = lvgl_port_get_memory_stats(
         &health.lvgl_free_bytes, &health.lvgl_largest_free_bytes,
         &health.lvgl_fragmentation_percent);

@@ -30,6 +30,8 @@ public:
     uint32_t generation() const { return generation_.load(std::memory_order_acquire); }
     uint32_t droppedUplink() const { return dropped_uplink_.load(std::memory_order_relaxed); }
     uint32_t droppedDownlink() const { return dropped_downlink_.load(std::memory_order_relaxed); }
+    uint32_t staleDownlink() const { return stale_downlink_.load(std::memory_order_relaxed); }
+    void recordStaleDownlink() { stale_downlink_.fetch_add(1, std::memory_order_relaxed); }
     size_t uplinkPending() const;
     size_t uplinkCapacity() const { return 8; }
     bool inFlight() const { return in_flight_started_ms_ != 0; }
@@ -80,6 +82,7 @@ private:
     std::atomic<uint32_t> generation_;
     std::atomic<uint32_t> dropped_uplink_;
     std::atomic<uint32_t> dropped_downlink_;
+    std::atomic<uint32_t> stale_downlink_;
     std::atomic<uint32_t> frames_sent_;
     std::atomic<uint32_t> bytes_sent_;
     std::atomic<uint32_t> last_audio_sent_ms_;

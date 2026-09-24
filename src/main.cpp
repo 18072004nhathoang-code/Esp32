@@ -325,7 +325,7 @@ void loop()
                 max_heartbeat_age = max(max_heartbeat_age, health.tasks[i].heartbeat_age_ms);
             }
             if (min_stack == UINT32_MAX) min_stack = 0;
-            Serial.printf("[HEALTH] int_free=%u int_min=%u int_largest=%u psram_free=%u psram_min=%u psram_largest=%u stack_min=%u heartbeat_max=%u lvgl_free=%u lvgl_largest=%u lvgl_frag=%u queues=%u/%u drops=%u/%u\n",
+            Serial.printf("[HEALTH] int_free=%u int_min=%u int_largest=%u psram_free=%u psram_min=%u psram_largest=%u stack_min=%u heartbeat_max=%u lvgl_free=%u lvgl_largest=%u lvgl_frag=%u queues=%u/%u drops=%u/%u stale=%u\n",
                           static_cast<unsigned>(health.internal_free_bytes),
                           static_cast<unsigned>(health.internal_min_free_bytes),
                           static_cast<unsigned>(health.internal_largest_free_bytes),
@@ -340,7 +340,8 @@ void loop()
                           static_cast<unsigned>(health.voice_uplink_queue_depth),
                           static_cast<unsigned>(health.voice_inbound_queue_depth),
                           static_cast<unsigned>(health.voice_uplink_drops),
-                          static_cast<unsigned>(health.voice_inbound_drops));
+                          static_cast<unsigned>(health.voice_inbound_drops),
+                          static_cast<unsigned>(health.voice_stale_inbound_drops));
         }
 
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)

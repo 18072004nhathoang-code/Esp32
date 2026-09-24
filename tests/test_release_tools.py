@@ -26,7 +26,7 @@ def health_line(**overrides: int) -> str:
     }
     fields.update(overrides)
     scalar = " ".join(f"{key}={value}" for key, value in fields.items())
-    return f"[HEALTH] {scalar} lvgl_free=65536 queues=0/0 drops=0/0\n"
+    return f"[HEALTH] {scalar} lvgl_free=65536 queues=0/0 drops=0/0 stale=0\n"
 
 
 class HilMonitorTests(unittest.TestCase):
@@ -36,6 +36,7 @@ class HilMonitorTests(unittest.TestCase):
         sample = parse_health(text)[0]
         self.assertEqual(sample["queues_uplink"], 0)
         self.assertEqual(sample["queues_inbound"], 0)
+        self.assertEqual(sample["stale"], 0)
 
     def test_fatal_signature_is_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "fatal serial signature"):

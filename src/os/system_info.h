@@ -57,6 +57,7 @@ struct RuntimeHealthSnapshot {
     uint32_t voice_inbound_queue_depth;
     uint32_t voice_uplink_drops;
     uint32_t voice_inbound_drops;
+    uint32_t voice_stale_inbound_drops;
     uint8_t lvgl_fragmentation_percent;
     bool lvgl_stats_available;
     RuntimeTaskHealth tasks[RUNTIME_TASK_COUNT];

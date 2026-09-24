@@ -1042,7 +1042,11 @@ void process_inbound()
                                &size, &generation))
     {
         ++processed;
-        if (!current_generation(generation)) continue;
+        if (!current_generation(generation))
+        {
+            s_transport.recordStaleDownlink();
+            continue;
+        }
         const bool ok = kind == XiaozhiInboundKind::TEXT
             ? handle_text_message(s_inbound, size, generation)
             : handle_audio_message(s_inbound, size, generation);
@@ -2325,7 +2329,8 @@ AiVoiceQueueHealth ai_voice_get_queue_health(void)
         static_cast<uint32_t>(s_transport.uplinkPending()),
         static_cast<uint32_t>(s_transport.inboundPending()),
         s_transport.droppedUplink(),
-        s_transport.droppedDownlink()
+        s_transport.droppedDownlink(),
+        s_transport.staleDownlink()
     };
 }
 

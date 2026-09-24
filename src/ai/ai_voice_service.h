@@ -63,6 +63,7 @@ struct AiVoiceQueueHealth
     uint32_t inbound_depth;
     uint32_t uplink_drops;
     uint32_t inbound_drops;
+    uint32_t stale_inbound_drops;
 };
 
 /**
