@@ -66,6 +66,23 @@ class HilMonitorTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "unexpected reset"):
             validate(boot + health_line() + boot, 60)
 
+    def test_hil_can_require_fresh_boot_exact_revision_and_environment(self) -> None:
+        boot = (
+            "[BOOT] Commit: abcdef123456\n"
+            "[BOOT] Capability: chip=ESP32-S3 memory=PASS partitions=PASS\n"
+        )
+        validate(boot + health_line(), 60, expected_revision="abcdef123456",
+                 require_fresh_boot=True, expect_music_stress=False)
+        with self.assertRaisesRegex(SystemExit, "fresh boot report"):
+            validate(health_line(), 60, require_fresh_boot=True)
+        with self.assertRaisesRegex(SystemExit, "firmware revision mismatch"):
+            validate(boot + health_line(), 60, expected_revision="000000000000")
+        with self.assertRaisesRegex(SystemExit, "music-stress firmware"):
+            validate(boot + health_line() + "[HW_STRESS] START\n", 60,
+                     expect_music_stress=False)
+        with self.assertRaisesRegex(SystemExit, "release firmware"):
+            validate(boot + health_line(), 60, expect_music_stress=True)
+
     def test_stale_heartbeat_is_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "task heartbeat stalled"):
             validate(health_line(heartbeat_max=15001), 60)

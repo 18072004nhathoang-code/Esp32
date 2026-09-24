@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-from hil_common import capture, validate, validate_event_counts
+from hil_common import capture, current_git_revision, validate, validate_event_counts
 
 
 def main() -> int:
@@ -16,10 +16,13 @@ def main() -> int:
     parser.add_argument("--wifi-recoveries", type=int, default=20)
     parser.add_argument("--map-cycles", type=int, default=100)
     parser.add_argument("--camera-cycles", type=int, default=100)
+    parser.add_argument("--revision", default="")
     args = parser.parse_args()
     print("Exercise AP loss/recovery, map refresh and camera open/close during this window.")
     text = capture(args.port, args.baud, args.duration, args.output)
-    validate(text, args.duration)
+    validate(text, args.duration,
+             expected_revision=args.revision or current_git_revision(),
+             require_fresh_boot=True, expect_music_stress=False)
     validate_event_counts(text, {
         "wifi_loss": args.wifi_recoveries,
         "wifi_recovery": args.wifi_recoveries,

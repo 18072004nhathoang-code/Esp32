@@ -4,7 +4,8 @@
 import argparse
 from pathlib import Path
 
-from hil_common import capture, parse_health, validate, validate_event_counts
+from hil_common import (capture, current_git_revision, parse_health, validate,
+                        validate_event_counts)
 
 
 # Release firmware task IDs 0..12. MusicStress (ID 13) belongs only to the
@@ -19,12 +20,15 @@ def main() -> int:
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--output", type=Path, default=Path("hil-acceptance.log"))
     parser.add_argument("--voice-sessions", type=int, default=20)
+    parser.add_argument("--revision", default="")
     args = parser.parse_args()
     print("Run the full checklist in docs/RELEASE_CHECKLIST.md during this window.")
     print("Required short-lived tasks: save Settings, export one recording to SD, "
           "and complete the speaker self-test.")
     text = capture(args.port, args.baud, args.duration, args.output)
-    validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK)
+    validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK,
+             expected_revision=args.revision or current_git_revision(),
+             require_fresh_boot=True, expect_music_stress=False)
     validate_event_counts(text, {
         "voice_start": args.voice_sessions,
         "voice_listening": args.voice_sessions,

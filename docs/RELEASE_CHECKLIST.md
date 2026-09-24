@@ -46,6 +46,11 @@ are not release features.
   Xiaozhi sessions to reach listening, receive STT/TTS and complete. Faults
   deliberately injected to prove retryable cleanup remain visible in the
   lifetime counters but do not invalidate otherwise successful recovery.
+- Every soak monitor checks the boot revision against the current twelve-digit
+  Git revision by default, requires exactly one fresh boot report, rejects an
+  unexpected reset and rejects the wrong release/music-stress environment. Use
+  `--revision` only when intentionally validating an artifact from another
+  known commit.
 - Exercise every release task at least once before ending the soak. In
   particular, change and save one Settings value (ID 10), record audio and use
   the UI action that exports the WAV to SD (ID 11), and run the speaker

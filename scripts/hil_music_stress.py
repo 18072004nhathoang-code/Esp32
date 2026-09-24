@@ -5,7 +5,7 @@ import argparse
 import re
 from pathlib import Path
 
-from hil_common import capture, validate
+from hil_common import capture, current_git_revision, validate
 
 
 MUSIC_STRESS_TASK_MASK = 1 << 13
@@ -26,10 +26,13 @@ def main() -> int:
     parser.add_argument("--duration", type=int, default=1840)
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--output", type=Path, default=Path("hil-music-stress.log"))
+    parser.add_argument("--revision", default="")
     args = parser.parse_args()
 
     text = capture(args.port, args.baud, args.duration, args.output)
-    validate(text, args.duration, required_tasks_mask=MUSIC_STRESS_TASK_MASK)
+    validate(text, args.duration, required_tasks_mask=MUSIC_STRESS_TASK_MASK,
+             expected_revision=args.revision or current_git_revision(),
+             require_fresh_boot=True, expect_music_stress=True)
     if "[HW_STRESS] FAIL" in text:
         raise SystemExit("music stress firmware reported a failure")
     music_fatal = MUSIC_FATAL.search(text)

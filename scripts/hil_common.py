@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import time
 from pathlib import Path
+from typing import Optional
 
 FATAL = re.compile(
     r"Guru Meditation|Core \d panic|Task watchdog|TASK_WDT|INT_WDT|"
@@ -15,6 +17,17 @@ FATAL = re.compile(
 HEALTH = re.compile(r"\[HEALTH\]\s+(.*)")
 HEALTH_EVENTS = re.compile(r"\[HEALTH_EVENTS\]\s+(.*)")
 BOOT_CAPABILITY = re.compile(r"\[BOOT\] Capability:")
+
+
+def current_git_revision() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise SystemExit("cannot determine expected firmware revision from Git") from error
 
 
 def capture(port: str, baud: int, duration: int, output: Path) -> str:
@@ -73,12 +86,26 @@ def validate_event_counts(text: str, required: dict[str, int]) -> None:
             )
 
 
-def validate(text: str, duration: int, required_tasks_mask: int = 0) -> None:
+def validate(text: str, duration: int, required_tasks_mask: int = 0,
+             expected_revision: str = "", require_fresh_boot: bool = False,
+             expect_music_stress: Optional[bool] = None) -> None:
     fatal = FATAL.search(text)
     if fatal:
         raise SystemExit(f"fatal serial signature: {fatal.group(0)}")
-    if len(BOOT_CAPABILITY.findall(text)) > 1:
+    boot_reports = len(BOOT_CAPABILITY.findall(text))
+    if boot_reports > 1:
         raise SystemExit("unexpected reset: boot capability report repeated during soak")
+    if require_fresh_boot and boot_reports != 1:
+        raise SystemExit(f"fresh boot report count is {boot_reports}; expected exactly one")
+    if expected_revision and f"[BOOT] Commit: {expected_revision}" not in text:
+        raise SystemExit(
+            f"firmware revision mismatch: expected boot revision {expected_revision}"
+        )
+    stress_installed = "[HW_STRESS]" in text
+    if expect_music_stress is True and not stress_installed:
+        raise SystemExit("release firmware is installed instead of music-stress firmware")
+    if expect_music_stress is False and stress_installed:
+        raise SystemExit("music-stress firmware is installed instead of release firmware")
     samples = parse_health(text)
     minimum_samples = max(1, duration // 60)
     if len(samples) < minimum_samples:
