@@ -97,6 +97,10 @@ export function streamYouTubeAudio(query,req,res,config={}){
       clearTimeout(fetchTimer);
       if(!upstream.ok){
         res.removeListener("close",abortUpstream); req.removeListener("aborted",abortUpstream);
+        // A rejected fetch can still carry a response body. Explicitly cancel
+        // it so undici does not retain the upstream socket/body while the ESP32
+        // retries a deterministic JSON error.
+        if(upstream.body) await upstream.body.cancel().catch(()=>{});
         console.error(`[YOUTUBE] Upstream returned status ${upstream.status}`);
         return sendError(res,502,"UPSTREAM_REJECTED","Máy chủ âm thanh YouTube từ chối yêu cầu");
       }

@@ -38,6 +38,17 @@ test("mocked yt-dlp and fetch preserve Range/206",async()=>{const child=spawnFix
 
 test("mocked HEAD resolves metadata without a response body",async()=>{const child=spawnFixture();let seenMethod="";const base=await start({spawnImpl:child.spawnImpl,fetchImpl:async(_url,options)=>{seenMethod=options.method;return new Response(null,{status:200,headers:{"content-type":"audio/mp4","content-length":"42"}});}},streamYouTubeAudio);const res=await fetch(`${base}/youtube/stream?q=test`,{method:"HEAD"});assert.equal(res.status,200);assert.equal(seenMethod,"HEAD");assert.equal(res.headers.get("content-length"),"42");assert.equal(await res.text(),"");});
 
+test("rejected upstream response body is canceled",async()=>{
+  const child=spawnFixture();let canceled=false;
+  const body=new ReadableStream({cancel(){canceled=true;}});
+  const base=await start({spawnImpl:child.spawnImpl,fetchImpl:async()=>
+    new Response(body,{status:403,headers:{"content-type":"text/plain"}})},streamYouTubeAudio);
+  const res=await fetch(`${base}/youtube/stream?q=denied`);
+  assert.equal(res.status,502);
+  assert.equal((await res.json()).error.code,"UPSTREAM_REJECTED");
+  assert.equal(canceled,true);
+});
+
 test("mocked yt-dlp failure returns deterministic JSON",async()=>{const child=spawnFixture({stdout:"",stderr:"not found",code:1});const base=await start({spawnImpl:child.spawnImpl},streamYouTubeAudio);const res=await fetch(`${base}/youtube/stream?q=missing`);assert.equal(res.status,502);assert.equal((await res.json()).error.code,"YTDLP_FAILED");});
 
 test("yt-dlp failure logs never expose signed media URLs",async()=>{
