@@ -38,6 +38,13 @@ int main()
     assert(es8311_volume_register(0) == 0);
     assert(es8311_volume_register(100) == 0xBF);
     assert(es8311_volume_register(50) < 0xBF);
+    assert(psram_profile_matches(8U * 1024U * 1024U, 8));
+    assert(psram_profile_matches(8U * 1024U * 1024U - 2048U, 8));
+    assert(psram_profile_matches(8U * 1024U * 1024U - 64U * 1024U, 8));
+    assert(!psram_profile_matches(8U * 1024U * 1024U - 64U * 1024U - 1U, 8));
+    assert(!psram_profile_matches(4U * 1024U * 1024U, 8));
+    assert(!psram_profile_matches(16U * 1024U * 1024U, 8));
+    assert(rounded_mib(8U * 1024U * 1024U - 2048U) == 8U);
     assert(audio_session_cleanup_allowed(7, 7));
     assert(!audio_session_cleanup_allowed(6, 7));
 

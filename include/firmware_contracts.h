@@ -24,6 +24,21 @@ constexpr bool bounded_body_append_allowed(size_t current, size_t incoming, size
     return current <= limit && incoming <= limit - current;
 }
 
+// Arduino-ESP32 reports the allocatable PSRAM span, which can be a few KiB
+// below the package capacity because the SDK reserves metadata.  Accept only
+// that small reservation, never a smaller (for example 4 MiB) module.
+constexpr bool psram_profile_matches(uint32_t actual_bytes, uint32_t target_mib)
+{
+    return actual_bytes <= static_cast<uint64_t>(target_mib) * 1024U * 1024U &&
+           static_cast<uint64_t>(actual_bytes) + 64U * 1024U >=
+               static_cast<uint64_t>(target_mib) * 1024U * 1024U;
+}
+
+constexpr uint32_t rounded_mib(uint32_t bytes)
+{
+    return (bytes + 512U * 1024U) / (1024U * 1024U);
+}
+
 // Valid for deadlines no more than INT32_MAX milliseconds into the future.
 // Signed subtraction preserves ordering when Arduino millis() wraps at 2^32.
 constexpr bool millis_deadline_reached(uint32_t now_ms, uint32_t deadline_ms)

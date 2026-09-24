@@ -1162,7 +1162,7 @@ bool wifi_manager_init(void)
     BaseType_t created = xTaskCreatePinnedToCore(
         wifi_service_task,
         "WiFi_Task",
-        4 * 1024,
+        6 * 1024, // Hardware high-water at 4 KiB was <1 KiB; retain >2 KiB margin.
         nullptr,
         2,
         &wifi_task_handle,

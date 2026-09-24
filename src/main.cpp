@@ -147,9 +147,10 @@ void setup()
     esp_chip_info_t chip_info = {};
     esp_chip_info(&chip_info);
     Serial.printf("[BOOT] MCU: %s @ %u MHz\n", BOARD_PROFILE_MCU, init_stats.cpu_freq_mhz);
-    Serial.printf("[BOOT] Flash: %u MB (Target: %d MB) | PSRAM: %u MB (Target: %d MB)\n",
+    Serial.printf("[BOOT] Flash: %u MB (Target: %d MB) | PSRAM: %u MB (%u bytes, Target: %d MB)\n",
                   init_stats.flash_size_mb, BOARD_PROFILE_FLASH_MB,
-                  init_stats.total_psram / (1024 * 1024), BOARD_PROFILE_PSRAM_MB);
+                  rounded_mib(init_stats.total_psram), init_stats.total_psram,
+                  BOARD_PROFILE_PSRAM_MB);
     Serial.printf("[BOOT] Total SRAM: %u KB (Free: %u KB)\n", init_stats.total_heap / 1024, init_stats.free_heap / 1024);
     Serial.printf("[BOOT] Temperature: %.1f °C\n", init_stats.core_temp_c);
     Serial.printf("[HW] Board Profile: %s\n", BOARD_PROFILE_NAME);
@@ -157,7 +158,7 @@ void setup()
     const bool chip_ok = chip_info.model == CHIP_ESP32S3;
     const bool profile_memory_ok = chip_ok &&
         init_stats.flash_size_mb == BOARD_PROFILE_FLASH_MB &&
-        init_stats.total_psram == static_cast<uint32_t>(BOARD_PROFILE_PSRAM_MB) * 1024U * 1024U;
+        psram_profile_matches(init_stats.total_psram, BOARD_PROFILE_PSRAM_MB);
     const esp_partition_t *core_dump = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
     const bool partitions_ok =
@@ -320,11 +321,16 @@ void loop()
             uint32_t max_heartbeat_age = 0;
             uint32_t tasks_seen = 0;
             uint32_t tasks_active = 0;
+            uint8_t min_stack_task = RUNTIME_TASK_COUNT;
             for (uint8_t i = 0; i < RUNTIME_TASK_COUNT; ++i)
             {
                 if (!health.tasks[i].seen) continue;
                 tasks_seen |= 1UL << i;
-                min_stack = min(min_stack, health.tasks[i].stack_free_bytes);
+                if (health.tasks[i].stack_free_bytes < min_stack)
+                {
+                    min_stack = health.tasks[i].stack_free_bytes;
+                    min_stack_task = i;
+                }
                 if (health.tasks[i].active)
                 {
                     tasks_active |= 1UL << i;
@@ -351,6 +357,24 @@ void loop()
                           static_cast<unsigned>(health.voice_uplink_drops),
                           static_cast<unsigned>(health.voice_inbound_drops),
                           static_cast<unsigned>(health.voice_stale_inbound_drops));
+            Serial.printf("[HEALTH_TASK_MIN] id=%u name=%s stack_free=%u active=%u\n",
+                          static_cast<unsigned>(min_stack_task),
+                          min_stack_task < RUNTIME_TASK_COUNT
+                              ? runtime_health_task_name(static_cast<RuntimeTaskId>(min_stack_task))
+                              : "None",
+                          static_cast<unsigned>(min_stack),
+                          min_stack_task < RUNTIME_TASK_COUNT && health.tasks[min_stack_task].active
+                              ? 1U : 0U);
+            for (uint8_t i = 0; i < RUNTIME_TASK_COUNT; ++i)
+            {
+                if (!health.tasks[i].seen) continue;
+                Serial.printf("[HEALTH_TASK] id=%u name=%s stack_free=%u heartbeat_age=%u active=%u\n",
+                              static_cast<unsigned>(i),
+                              runtime_health_task_name(static_cast<RuntimeTaskId>(i)),
+                              static_cast<unsigned>(health.tasks[i].stack_free_bytes),
+                              static_cast<unsigned>(health.tasks[i].heartbeat_age_ms),
+                              health.tasks[i].active ? 1U : 0U);
+            }
         }
 
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)

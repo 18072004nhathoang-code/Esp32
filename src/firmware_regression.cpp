@@ -29,6 +29,10 @@ static_assert(exclusive_start_can_claim(0, 0), "idle audio start may claim");
 static_assert(!exclusive_start_can_claim(1, 0), "concurrent audio start rejected");
 static_assert(es8311_volume_register(0) == 0, "zero volume is hardware mute");
 static_assert(es8311_volume_register(100) == 0xBF, "100 percent stays at codec unity");
+static_assert(psram_profile_matches(8U * 1024U * 1024U - 2048U, 8),
+              "SDK PSRAM reservation accepted");
+static_assert(!psram_profile_matches(4U * 1024U * 1024U, 8),
+              "wrong PSRAM package rejected");
 static_assert(wifi_generation_can_commit(5, 5, 5, false), "current WiFi save may commit");
 static_assert(!wifi_generation_can_commit(5, 6, 5, false), "stale WiFi save rejected");
 static_assert(estimated_cpu_usage_from_rates(80, 100) == 20, "CPU estimate normalized by time");
