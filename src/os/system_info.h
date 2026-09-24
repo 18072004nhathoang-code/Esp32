@@ -61,6 +61,7 @@ struct RuntimeHealthSnapshot {
     uint8_t lvgl_fragmentation_percent;
     bool lvgl_stats_available;
     RuntimeTaskHealth tasks[RUNTIME_TASK_COUNT];
+    uint32_t events[RUNTIME_EVENT_COUNT];
 };
 
 /**

@@ -12,6 +12,7 @@ struct TaskSample {
     bool active;
 };
 TaskSample s_samples[RUNTIME_TASK_COUNT] = {};
+uint32_t s_events[RUNTIME_EVENT_COUNT] = {};
 portMUX_TYPE s_health_mux = portMUX_INITIALIZER_UNLOCKED;
 }
 
@@ -69,6 +70,23 @@ void runtime_health_copy_tasks(RuntimeTaskHealth out[RUNTIME_TASK_COUNT])
         out[i].heartbeat_age_ms = s_samples[i].active
             ? now - s_samples[i].heartbeat_ms : UINT32_MAX;
     }
+    portEXIT_CRITICAL(&s_health_mux);
+}
+
+void runtime_health_count_event(RuntimeEventId id)
+{
+    if (id >= RUNTIME_EVENT_COUNT) return;
+    portENTER_CRITICAL(&s_health_mux);
+    if (s_events[id] != UINT32_MAX) ++s_events[id];
+    portEXIT_CRITICAL(&s_health_mux);
+}
+
+void runtime_health_copy_events(uint32_t out[RUNTIME_EVENT_COUNT])
+{
+    if (!out) return;
+    portENTER_CRITICAL(&s_health_mux);
+    for (uint8_t i = 0; i < RUNTIME_EVENT_COUNT; ++i)
+        out[i] = s_events[i];
     portEXIT_CRITICAL(&s_health_mux);
 }
 

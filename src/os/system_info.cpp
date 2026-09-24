@@ -137,6 +137,7 @@ RuntimeHealthSnapshot system_get_runtime_health(void)
         &health.lvgl_free_bytes, &health.lvgl_largest_free_bytes,
         &health.lvgl_fragmentation_percent);
     runtime_health_copy_tasks(health.tasks);
+    runtime_health_copy_events(health.events);
     return health;
 }
 

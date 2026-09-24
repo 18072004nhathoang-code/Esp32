@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from hil_common import parse_health, validate  # noqa: E402
+from hil_common import parse_health, validate, validate_event_counts  # noqa: E402
 from package_release import validate_build_provenance  # noqa: E402
 from verify_unprovisioned_config import configured_macros  # noqa: E402
 
@@ -42,9 +42,29 @@ class HilMonitorTests(unittest.TestCase):
         self.assertEqual(sample["queues_inbound"], 0)
         self.assertEqual(sample["stale"], 0)
 
+    def test_health_event_line_is_attached_to_preceding_sample(self) -> None:
+        text = health_line() + (
+            "[HEALTH_EVENTS] wifi_loss=20 wifi_recovery=20 "
+            "map_request=100 voice_complete=20\n"
+        )
+        sample = parse_health(text)[0]
+        self.assertEqual(sample["wifi_recovery"], 20)
+        self.assertEqual(sample["map_request"], 100)
+        validate_event_counts(text, {"wifi_loss": 20, "voice_complete": 20})
+
+    def test_event_threshold_is_rejected(self) -> None:
+        text = health_line() + "[HEALTH_EVENTS] voice_complete=19\n"
+        with self.assertRaisesRegex(SystemExit, "event threshold failed"):
+            validate_event_counts(text, {"voice_complete": 20})
+
     def test_fatal_signature_is_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "fatal serial signature"):
             validate(health_line() + "Task watchdog got triggered\n", 60)
+
+    def test_repeated_boot_report_is_rejected(self) -> None:
+        boot = "[BOOT] Capability: chip=ESP32-S3 memory=PASS partitions=PASS\n"
+        with self.assertRaisesRegex(SystemExit, "unexpected reset"):
+            validate(boot + health_line() + boot, 60)
 
     def test_stale_heartbeat_is_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "task heartbeat stalled"):

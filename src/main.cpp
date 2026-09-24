@@ -361,6 +361,21 @@ void loop()
                           static_cast<unsigned>(health.voice_uplink_drops),
                           static_cast<unsigned>(health.voice_inbound_drops),
                           static_cast<unsigned>(health.voice_stale_inbound_drops));
+            Serial.printf("[HEALTH_EVENTS] wifi_loss=%u wifi_recovery=%u map_open=%u map_close=%u map_request=%u map_publish=%u map_stale=%u camera_open=%u camera_close=%u camera_frame=%u voice_start=%u voice_listening=%u voice_complete=%u voice_fault=%u\n",
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_WIFI_LOSS]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_WIFI_RECOVERY]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_MAP_OPEN]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_MAP_CLOSE]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_MAP_REQUEST]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_MAP_PUBLISH]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_MAP_STALE_DROP]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_CAMERA_OPEN]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_CAMERA_CLOSE]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_CAMERA_FRAME]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_VOICE_START]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_VOICE_LISTENING]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_VOICE_COMPLETE]),
+                          static_cast<unsigned>(health.events[RUNTIME_EVENT_VOICE_FAULT]));
             Serial.printf("[HEALTH_TASK_MIN] id=%u name=%s stack_free=%u active=%u\n",
                           static_cast<unsigned>(min_stack_task),
                           min_stack_task < RUNTIME_TASK_COUNT

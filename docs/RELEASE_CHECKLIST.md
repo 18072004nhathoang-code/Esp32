@@ -37,6 +37,15 @@ are not release features.
 - Run the eight-hour acceptance sequence: app open/close, sleep/wake, Wi-Fi
   loss/recovery, SD and YouTube music, twenty Xiaozhi sessions, maps, camera
   snapshots and repeated cancellation.
+- Run `python3 scripts/hil_network_stress.py --port "$ESP32_PORT"` and complete
+  twenty AP loss/recovery cycles, one hundred successful map refresh cycles and
+  one hundred camera open/close cycles with a published snapshot. The monitor
+  resets the board first and rejects a run whose lifetime event counters miss
+  any threshold.
+- `scripts/hil_acceptance.py` also resets the board first and requires twenty
+  Xiaozhi sessions to reach listening, receive STT/TTS and complete. Faults
+  deliberately injected to prove retryable cleanup remain visible in the
+  lifetime counters but do not invalidate otherwise successful recovery.
 - Exercise every release task at least once before ending the soak. In
   particular, change and save one Settings value (ID 10), record audio and use
   the UI action that exports the WAV to SD (ID 11), and run the speaker

@@ -521,6 +521,7 @@ static void wifi_service_task(void *pvParameters)
 
     WiFiCommand deferred_connect = {};
     bool have_deferred_connect = false;
+    bool recovery_pending = false;
     while (1)
     {
         runtime_health_heartbeat(RUNTIME_TASK_WIFI);
@@ -562,6 +563,7 @@ static void wifi_service_task(void *pvParameters)
             const bool disconnect_called = WiFi.disconnect();
             const bool radio_ok = disconnect_called || WiFi.status() != WL_CONNECTED;
             const bool cleared = control.type != WIFI_CMD_FORGET || clear_credentials_direct();
+            recovery_pending = false;
             lock_wifi();
             control_ack_generation = control.generation;
             control_status = (radio_ok && cleared) ? WIFI_CONTROL_APPLIED : WIFI_CONTROL_FAILED;
@@ -685,6 +687,11 @@ static void wifi_service_task(void *pvParameters)
                     WiFi.disconnect();
                     continue;
                 }
+                if (recovery_pending)
+                {
+                    runtime_health_count_event(RUNTIME_EVENT_WIFI_RECOVERY);
+                    recovery_pending = false;
+                }
                 log_i("Kết nối WiFi thành công generation=%u IP=%s RSSI=%d dBm",
                       active_generation_snapshot, local_ip.toString().c_str(), WiFi.RSSI());
 
@@ -793,6 +800,8 @@ static void wifi_service_task(void *pvParameters)
         {
             if (WiFi.status() != WL_CONNECTED)
             {
+                runtime_health_count_event(RUNTIME_EVENT_WIFI_LOSS);
+                recovery_pending = true;
                 lock_wifi();
                 current_state = WIFI_STATE_DISCONNECTED;
                 clear_connected_cache_locked();

@@ -626,6 +626,7 @@ void NetworkCameraService::workerTask()
                     if (bytes > 0 && worker_session == _worker_session_id && _frame_mutex &&
                         xSemaphoreTake(_frame_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
+                        bool frame_published = false;
                         if (!_front_in_use)
                         {
                             std::swap(_buf_front, _buf_back);
@@ -649,8 +650,11 @@ void NetworkCameraService::workerTask()
                             }
                             _snapshot_status = CAM_STATUS_READY;
                             _failure_reason = CAM_FAILURE_NONE;
+                            frame_published = true;
                         }
                         xSemaphoreGive(_frame_mutex);
+                        if (frame_published)
+                            runtime_health_count_event(RUNTIME_EVENT_CAMERA_FRAME);
                     }
                 }
                 else

@@ -647,6 +647,14 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
         s_cleanup_retries = 0;
         s_phase_tracker.start_cleanup(millis());
         s_timing.t_done_ms = millis();
+        if (preserve_error)
+        {
+            runtime_health_count_event(RUNTIME_EVENT_VOICE_FAULT);
+        }
+        else if (s_timing.t_stt_ms != 0 && s_timing.t_first_tts_ms != 0)
+        {
+            runtime_health_count_event(RUNTIME_EVENT_VOICE_COMPLETE);
+        }
         log_i("Xiaozhi: [DONE] gen=%u", static_cast<unsigned>(generation));
         log_latency_metrics(generation);
         s_tts_stopping = false;
@@ -1463,6 +1471,7 @@ PumpResult pump_capture_flush(uint32_t generation)
 bool start_session(uint32_t generation)
 {
     if (!current_generation(generation)) return false;
+    runtime_health_count_event(RUNTIME_EVENT_VOICE_START);
     if (s_recovery_required || audio_get_recorder_status(0) != AudioRecorderStatus::STOPPED)
     {
         if (audio_get_recorder_status(0) == AudioRecorderStatus::STOPPED)
@@ -1586,6 +1595,7 @@ bool start_session(uint32_t generation)
     log_i("Xiaozhi: [START_ACK] gen=%u", static_cast<unsigned>(generation));
     s_phase_tracker.start_listening(s_timing.t_recorder_active_ms);
     set_state(AI_STATE_LISTENING);
+    runtime_health_count_event(RUNTIME_EVENT_VOICE_LISTENING);
     return true;
 }
 

@@ -190,6 +190,7 @@ static bool publish_current_tile(const MapTileRequest &req, TileSource source)
         !service_generation_current(req.request_id, latest_request_id, false))
     {
         xSemaphoreGive(tile_swap_mutex);
+        runtime_health_count_event(RUNTIME_EVENT_MAP_STALE_DROP);
         return false;
     }
     lv_color_t *tmp = tile_buf_front;
@@ -204,6 +205,7 @@ static bool publish_current_tile(const MapTileRequest &req, TileSource source)
     has_new_tile = true;
     current_status = TILE_READY;
     xSemaphoreGive(tile_swap_mutex);
+    runtime_health_count_event(RUNTIME_EVENT_MAP_PUBLISH);
     return true;
 }
 
@@ -329,6 +331,7 @@ static void map_download_task(void *pvParameters)
         {
             if (!request_is_current(req.request_id))
             {
+                runtime_health_count_event(RUNTIME_EVENT_MAP_STALE_DROP);
                 continue;
             }
             set_status(TILE_DOWNLOADING, req.request_id);
@@ -353,6 +356,7 @@ static void map_download_task(void *pvParameters)
                 {
                     if (!request_is_current(req.request_id))
                     {
+                        runtime_health_count_event(RUNTIME_EVENT_MAP_STALE_DROP);
                         continue;
                     }
                     JRESULT res = JDR_INTR;
@@ -515,6 +519,7 @@ static void map_download_task(void *pvParameters)
                         else if (!request_is_current(req.request_id))
                         {
                             // Latest request owns the public status; stale work is only discarded.
+                            runtime_health_count_event(RUNTIME_EVENT_MAP_STALE_DROP);
                         }
                         else
                         {
@@ -697,6 +702,7 @@ bool map_tile_downloader_request(double lat, double lon, int zoom, const char *m
 
     if (map_request_queue && xQueueOverwrite(map_request_queue, &req) == pdPASS)
     {
+        runtime_health_count_event(RUNTIME_EVENT_MAP_REQUEST);
         return true;
     }
     set_status(TILE_DEGRADED);

@@ -8,6 +8,7 @@
 #include "map_app.h"
 #include "map_tile_downloader.h"
 #include "../ui/ui_theme.h"
+#include "../os/runtime_health.h"
 #include <esp_heap_caps.h>
 #include <math.h>
 
@@ -572,10 +573,12 @@ void map_app_open(lv_obj_t *parent)
 
     // Kích hoạt nạp bản đồ ban đầu (Hà Nội, Z15, Roadmap)
     trigger_map_reload();
+    runtime_health_count_event(RUNTIME_EVENT_MAP_OPEN);
 }
 
 void map_app_close(void)
 {
+    if (app_container) runtime_health_count_event(RUNTIME_EVENT_MAP_CLOSE);
     // Invalidate network/SD work before releasing LVGL-owned objects. The map
     // worker observes this flag, drops stale generations and frees its PSRAM
     // buffers asynchronously without blocking the UI task on an HTTP timeout.

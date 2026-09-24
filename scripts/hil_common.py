@@ -13,6 +13,8 @@ FATAL = re.compile(
     re.IGNORECASE,
 )
 HEALTH = re.compile(r"\[HEALTH\]\s+(.*)")
+HEALTH_EVENTS = re.compile(r"\[HEALTH_EVENTS\]\s+(.*)")
+BOOT_CAPABILITY = re.compile(r"\[BOOT\] Capability:")
 
 
 def capture(port: str, baud: int, duration: int, output: Path) -> str:
@@ -23,6 +25,13 @@ def capture(port: str, baud: int, duration: int, output: Path) -> str:
     deadline = time.monotonic() + duration
     chunks: list[bytes] = []
     with serial.Serial(port, baud, timeout=0.25) as connection:
+        # Begin every soak from a fresh counter epoch and known firmware boot.
+        connection.dtr = False
+        connection.rts = True
+        time.sleep(0.1)
+        connection.rts = False
+        time.sleep(0.1)
+        connection.reset_input_buffer()
         while time.monotonic() < deadline:
             data = connection.read(4096)
             if data:
@@ -35,22 +44,41 @@ def capture(port: str, baud: int, duration: int, output: Path) -> str:
 
 def parse_health(text: str) -> list[dict[str, int]]:
     samples: list[dict[str, int]] = []
-    for match in HEALTH.finditer(text):
-        fields = {}
-        for key, value in re.findall(r"([a-z_]+)=(\d+)", match.group(1)):
-            fields[key] = int(value)
-        for key, first, second in re.findall(r"(queues|drops)=(\d+)/(\d+)", match.group(1)):
-            fields[f"{key}_uplink"] = int(first)
-            fields[f"{key}_inbound"] = int(second)
-        if fields:
-            samples.append(fields)
+    for line in text.splitlines():
+        match = HEALTH.search(line)
+        if match:
+            fields = {}
+            for key, value in re.findall(r"([a-z_]+)=(\d+)", match.group(1)):
+                fields[key] = int(value)
+            for key, first, second in re.findall(r"(queues|drops)=(\d+)/(\d+)", match.group(1)):
+                fields[f"{key}_uplink"] = int(first)
+                fields[f"{key}_inbound"] = int(second)
+            if fields:
+                samples.append(fields)
+            continue
+        event_match = HEALTH_EVENTS.search(line)
+        if event_match and samples:
+            for key, value in re.findall(r"([a-z_]+)=(\d+)", event_match.group(1)):
+                samples[-1][key] = int(value)
     return samples
+
+
+def validate_event_counts(text: str, required: dict[str, int]) -> None:
+    samples = parse_health(text)
+    for key, floor in required.items():
+        observed = max((sample.get(key, 0) for sample in samples), default=0)
+        if observed < floor:
+            raise SystemExit(
+                f"event threshold failed: {key}={observed}, required >= {floor}"
+            )
 
 
 def validate(text: str, duration: int, required_tasks_mask: int = 0) -> None:
     fatal = FATAL.search(text)
     if fatal:
         raise SystemExit(f"fatal serial signature: {fatal.group(0)}")
+    if len(BOOT_CAPABILITY.findall(text)) > 1:
+        raise SystemExit("unexpected reset: boot capability report repeated during soak")
     samples = parse_health(text)
     minimum_samples = max(1, duration // 60)
     if len(samples) < minimum_samples:

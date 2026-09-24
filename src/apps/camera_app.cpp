@@ -1019,11 +1019,13 @@ void camera_app_open(lv_obj_t *parent)
     {
         lv_label_set_text(lbl_cam_status, "CAMERA/PREVIEW DEGRADED");
     }
+    runtime_health_count_event(RUNTIME_EVENT_CAMERA_OPEN);
 }
 
 /* Đóng và dọn dẹp */
 void camera_app_close(void)
 {
+    if (main_container) runtime_health_count_event(RUNTIME_EVENT_CAMERA_CLOSE);
     const uint32_t closing_session = ui_session_id;
     set_camera_control(closing_session, false, false, canvas_w, canvas_h);
     if (cam_canvas) lv_obj_del(cam_canvas);

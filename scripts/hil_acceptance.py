@@ -4,7 +4,7 @@
 import argparse
 from pathlib import Path
 
-from hil_common import capture, parse_health, validate
+from hil_common import capture, parse_health, validate, validate_event_counts
 
 
 # Release firmware task IDs 0..12. MusicStress (ID 13) belongs only to the
@@ -18,12 +18,18 @@ def main() -> int:
     parser.add_argument("--duration", type=int, default=28800)
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--output", type=Path, default=Path("hil-acceptance.log"))
+    parser.add_argument("--voice-sessions", type=int, default=20)
     args = parser.parse_args()
     print("Run the full checklist in docs/RELEASE_CHECKLIST.md during this window.")
     print("Required short-lived tasks: save Settings, export one recording to SD, "
           "and complete the speaker self-test.")
     text = capture(args.port, args.baud, args.duration, args.output)
     validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK)
+    validate_event_counts(text, {
+        "voice_start": args.voice_sessions,
+        "voice_listening": args.voice_sessions,
+        "voice_complete": args.voice_sessions,
+    })
     final = parse_health(text)[-1]
     if final.get("drops_uplink", 0) or final.get("drops_inbound", 0):
         raise SystemExit("Xiaozhi queue drops were non-zero at acceptance completion")
