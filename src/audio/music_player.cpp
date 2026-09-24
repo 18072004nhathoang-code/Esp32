@@ -336,10 +336,12 @@ static void music_audio_task(void *pvParameters)
         {
             last_stack_report_ms = now_ms;
             Serial.printf("[MUSIC_AUDIO][STACK] MusicAudioTask high-water=%u bytes\n",
-                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
+                                                sizeof(StackType_t)));
             if (audio)
                 Serial.printf("[MUSIC_AUDIO][STACK] PeriodicTask high-water=%u bytes\n",
-                              static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark()));
+                              static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark() *
+                                                    sizeof(StackType_t)));
         }
         uint32_t stop_session = 0;
         uint32_t stop_generation = 0;
@@ -405,7 +407,8 @@ static void music_audio_task(void *pvParameters)
                                 if (audio && audio->isInitialized())
                                 {
                                     Serial.printf("[MUSIC_AUDIO][STACK] PeriodicTask high-water=%u bytes\n",
-                                                  static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark()));
+                                                  static_cast<unsigned>(audio->getAudioTaskStackHighWaterMark() *
+                                                                        sizeof(StackType_t)));
                                     const bool pins_ok = audio->setPinout(AUDIO_I2S_BCLK, AUDIO_I2S_WS,
                                                                          AUDIO_I2S_DOUT, AUDIO_I2S_MCLK);
                                     audio->forceMono(true);   // Trộn stereo (L+R)/2 ra loa đơn để âm thanh dày và đầy đủ

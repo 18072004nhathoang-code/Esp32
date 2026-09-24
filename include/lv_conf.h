@@ -146,7 +146,12 @@
     #define LV_THEME_DEFAULT_TRANSITION_TIME 80
 #endif
 
-#define LV_USE_THEME_BASIC 1
+#define LV_USE_THEME_BASIC 0
+
+/* The UI uses flex layouts for the Xiaozhi panels.  Grid is unused; declare
+ * both explicitly so an upstream LVGL default cannot silently add it. */
+#define LV_USE_FLEX 1
+#define LV_USE_GRID 0
 
 /*==================
  * WIDGETS CONFIG
