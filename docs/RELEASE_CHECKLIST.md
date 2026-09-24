@@ -11,6 +11,8 @@ are not release features.
 - Pass partition, warning and 120 KB RAM / 3 MB flash budget checks.
 - Package the bootloader, partition table, application binary, ELF/map files,
   source revision, sizes and SHA-256 hashes with `scripts/package_release.py`.
+- Confirm CI release artifacts use the empty `secrets.example.h` configuration;
+  never publish a locally provisioned firmware image containing device secrets.
 
 ## Reference-board gate
 

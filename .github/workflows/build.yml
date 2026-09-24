@@ -33,30 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install "platformio==6.1.16"
 
-      - name: Create secrets.h from GitHub Secrets
-        env:
-          WIFI_SSID: ${{ secrets.WIFI_SSID }}
-          WIFI_PASS: ${{ secrets.WIFI_PASS }}
-          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+      - name: Create unprovisioned CI configuration
+        # Published CI artifacts must never contain repository/deployment secrets.
+        # Credentials are provisioned only in local device-specific builds.
         run: |
-          cat << EOF > include/secrets.h
-          #pragma once
-
-          // Cấu hình mạng WiFi mặc định từ GitHub Secrets
-          #define DEFAULT_WIFI_SSID           "${WIFI_SSID:-}"
-          #define DEFAULT_WIFI_PASS           "${WIFI_PASS:-}"
-
-          // Google Maps Static API Key từ GitHub Secrets
-          #define GOOGLE_MAPS_STATIC_API_KEY "${MAPS_API_KEY:-}"
-          #define MAPS_API_KEY                "${MAPS_API_KEY:-}"
-
-          // Provider API keys stay on the HTTPS backend; firmware gets only
-          // its independent gateway bearer token from its deployment config.
-          #define CAMERA_TLS_CA_CERT          ""
-          #define YOUTUBE_STREAM_ENDPOINT     ""
-          #define YOUTUBE_PROXY_USER          ""
-          #define YOUTUBE_PROXY_PASSWORD      ""
-          EOF
+          cp include/secrets.example.h include/secrets.h
+          python scripts/verify_unprovisioned_config.py include/secrets.h
 
       - name: Run behavioral regression tests
         run: node simulator/regression_test.js

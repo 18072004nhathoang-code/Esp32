@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from hil_common import parse_health, validate  # noqa: E402
+from verify_unprovisioned_config import configured_macros  # noqa: E402
 
 
 def health_line(**overrides: int) -> str:
@@ -56,6 +57,17 @@ class HilMonitorTests(unittest.TestCase):
     def test_missing_samples_are_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "expected at least"):
             validate("boot only\n", 120)
+
+
+class ReleaseConfigurationTests(unittest.TestCase):
+    def test_empty_template_is_unprovisioned(self) -> None:
+        template = (Path(__file__).resolve().parents[1] / "include" /
+                    "secrets.example.h").read_text(encoding="utf-8")
+        self.assertEqual(configured_macros(template), set())
+
+    def test_credentials_are_detected_without_exposing_values(self) -> None:
+        text = '#define DEFAULT_WIFI_PASS "private value"\n'
+        self.assertEqual(configured_macros(text), {"DEFAULT_WIFI_PASS"})
 
 
 if __name__ == "__main__":
