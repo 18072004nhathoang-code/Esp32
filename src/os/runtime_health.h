@@ -3,15 +3,20 @@
 #include <Arduino.h>
 
 enum RuntimeTaskId : uint8_t {
-    RUNTIME_TASK_LVGL = 0,
+    RUNTIME_TASK_MAIN = 0,
+    RUNTIME_TASK_LVGL,
     RUNTIME_TASK_AUDIO,
     RUNTIME_TASK_MUSIC,
     RUNTIME_TASK_WIFI,
     RUNTIME_TASK_MAP,
     RUNTIME_TASK_CAMERA,
+    RUNTIME_TASK_CAMERA_UI,
     RUNTIME_TASK_XIAOZHI,
     RUNTIME_TASK_MCP,
     RUNTIME_TASK_SETTINGS,
+    RUNTIME_TASK_RECORDER_EXPORT,
+    RUNTIME_TASK_SPEAKER_TEST,
+    RUNTIME_TASK_MUSIC_STRESS,
     RUNTIME_TASK_COUNT
 };
 
@@ -22,5 +27,6 @@ struct RuntimeTaskHealth {
 };
 
 void runtime_health_heartbeat(RuntimeTaskId id);
+void runtime_health_task_finished(RuntimeTaskId id);
 void runtime_health_copy_tasks(RuntimeTaskHealth out[RUNTIME_TASK_COUNT]);
 const char *runtime_health_task_name(RuntimeTaskId id);

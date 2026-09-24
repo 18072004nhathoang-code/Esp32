@@ -28,6 +28,14 @@ void runtime_health_heartbeat(RuntimeTaskId id)
     portEXIT_CRITICAL(&s_health_mux);
 }
 
+void runtime_health_task_finished(RuntimeTaskId id)
+{
+    if (id >= RUNTIME_TASK_COUNT) return;
+    portENTER_CRITICAL(&s_health_mux);
+    s_samples[id] = {};
+    portEXIT_CRITICAL(&s_health_mux);
+}
+
 void runtime_health_copy_tasks(RuntimeTaskHealth out[RUNTIME_TASK_COUNT])
 {
     if (!out) return;
@@ -45,7 +53,9 @@ void runtime_health_copy_tasks(RuntimeTaskHealth out[RUNTIME_TASK_COUNT])
 const char *runtime_health_task_name(RuntimeTaskId id)
 {
     static const char *names[RUNTIME_TASK_COUNT] = {
-        "LVGL", "Audio", "Music", "WiFi", "Map", "Camera", "Xiaozhi", "MCP", "Settings"
+        "Main", "LVGL", "Audio", "Music", "WiFi", "Map", "Camera",
+        "CameraUI", "Xiaozhi", "MCP", "Settings", "RecorderExport",
+        "SpeakerTest", "MusicStress"
     };
     return id < RUNTIME_TASK_COUNT ? names[id] : "Unknown";
 }

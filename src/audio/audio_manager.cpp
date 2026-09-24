@@ -536,6 +536,7 @@ static bool recover_recording_files_locked(fs::FS &fs)
 
 static void recording_export_task(void *arg)
 {
+    runtime_health_heartbeat(RUNTIME_TASK_RECORDER_EXPORT);
     AudioRecordingLease *lease = static_cast<AudioRecordingLease *>(arg);
     bool ok = false;
     size_t total_written = 0;
@@ -581,6 +582,7 @@ static void recording_export_task(void *arg)
             size_t remaining = data_bytes;
             while (ok && remaining > 0)
             {
+                runtime_health_heartbeat(RUNTIME_TASK_RECORDER_EXPORT);
                 size_t chunk = remaining > 4096 ? 4096 : remaining;
                 const size_t written = file.write(raw, chunk);
                 total_written += written;
@@ -637,6 +639,7 @@ static void recording_export_task(void *arg)
         audio_release_recording_lease(lease);
         delete lease;
     }
+    runtime_health_task_finished(RUNTIME_TASK_RECORDER_EXPORT);
     if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
     {
         recording_file_state = ok ? AUDIO_FILE_SAVED : AUDIO_FILE_ERROR;
@@ -1734,6 +1737,7 @@ bool audio_manager_init(void)
 
 static void speaker_self_test_task(void *)
 {
+    runtime_health_heartbeat(RUNTIME_TASK_SPEAKER_TEST);
     bool acquired = audio_request_ownership(AUDIO_OWNER_DIAGNOSTIC);
     const uint32_t session = acquired ? audio_get_owner_session(AUDIO_OWNER_DIAGNOSTIC) : 0;
     if (acquired)
@@ -1758,6 +1762,7 @@ static void speaker_self_test_task(void *)
         size_t sent = 0;
         while (sent < kTotalFrames)
         {
+            runtime_health_heartbeat(RUNTIME_TASK_SPEAKER_TEST);
             const size_t count = min(kFrames, kTotalFrames - sent);
             for (size_t i = 0; i < count; ++i)
             {
@@ -1788,6 +1793,7 @@ static void speaker_self_test_task(void *)
                       pa_during_test ? "ON" : "OFF",
                       audio_is_pa_enabled() ? "ON" : "OFF");
     }
+    runtime_health_task_finished(RUNTIME_TASK_SPEAKER_TEST);
     if (audio_state_mutex && xSemaphoreTake(audio_state_mutex, portMAX_DELAY) == pdTRUE)
     {
         speaker_self_test_running = false;

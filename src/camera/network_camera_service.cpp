@@ -544,6 +544,8 @@ void NetworkCameraService::workerTask()
     Serial.println("[NET_CAM] 🚀 Worker Task nạp HTTP Snapshot bắt đầu trên Core 0");
 
     uint32_t worker_session = 0;
+    // Clear a previous stopped worker's sample before publishing this run.
+    runtime_health_task_finished(RUNTIME_TASK_CAMERA);
     if (_config_mutex && xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
         worker_session = _worker_session_id;
@@ -675,6 +677,9 @@ void NetworkCameraService::workerTask()
         }
     }
 
+    // Clear health before releasing the published task handle, so a concurrent
+    // restart cannot have its first heartbeat erased by this worker's teardown.
+    runtime_health_task_finished(RUNTIME_TASK_CAMERA);
     if (_config_mutex && xSemaphoreTake(_config_mutex, portMAX_DELAY) == pdTRUE)
     {
         _worker_task_handle = nullptr;

@@ -15,6 +15,7 @@
 #include "ai_voice_protocol.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
+#include "../os/runtime_health.h"
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
@@ -630,6 +631,7 @@ void ai_task(void *)
 {
     for (;;)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_XIAOZHI);
         bool begin_capture = false;
         uint32_t request_id = 0;
         bool wait_start = false;

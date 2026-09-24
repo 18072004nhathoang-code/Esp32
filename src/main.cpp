@@ -25,6 +25,7 @@
 #include "os/power_manager.h"
 #include "os/settings_service.h"
 #include "os/network_coordinator.h"
+#include "os/runtime_health.h"
 #include "firmware_regression.h"
 #include "service_state_logic.h"
 
@@ -62,6 +63,7 @@ static bool partition_matches(const char *label, esp_partition_type_t type,
 #ifdef MINI_OS_MUSIC_STRESS_TEST
 static void music_stress_task(void *)
 {
+    runtime_health_heartbeat(RUNTIME_TASK_MUSIC_STRESS);
     vTaskDelay(pdMS_TO_TICKS(5000));
     const int track_count = music_player_get_track_count();
     const uint32_t baseline_heap = ESP.getFreeHeap();
@@ -72,11 +74,13 @@ static void music_stress_task(void *)
     if (track_count <= 0 || !music_player_play_index(0))
     {
         Serial.println("[HW_STRESS] FAIL no playable SD track");
+        runtime_health_task_finished(RUNTIME_TASK_MUSIC_STRESS);
         vTaskDelete(nullptr);
     }
 
     for (uint32_t second = 1; second <= 600; ++second)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_MUSIC_STRESS);
         vTaskDelay(pdMS_TO_TICKS(1000));
         const uint32_t phase = second % 100U;
         if (phase == 20U) (void)music_player_next();
@@ -103,6 +107,7 @@ static void music_stress_task(void *)
                   static_cast<int32_t>(ESP.getFreeHeap() - baseline_heap),
                   static_cast<unsigned>(uxTaskGetNumberOfTasks()),
                   static_cast<int>(uxTaskGetNumberOfTasks()) - static_cast<int>(baseline_tasks));
+    runtime_health_task_finished(RUNTIME_TASK_MUSIC_STRESS);
     vTaskDelete(nullptr);
 }
 #endif
@@ -291,6 +296,7 @@ void setup()
 void loop()
 {
     static uint32_t last_tick = 0;
+    runtime_health_heartbeat(RUNTIME_TASK_MAIN);
 
     // Cập nhật máy trạng thái nguồn (kiểm tra Inactivity Timer 60s/120s)
     power_manager_update();

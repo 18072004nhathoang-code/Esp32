@@ -62,6 +62,22 @@ int main()
 
     assert(xiaozhi::bounded_enqueue_allowed(0, 8));
     assert(!xiaozhi::bounded_enqueue_allowed(8, 8));
+    constexpr size_t inbound_budget = 128U * 1024U;
+    assert(xiaozhi::bounded_byte_enqueue_allowed(0, 1, inbound_budget));
+    assert(xiaozhi::bounded_byte_enqueue_allowed(inbound_budget - 4096U,
+                                                  4096U, inbound_budget));
+    assert(!xiaozhi::bounded_byte_enqueue_allowed(inbound_budget - 4096U,
+                                                   4097U, inbound_budget));
+    assert(!xiaozhi::bounded_byte_enqueue_allowed(inbound_budget + 1U,
+                                                   1U, inbound_budget));
+    assert(!xiaozhi::bounded_byte_enqueue_allowed(0, 0, inbound_budget));
+
+    // A callback that observed an old socket epoch cannot publish after close
+    // or after a replacement connection has started.
+    assert(xiaozhi::callback_may_publish(false, true, 7, 7));
+    assert(!xiaozhi::callback_may_publish(true, true, 7, 7));
+    assert(!xiaozhi::callback_may_publish(false, false, 7, 7));
+    assert(!xiaozhi::callback_may_publish(false, true, 7, 8));
     assert(xiaozhi::clamp_activation_poll_ms(1) == 3000);
     assert(xiaozhi::clamp_activation_poll_ms(10000) == 10000);
     assert(xiaozhi::clamp_activation_poll_ms(120000) == 60000);

@@ -44,6 +44,27 @@ test("invalid direct URL is rejected before spawn",async()=>{let spawned=false;c
 
 test("client abort terminates a pending yt-dlp child",async()=>{const fixture=spawnFixture({hold:true});const base=await start({spawnImpl:fixture.spawnImpl},streamYouTubeAudio);await new Promise(resolve=>{const req=http.get(`${base}/youtube/stream?q=abort`);req.on("error",()=>resolve());setTimeout(()=>req.destroy(),20);});await new Promise(resolve=>setTimeout(resolve,20));assert.equal(fixture.child.killed,true);});
 
+test("stalled upstream body hits the idle deadline and is aborted",async()=>{
+  const fixture=spawnFixture();let aborted=false;
+  const fetchImpl=async(_url,{signal})=>{signal.addEventListener("abort",()=>{aborted=true;},{once:true});return new Response(new ReadableStream({start(){}}),{status:200,headers:{"content-type":"audio/mp4"}});};
+  const base=await start({spawnImpl:fixture.spawnImpl,fetchImpl,streamIdleTimeoutMs:20},streamYouTubeAudio);
+  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error("idle timeout did not close response")),1000);const done=()=>{clearTimeout(timer);resolve();};const req=http.get(`${base}/youtube/stream?q=stall`,res=>{res.on("close",done);res.on("error",done);});req.on("error",done);});
+  assert.equal(aborted,true);
+});
+
+test("paused client applies backpressure and aborts upstream on disconnect",async()=>{
+  const fixture=spawnFixture();let pulls=0;let aborted=false;let streamController;
+  const fetchImpl=async(_url,{signal})=>{
+    signal.addEventListener("abort",()=>{aborted=true;streamController?.error(new Error("aborted"));},{once:true});
+    const body=new ReadableStream({start(controller){streamController=controller;},pull(controller){pulls+=1;controller.enqueue(new Uint8Array(1024*1024));if(pulls>=64)controller.close();}});
+    return new Response(body,{status:200,headers:{"content-type":"audio/mp4"}});
+  };
+  const base=await start({spawnImpl:fixture.spawnImpl,fetchImpl,streamIdleTimeoutMs:1000},streamYouTubeAudio);
+  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error("backpressure test timed out")),1500);const req=http.get(`${base}/youtube/stream?q=slow-client`,res=>{res.pause();setTimeout(()=>{assert.ok(pulls<64,`producer drained ${pulls} chunks despite backpressure`);req.destroy();clearTimeout(timer);resolve();},50);});req.on("error",()=>{});});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(aborted,true);
+});
+
 test("direct URL allowlist accepts YouTube only",()=>{
   assert.equal(isAllowedYouTubeUrl("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),true);
   assert.equal(isAllowedYouTubeUrl("https://music.youtube.com/watch?v=dQw4w9WgXcQ"),true);

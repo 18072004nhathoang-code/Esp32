@@ -54,6 +54,20 @@ inline bool bounded_enqueue_allowed(size_t count, size_t capacity)
     return capacity != 0 && count < capacity;
 }
 
+inline bool bounded_byte_enqueue_allowed(size_t used, size_t allocation,
+                                         size_t budget)
+{
+    return allocation != 0 && used <= budget && allocation <= budget - used;
+}
+
+inline bool callback_may_publish(bool closing, bool connected,
+                                 uint32_t observed_epoch,
+                                 uint32_t current_epoch)
+{
+    return !closing && connected && observed_epoch != 0 &&
+           observed_epoch == current_epoch;
+}
+
 inline uint32_t clamp_activation_poll_ms(uint32_t requested_ms)
 {
     return requested_ms < 3000U ? 3000U :
@@ -399,4 +413,3 @@ inline bool is_mcp_async_tool(McpTool tool)
     }
 }
 }
-

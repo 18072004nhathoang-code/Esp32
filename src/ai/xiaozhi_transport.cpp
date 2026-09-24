@@ -295,7 +295,8 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     size_t used = inbound_bytes_.load(std::memory_order_relaxed);
     while (true)
     {
-        if (used > kInboundByteBudget || allocation > kInboundByteBudget - used)
+        if (!xiaozhi::bounded_byte_enqueue_allowed(
+                used, allocation, kInboundByteBudget))
         {
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
             return false;
@@ -421,8 +422,11 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         return;
     }
 
-    if (connection_epoch_.load(std::memory_order_acquire) != current_epoch ||
-        !connected_.load(std::memory_order_acquire) || !fragment_assembler_)
+    if (!xiaozhi::callback_may_publish(
+            closing_.load(std::memory_order_acquire),
+            connected_.load(std::memory_order_acquire), current_epoch,
+            connection_epoch_.load(std::memory_order_acquire)) ||
+        !fragment_assembler_)
     {
         xSemaphoreGive(rx_mutex_);
         return;

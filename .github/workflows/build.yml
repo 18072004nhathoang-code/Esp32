@@ -83,9 +83,7 @@ jobs:
           python scripts/check_build_warnings.py /tmp/build-diagnostic.log
 
       - name: Enforce firmware size budgets
-        run: |
-          pio run -e esp32-s3-es3c28p -t size | tee /tmp/firmware-size.txt
-          python scripts/verify_size.py /tmp/firmware-size.txt --max-ram 120000 --max-flash 3000000
+        run: python scripts/verify_size.py /tmp/build-release.log --max-ram 120000 --max-flash 3000000
 
       - name: Package firmware artifacts
         run: python scripts/package_release.py --environment esp32-s3-es3c28p --output release

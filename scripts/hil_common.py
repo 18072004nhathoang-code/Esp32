@@ -64,6 +64,14 @@ def validate(text: str, duration: int) -> None:
         observed = min(sample.get(key, 0) for sample in samples)
         if observed < floor:
             raise SystemExit(f"health threshold failed: {key}={observed}, required >= {floor}")
+    heartbeat_ceiling_ms = 15000
+    oldest_heartbeat = max(sample.get("heartbeat_max", heartbeat_ceiling_ms + 1)
+                           for sample in samples)
+    if oldest_heartbeat > heartbeat_ceiling_ms:
+        raise SystemExit(
+            f"task heartbeat stalled: age={oldest_heartbeat} ms, "
+            f"required <= {heartbeat_ceiling_ms} ms"
+        )
     first, last = samples[0], samples[-1]
     if first.get("int_free", 0) - last.get("int_free", 0) > 8192:
         raise SystemExit("internal RAM drift exceeds 8 KB")

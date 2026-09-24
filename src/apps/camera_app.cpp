@@ -11,6 +11,7 @@
 #include "../display/tjpg_guard.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
+#include "../os/runtime_health.h"
 #include <esp_heap_caps.h>
 #include <stdlib.h>
 #include <atomic>
@@ -636,6 +637,7 @@ static void camera_ui_worker(void *)
 {
     for (;;)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_CAMERA_UI);
         const CameraWorkerControl control = get_camera_control();
         worker_apply_control(control);
         complete_camera_config_control();

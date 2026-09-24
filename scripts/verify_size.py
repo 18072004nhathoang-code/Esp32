@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce PlatformIO RAM/flash byte budgets from `pio run -t size` output."""
+"""Enforce byte budgets from the RAM/Flash summary emitted by `pio run`."""
 
 import argparse
 import re
