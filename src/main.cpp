@@ -61,6 +61,8 @@ static bool partition_matches(const char *label, esp_partition_type_t type,
 }
 
 #ifdef MINI_OS_MUSIC_STRESS_TEST
+static constexpr uint32_t MUSIC_STRESS_DURATION_SECONDS = 30U * 60U;
+
 static void music_stress_task(void *)
 {
     runtime_health_heartbeat(RUNTIME_TASK_MUSIC_STRESS);
@@ -68,7 +70,8 @@ static void music_stress_task(void *)
     const int track_count = music_player_get_track_count();
     const uint32_t baseline_heap = ESP.getFreeHeap();
     const UBaseType_t baseline_tasks = uxTaskGetNumberOfTasks();
-    Serial.printf("[HW_STRESS] BEGIN duration=600s tracks=%d heap=%u tasks=%u\n",
+    Serial.printf("[HW_STRESS] BEGIN duration=%us tracks=%d heap=%u tasks=%u\n",
+                  static_cast<unsigned>(MUSIC_STRESS_DURATION_SECONDS),
                   track_count, static_cast<unsigned>(baseline_heap),
                   static_cast<unsigned>(baseline_tasks));
     if (track_count <= 0 || !music_player_play_index(0))
@@ -78,7 +81,7 @@ static void music_stress_task(void *)
         vTaskDelete(nullptr);
     }
 
-    for (uint32_t second = 1; second <= 600; ++second)
+    for (uint32_t second = 1; second <= MUSIC_STRESS_DURATION_SECONDS; ++second)
     {
         runtime_health_heartbeat(RUNTIME_TASK_MUSIC_STRESS);
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -102,9 +105,10 @@ static void music_stress_task(void *)
     }
     (void)music_player_stop();
     vTaskDelay(pdMS_TO_TICKS(3000));
+    const uint32_t final_heap = ESP.getFreeHeap();
     Serial.printf("[HW_STRESS] COMPLETE heap=%u delta=%d tasks=%u delta=%d\n",
-                  static_cast<unsigned>(ESP.getFreeHeap()),
-                  static_cast<int32_t>(ESP.getFreeHeap() - baseline_heap),
+                  static_cast<unsigned>(final_heap),
+                  static_cast<int32_t>(final_heap) - static_cast<int32_t>(baseline_heap),
                   static_cast<unsigned>(uxTaskGetNumberOfTasks()),
                   static_cast<int>(uxTaskGetNumberOfTasks()) - static_cast<int>(baseline_tasks));
     runtime_health_task_finished(RUNTIME_TASK_MUSIC_STRESS);

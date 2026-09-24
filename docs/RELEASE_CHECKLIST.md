@@ -28,6 +28,9 @@ are not release features.
   microphone, speaker, active-low amplifier and SDMMC.
 - Run twenty cold/warm boots and reject panic, Guru Meditation, watchdog,
   stack-overflow, brownout, assertion or unexpected reset signatures.
+- Flash the `esp32-s3-es3c28p-music-stress` environment and run
+  `python3 scripts/hil_music_stress.py --port "$ESP32_PORT"`; require the
+  complete 30-minute SD playback sequence to pass before restoring release firmware.
 - Run the eight-hour acceptance sequence: app open/close, sleep/wake, Wi-Fi
   loss/recovery, SD and YouTube music, twenty Xiaozhi sessions, maps, camera
   snapshots and repeated cancellation.
