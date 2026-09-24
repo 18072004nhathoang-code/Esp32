@@ -2,7 +2,10 @@
 
 // Default Root CA certificates for Xiaozhi OTA (api.tenclass.net) and WSS endpoints.
 // Includes DigiCert Global Root G2, GeoTrust TLS Intermediate, and ISRG Root X1 (Let's Encrypt).
-static const char XIAOZHI_DEFAULT_ROOT_CA_CERT[] =
+extern const char XIAOZHI_DEFAULT_ROOT_CA_CERT[];
+
+#ifdef XIAOZHI_ROOT_CA_IMPLEMENTATION
+const char XIAOZHI_DEFAULT_ROOT_CA_CERT[] =
 "-----BEGIN CERTIFICATE-----\n"
 "MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh\n"
 "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
@@ -89,3 +92,4 @@ static const char XIAOZHI_DEFAULT_ROOT_CA_CERT[] =
 "mRGunUHBcnWEvgJBQl9nJEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57d\n"
 "emyPxgcYxn/eR44/KJ4EBs+lVDR3veyJm+kXQ99b21/+jh5Xos1AnX5iItreGCc=\n"
 "-----END CERTIFICATE-----\n";
+#endif

@@ -83,7 +83,12 @@ private:
     std::atomic<uint32_t> frames_sent_;
     std::atomic<uint32_t> bytes_sent_;
     std::atomic<uint32_t> last_audio_sent_ms_;
+    std::atomic<size_t> inbound_bytes_;
+    std::atomic<bool> closing_;
     uint32_t in_flight_started_ms_ = 0;
+
+    static constexpr size_t kInboundQueueCapacity = 8;
+    static constexpr size_t kInboundByteBudget = 128U * 1024U;
 
     static void eventHandler(void *arg, esp_event_base_t base, int32_t event_id, void *event_data);
     void onEvent(int32_t event_id, esp_websocket_event_data_t *event);

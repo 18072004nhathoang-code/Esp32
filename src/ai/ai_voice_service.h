@@ -57,6 +57,14 @@ struct ChatMessage
     uint32_t id;               // ID tin nhắn tuần tự duy nhất
 };
 
+struct AiVoiceQueueHealth
+{
+    uint32_t uplink_depth;
+    uint32_t inbound_depth;
+    uint32_t uplink_drops;
+    uint32_t inbound_drops;
+};
+
 /**
  * @brief Khởi tạo phân hệ AI Voice Service và Task FreeRTOS trên Core 0
  */
@@ -142,6 +150,7 @@ void ai_voice_on_app_closed(void);
  * @brief Check if WebSocket is warm-connected and ready for instant PTT speech.
  */
 bool ai_voice_is_connected(void);
+AiVoiceQueueHealth ai_voice_get_queue_health(void);
 
 /** Firmware-side regression for the exact ArduinoJson codec used by requests. */
 bool ai_voice_json_regression_test(void);

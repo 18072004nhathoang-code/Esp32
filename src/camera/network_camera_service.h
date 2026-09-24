@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/semphr.h>
+#include <atomic>
 
 class NetworkCameraService
 {
@@ -58,10 +59,10 @@ public:
 private:
     bool _configured;
     bool _connected;
-    volatile bool _running;
+    std::atomic<bool> _running;
     CameraRuntimeState _runtime_state;
-    volatile CameraTransportSecurity _transport_security;
-    volatile CameraFailureReason _failure_reason;
+    std::atomic<CameraTransportSecurity> _transport_security;
+    std::atomic<CameraFailureReason> _failure_reason;
     uint32_t _frame_sequence;
     uint32_t _session_id;
     uint32_t _worker_session_id;
@@ -84,10 +85,10 @@ private:
     SemaphoreHandle_t _frame_mutex;
     TaskHandle_t _worker_task_handle;
 
-    CameraFeatureStatus _snapshot_status;
-    CameraFeatureStatus _mjpeg_status;
-    CameraFeatureStatus _rtsp_status;
-    CameraFeatureStatus _onvif_status;
+    std::atomic<CameraFeatureStatus> _snapshot_status;
+    std::atomic<CameraFeatureStatus> _mjpeg_status;
+    std::atomic<CameraFeatureStatus> _rtsp_status;
+    std::atomic<CameraFeatureStatus> _onvif_status;
 
     static void workerTaskEntry(void *param);
     void workerTask();
@@ -97,7 +98,7 @@ private:
     void setTransportSecurity(CameraTransportSecurity security);
     bool snapshotState(NetworkCameraProfile &profile, bool &configured,
                        CameraRuntimeState &state) const;
+    void releaseInactiveBuffers();
 };
 
 extern NetworkCameraService g_network_camera;
-

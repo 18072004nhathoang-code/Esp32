@@ -382,11 +382,44 @@ void test_music_stream_url_contracts()
     assert(music_playback_needs_storage(0));
     assert(music_playback_needs_storage(7));
     assert(!music_playback_needs_storage(-1));
-    assert(audio_forced_volume_percent(0) == 100);
-    assert(audio_forced_volume_percent(25) == 100);
-    assert(audio_forced_volume_percent(100) == 100);
-    assert(es8311_volume_register(audio_forced_volume_percent(0)) == 0xBF);
+    assert(audio_clamp_volume_percent(0) == 0);
+    assert(audio_clamp_volume_percent(25) == 25);
+    assert(audio_clamp_volume_percent(100) == 100);
+    assert(audio_clamp_volume_percent(255) == 100);
+    assert(es8311_volume_register(audio_clamp_volume_percent(0)) == 0x00);
     printf("[PASS] test_music_stream_url_contracts\n");
+}
+
+void test_voice_pcm_filter_contracts()
+{
+    VoicePcmFilterState state;
+    int16_t tail = 0;
+    for (int i = 0; i < 512; ++i) tail = voice_pcm_filter_sample(1000, &state);
+    assert(tail > -8 && tail < 8); // Constant DC must decay toward zero.
+
+    voice_pcm_filter_reset(&state);
+    const int16_t first = voice_pcm_filter_sample(12000, &state);
+    const int16_t second = voice_pcm_filter_sample(-12000, &state);
+    assert(first != 0 && second != 0); // Speech-band transitions survive.
+
+    VoicePcmFilterState continuous;
+    VoicePcmFilterState chunked;
+    int16_t continuous_out[8] = {};
+    int16_t chunked_out[8] = {};
+    const int16_t input[8] = {0, 1000, 2000, -1000, -3000, 500, 12000, -12000};
+    for (int i = 0; i < 8; ++i) continuous_out[i] = voice_pcm_filter_sample(input[i], &continuous);
+    for (int i = 0; i < 4; ++i) chunked_out[i] = voice_pcm_filter_sample(input[i], &chunked);
+    for (int i = 4; i < 8; ++i) chunked_out[i] = voice_pcm_filter_sample(input[i], &chunked);
+    assert(memcmp(continuous_out, chunked_out, sizeof(continuous_out)) == 0);
+
+    voice_pcm_filter_reset(&state);
+    assert(state.previous_input == 0 && state.previous_output == 0);
+    for (int value : {-32768, -32000, 32000, 32767})
+    {
+        const int16_t output = voice_pcm_filter_sample(static_cast<int16_t>(value), &state);
+        assert(output >= -32768 && output <= 32767);
+    }
+    printf("[PASS] test_voice_pcm_filter_contracts\n");
 }
 
 // Test 14: WebSocket Empty Final Continuation Frame
@@ -429,9 +462,8 @@ int main()
     test_camera_url_credential_stripping();
     test_wifi_save_failure_revalidation();
     test_music_stream_url_contracts();
+    test_voice_pcm_filter_contracts();
     test_websocket_empty_final_continuation();
     printf("=== ALL REGRESSION TESTS PASSED! ===\n");
     return 0;
 }
-
-

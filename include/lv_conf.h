@@ -8,6 +8,7 @@
 #define LV_CONF_H
 
 #include <stdint.h>
+#include <esp_heap_caps.h>
 
 /* Set value to 0 to apply this configuration file */
 #define LV_CONF_SKIP 0
@@ -36,13 +37,12 @@
 /* 0: Dùng bộ quản lý bộ nhớ tích hợp của LVGL; 1: Dùng malloc tùy biến */
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
-    /* Kích thước bộ nhớ cấp phát tĩnh cho các Widget UI (64KB - 128KB) */
+    /* One deterministic LVGL pool in PSRAM. DMA buffers remain internal. */
     #define LV_MEM_SIZE (96U * 1024U)
-    /* 0: Cấp phát mảng tĩnh trong SRAM */
     #define LV_MEM_ADR 0
-    #define LV_MEM_POOL_INCLUDE <stdint.h>
-    #define LV_MEM_POOL_ALLOC   malloc
-    #define LV_MEM_POOL_FREE    free
+    #define LV_MEM_POOL_INCLUDE <esp_heap_caps.h>
+    #define LV_MEM_POOL_ALLOC(size) heap_caps_malloc((size), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+    #define LV_MEM_POOL_FREE(ptr) heap_caps_free((ptr))
 #else
     #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>
     #define LV_MEM_CUSTOM_ALLOC   malloc
@@ -121,9 +121,9 @@
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_18 0
-#define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_MONTSERRAT_20 0
 #define LV_FONT_MONTSERRAT_22 0
-#define LV_FONT_MONTSERRAT_24 1
+#define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_28 0
 #define LV_FONT_MONTSERRAT_32 0
 
@@ -154,40 +154,40 @@
 #define LV_USE_ARC        1
 #define LV_USE_BAR        1
 #define LV_USE_BTN        1
-#define LV_USE_BTNMATRIX  1
+#define LV_USE_BTNMATRIX  1 /* required by LV_USE_KEYBOARD */
 #define LV_USE_CANVAS     1
-#define LV_USE_CHECKBOX   1
+#define LV_USE_CHECKBOX   0
 #define LV_USE_DROPDOWN   1
-#define LV_USE_IMG        1
+#define LV_USE_IMG        1 /* required by LV_USE_CANVAS */
 #define LV_USE_LABEL      1
 #if LV_USE_LABEL
     #define LV_LABEL_TEXT_SELECTION 1
     #define LV_LABEL_LONG_TXT_HINT 1
 #endif
-#define LV_USE_LINE       1
-#define LV_USE_ROLLER     1
+#define LV_USE_LINE       0
+#define LV_USE_ROLLER     0
 #define LV_USE_SLIDER     1
 #define LV_USE_SWITCH     1
 #define LV_USE_TEXTAREA   1
-#define LV_USE_TABLE      1
+#define LV_USE_TABLE      0
 
 /* Extra Widgets (Phục vụ xây dựng các App của Mini OS) */
-#define LV_USE_ANIMIMG    1
-#define LV_USE_CALENDAR   1
+#define LV_USE_ANIMIMG    0
+#define LV_USE_CALENDAR   0
 #define LV_USE_CHART      1
-#define LV_USE_COLORWHEEL 1
-#define LV_USE_IMGBTN     1
+#define LV_USE_COLORWHEEL 0
+#define LV_USE_IMGBTN     0
 #define LV_USE_KEYBOARD   1
-#define LV_USE_LED        1
+#define LV_USE_LED        0
 #define LV_USE_LIST       1
-#define LV_USE_MENU       1
-#define LV_USE_METER      1
-#define LV_USE_MSGBOX     1
-#define LV_USE_SPINBOX    1
-#define LV_USE_SPINNER    1
-#define LV_USE_TABVIEW    1
-#define LV_USE_TILEVIEW   1
-#define LV_USE_WIN        1
-#define LV_USE_SPAN       1
+#define LV_USE_MENU       0
+#define LV_USE_METER      0
+#define LV_USE_MSGBOX     0
+#define LV_USE_SPINBOX    0
+#define LV_USE_SPINNER    0
+#define LV_USE_TABVIEW    0
+#define LV_USE_TILEVIEW   0
+#define LV_USE_WIN        0
+#define LV_USE_SPAN       0
 
 #endif /*LV_CONF_H*/

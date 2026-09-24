@@ -16,6 +16,7 @@
 #include "service_state_logic.h"
 #include "wifi_scan_adapter.h"
 #include "wifi_storage_logic.h"
+#include "runtime_health.h"
 
 static Preferences prefs;
 static WiFiState current_state = WIFI_STATE_DISCONNECTED;
@@ -110,6 +111,7 @@ static void set_scan_driver_error_locked(const char *context, esp_err_t error)
              static_cast<int>(error), esp_err_to_name(error));
 }
 
+static const char *scan_phase_text(WifiScanPhase phase) __attribute__((unused));
 static const char *scan_phase_text(WifiScanPhase phase)
 {
     switch (phase)
@@ -139,6 +141,8 @@ static void log_scan_driver_event(uint32_t request_id, const char *event, esp_er
     wifi_mode_t mode = WIFI_MODE_NULL;
     const esp_err_t mode_error = esp_wifi_get_mode(&mode);
     const UBaseType_t stack_words = uxTaskGetStackHighWaterMark(nullptr);
+    (void)mode_error;
+    (void)stack_words;
     log_i("WiFi scan request=%u driver=%s err=%d/%s mode=%d mode_err=%d status=%d heap=%u largest=%u stack_free=%uB stale=%u",
           request_id, event, static_cast<int>(error), esp_err_to_name(error),
           static_cast<int>(mode), static_cast<int>(mode_error), static_cast<int>(WiFi.status()),
@@ -519,6 +523,7 @@ static void wifi_service_task(void *pvParameters)
     bool have_deferred_connect = false;
     while (1)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_WIFI);
         // Control mailbox is independent of the ordinary queue. Accepted
         // Disconnect/Forget operations therefore survive a saturated scan/
         // connect queue and are applied by the sole radio/NVS owner.

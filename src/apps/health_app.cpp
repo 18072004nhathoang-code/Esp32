@@ -69,22 +69,35 @@ void health_app_close(void)
 void health_app_update(const SystemStats &stats)
 {
     if(!s_root)return;
-    const size_t il=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    const size_t imin=heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    const size_t pl=heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-    const size_t pmin=heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    (void)stats;
+    const RuntimeHealthSnapshot health=system_get_runtime_health();
     if(s_internal)lv_label_set_text_fmt(s_internal,"Free %u KB • Largest %u KB\nLow-water %u KB",
-        (unsigned)(stats.free_heap/1024U),(unsigned)(il/1024U),(unsigned)(imin/1024U));
+        (unsigned)(health.internal_free_bytes/1024U),
+        (unsigned)(health.internal_largest_free_bytes/1024U),
+        (unsigned)(health.internal_min_free_bytes/1024U));
     if(s_psram)lv_label_set_text_fmt(s_psram,"Free %.1f MB • Largest %.1f MB\nLow-water %.1f MB",
-        (double)stats.free_psram/1048576.0,(double)pl/1048576.0,(double)pmin/1048576.0);
+        (double)health.psram_free_bytes/1048576.0,
+        (double)health.psram_largest_free_bytes/1048576.0,
+        (double)health.psram_min_free_bytes/1048576.0);
     char voice_state[96] = {};
     if (ai_voice_is_connected()) strlcpy(voice_state, "WARM", sizeof(voice_state));
     else if (!ai_voice_copy_state_text(voice_state, sizeof(voice_state)))
         strlcpy(voice_state, "BUSY", sizeof(voice_state));
+    uint32_t min_stack=UINT32_MAX;
+    for(uint8_t i=0;i<RUNTIME_TASK_COUNT;++i)
+        if(health.tasks[i].seen&&health.tasks[i].stack_free_bytes<min_stack)
+            min_stack=health.tasks[i].stack_free_bytes;
+    if(min_stack==UINT32_MAX)min_stack=0;
     if(s_services)lv_label_set_text_fmt(s_services,
-        "WiFi %s • Audio %s\nMusic %s • Xiaozhi %s\nTasks %lu • CPU %s%u%%",
+        "WiFi %s • Audio %s\nMusic %s • Xiaozhi %s\nQ %lu/%lu • drops %lu/%lu\nStack %uK • LVGL %uK/%u%%",
         wifi_manager_is_connected()?"OK":"OFF",owner_name(audio_get_current_owner()),
         music_player_is_playing()?"PLAY":(music_player_is_paused()?"PAUSE":"IDLE"),
         voice_state,
-        (unsigned long)stats.task_count,stats.cpu_usage_available?"":"~",(unsigned)stats.cpu_usage_percent);
+        (unsigned long)health.voice_uplink_queue_depth,
+        (unsigned long)health.voice_inbound_queue_depth,
+        (unsigned long)health.voice_uplink_drops,
+        (unsigned long)health.voice_inbound_drops,
+        (unsigned)(min_stack/1024U),
+        (unsigned)(health.lvgl_free_bytes/1024U),
+        (unsigned)health.lvgl_fragmentation_percent);
 }

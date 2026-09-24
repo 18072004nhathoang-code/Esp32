@@ -1,6 +1,7 @@
 # ====================================================================
 # ESP32-S3 Partition Table (16MB Flash - N16R8)
-# Mini OS: Dual OTA 4.5MB + Storage 6.8MB + NVS + CoreDump
+# Mini OS: Dual OTA 4.5MB + reserved/unmounted SPIFFS 6.875MB + NVS + CoreDump
+# OTA and SPIFFS are layout reservations; this firmware does not expose either feature.
 # ====================================================================
 # Name,   Type, SubType, Offset,   Size,     Flags
 nvs,      data, nvs,     0x9000,   0x5000,

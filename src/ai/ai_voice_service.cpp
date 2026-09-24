@@ -44,7 +44,7 @@
 
 namespace
 {
-volatile AIVoiceState s_state = AI_STATE_ERROR;
+AIVoiceState s_state = AI_STATE_ERROR; // serialized by s_mutex
 ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
 int s_message_count = 0;
 uint32_t s_history_revision = 0;
@@ -262,7 +262,6 @@ public:
           deadline_ms_(deadline_ms), failed_(false)
     {
         data_ = static_cast<uint8_t *>(heap_caps_malloc(limit_ + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-        if (!data_) data_ = static_cast<uint8_t *>(malloc(limit_ + 1));
         if (!data_) failed_ = true;
     }
     ~BoundedBodyStream() override { if (data_) free(data_); }
@@ -1250,5 +1249,7 @@ bool ai_voice_get_activation(char *code, size_t code_size,
 
 bool ai_voice_retry_activation(void) { return false; }
 bool ai_voice_cancel_activation(void) { return false; }
+
+AiVoiceQueueHealth ai_voice_get_queue_health(void) { return {}; }
 
 #endif

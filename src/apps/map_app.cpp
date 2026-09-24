@@ -28,7 +28,6 @@ static double cur_lon = MAP_DEFAULT_LON;
 static int cur_zoom = MAP_DEFAULT_ZOOM;
 static size_t cur_preset_idx = 0;
 static char cur_maptype[16] = "roadmap"; // "roadmap" hoặc "satellite"
-static bool auto_fetch_enabled = true;
 static bool has_published_metadata = false;
 static MapTileMetadata displayed_tile = {};
 
@@ -421,10 +420,6 @@ void map_app_open(lv_obj_t *parent)
     {
         size_t buf_size = MAP_CANVAS_WIDTH * MAP_CANVAS_HEIGHT * sizeof(lv_color_t);
         canvas_buffer = (lv_color_t *)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
-        if (!canvas_buffer)
-        {
-            canvas_buffer = (lv_color_t *)malloc(buf_size);
-        }
     }
 
     if (!canvas_buffer)

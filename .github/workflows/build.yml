@@ -21,6 +21,13 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Set up Node 20
+        uses: actions/setup-node@1e60f620b9541dca151540d0c3c0e0b0122d1ae9 # v4.0.3
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
       - name: Install PlatformIO Core
         run: |
           python -m pip install --upgrade pip
@@ -46,6 +53,9 @@ jobs:
           // Provider API keys stay on the HTTPS backend; firmware gets only
           // its independent gateway bearer token from its deployment config.
           #define CAMERA_TLS_CA_CERT          ""
+          #define YOUTUBE_STREAM_ENDPOINT     ""
+          #define YOUTUBE_PROXY_USER          ""
+          #define YOUTUBE_PROXY_PASSWORD      ""
           EOF
 
       - name: Run behavioral regression tests
@@ -57,27 +67,31 @@ jobs:
           npm test --prefix backend
 
       - name: Run native C++ firmware contract tests
-        run: |
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/native_contract_test.cpp -o /tmp/native_contract_test
-          /tmp/native_contract_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/service_logic_test.cpp src/core/service_state_logic.cpp -o /tmp/service_logic_test
-          /tmp/service_logic_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/fault_injection_test.cpp src/core/service_state_logic.cpp -o /tmp/fault_injection_test
-          /tmp/fault_injection_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/music_decoder_lifecycle_test.cpp -o /tmp/music_decoder_lifecycle_test
-          /tmp/music_decoder_lifecycle_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/ai_voice_protocol_test.cpp -o /tmp/ai_voice_protocol_test
-          /tmp/ai_voice_protocol_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/wifi_time_service_test.cpp -o /tmp/wifi_time_service_test
-          /tmp/wifi_time_service_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/wifi_scan_adapter_test.cpp -o /tmp/wifi_scan_adapter_test
-          /tmp/wifi_scan_adapter_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_protocol_test.cpp -o /tmp/xiaozhi_protocol_test
-          /tmp/xiaozhi_protocol_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_session_logic_test.cpp -o /tmp/xiaozhi_session_logic_test
-          /tmp/xiaozhi_session_logic_test
-          g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/system_defects_regression_test.cpp -o /tmp/system_defects_regression_test
-          /tmp/system_defects_regression_test
+        run: bash scripts/run_native_tests.sh
+
+      - name: Validate partition contract
+        run: python scripts/validate_partitions.py partitions.csv
 
       - name: Compile ESP32-S3 Firmware
-        run: pio run -e esp32-s3-es3c28p
+        run: |
+          set -o pipefail
+          pio run -e esp32-s3-es3c28p 2>&1 | tee /tmp/build-release.log
+          python scripts/check_build_warnings.py /tmp/build-release.log
+          pio run -e esp32-s3-es3c28p-music-stress 2>&1 | tee /tmp/build-stress.log
+          python scripts/check_build_warnings.py /tmp/build-stress.log
+          pio run -e esp32-s3-es3c28p-diagnostic 2>&1 | tee /tmp/build-diagnostic.log
+          python scripts/check_build_warnings.py /tmp/build-diagnostic.log
+
+      - name: Enforce firmware size budgets
+        run: |
+          pio run -e esp32-s3-es3c28p -t size | tee /tmp/firmware-size.txt
+          python scripts/verify_size.py /tmp/firmware-size.txt --max-ram 120000 --max-flash 3000000
+
+      - name: Package firmware artifacts
+        run: python scripts/package_release.py --environment esp32-s3-es3c28p --output release
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: esp32-s3-es3c28p-${{ github.sha }}
+          path: release/

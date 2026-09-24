@@ -9,7 +9,7 @@
 
 ## 🚀 1. Tổng quan hệ thống
 
-Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.8" IPS HMI. Môi trường biên dịch duy nhất trong `platformio.ini` là `esp32-s3-es3c28p`.
+Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.8" IPS HMI. `esp32-s3-es3c28p` là bản release; các môi trường `music-stress` và `diagnostic` dùng cho kiểm thử.
 
 **ES3C28P 2.8" IPS HMI**:
 
@@ -94,7 +94,6 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | :--- | :--- | :--- |
 | `lvgl/lvgl` | **8.3.11** | Nhân giao diện đồ họa chính |
 | `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V SPI và touch controller |
-| `madhephaestus/ESP32Encoder` | **0.11.7** | Đọc rotary encoder nếu có ngoại vi |
 | `ESP32-audioI2S` | vendored từ commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`**, local patch `2.0.0-mini-os.1` | Giải mã MP3; `PeriodicTask` shutdown bằng ACK trước khi giải phóng object |
 | `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
 | `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
@@ -133,8 +132,11 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
    #define GOOGLE_MAPS_STATIC_API_KEY  "AIzaSy..."
    #define AI_VOICE_PROVIDER_XIAOZHI   1
    #define XIAOZHI_OTA_ENDPOINT        "https://api.tenclass.net/xiaozhi/ota/"
-   #define XIAOZHI_OTA_CA_CERT         "-----BEGIN CERTIFICATE-----..."
-   #define XIAOZHI_WSS_CA_CERT         "-----BEGIN CERTIFICATE-----..."
+   #define XIAOZHI_OTA_CA_CERT         "" // rỗng: dùng CA gốc bundled dùng chung
+   #define XIAOZHI_WSS_CA_CERT         "" // hoặc cấu hình CA riêng cho deployment
+   #define YOUTUBE_STREAM_ENDPOINT     "http://<IP-backend>:8787/youtube/stream"
+   #define YOUTUBE_PROXY_USER          "esp32"
+   #define YOUTUBE_PROXY_PASSWORD      "mật-khẩu-riêng"
    ```
 3. File `include/secrets.h` đã được thêm vào `.gitignore` để bảo vệ an toàn thông tin cá nhân.
 4. Xiaozhi là provider mặc định. Device gọi endpoint kích hoạt chính thức bằng `Activation-Version: 1`, MAC thật làm `Device-Id`, UUID v4 bền vững trong namespace NVS `xiaozhi` làm `Client-Id`; URL/token/version WSS chỉ được nhận từ phản hồi activation rồi lưu NVS. UI hiển thị mã kích hoạt và polling có backoff, không chặn LVGL. Firmware bỏ qua hoàn toàn trường OTA firmware/assets và không ghi token vào log. `backend/` hiện là **YouTube Audio Proxy tối giản** dùng `yt-dlp` cho lệnh phát nhạc theo từ khóa; AI Voice Xiaozhi kết nối trực tiếp dịch vụ Xiaozhi và không gửi khóa LLM lên firmware.
@@ -150,11 +152,22 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 # Biên dịch firmware cho bo mạch ES3C28P 2.8" IPS HMI (Shopee / Xiaozhi)
 pio run -e esp32-s3-es3c28p
 
+# Build chẩn đoán và stress nhạc
+pio run -e esp32-s3-es3c28p-diagnostic
+pio run -e esp32-s3-es3c28p-music-stress
+
+# Toàn bộ contract test native và kiểm tra partition
+./scripts/run_native_tests.sh
+python3 scripts/validate_partitions.py partitions.csv
+
 # Nạp firmware vào bo mạch ES3C28P
 pio run -e esp32-s3-es3c28p -t upload
 
 # Mở Serial Monitor để theo dõi hệ thống (115200 baud)
 pio device monitor -b 115200
+
+# Công cụ HIL/serial dùng Python 3 + pyserial
+python3 -m pip install -r scripts/requirements-hil.txt
 ```
 
 ### Backend YouTube Audio Proxy
@@ -167,9 +180,11 @@ npm test
 node server.js
 ```
 
-Cấu hình `YOUTUBE_STREAM_ENDPOINT` trong `include/secrets.h` trỏ tới
-`http://<IP-backend>:8787/youtube/stream`. Proxy hỗ trợ Range/206 khi upstream
-hỗ trợ, hủy `yt-dlp`/fetch khi client ESP32 ngắt kết nối và có timeout hữu hạn.
+Cấu hình `YOUTUBE_STREAM_ENDPOINT` (mặc định rỗng), `YOUTUBE_PROXY_USER` và
+`YOUTUBE_PROXY_PASSWORD` trong `include/secrets.h`. Backend mặc định chỉ bind
+`127.0.0.1`; khi bind LAN bắt buộc Basic-auth. HTTP LAN plaintext chỉ dành cho
+phát triển. Proxy giới hạn hai stream, hỗ trợ Range/206, báo readiness của
+`yt-dlp`, hủy upstream khi client ngắt và áp dụng timeout hữu hạn.
 
 ---
 
@@ -187,7 +202,12 @@ hỗ trợ, hủy `yt-dlp`/fetch khi client ESP32 ngắt kết nối và có tim
 8. **Settings & Power**: Độ sáng, accent, auto-reconnect và timeout dim/display-sleep được lưu NVS. Power đọc ADC pin nếu board khai báo, báo `Uncalibrated` khi hệ số chia áp chưa xác minh, vô hiệu hóa pin/sạc trên board không có driver, đồng thời cung cấp display sleep và restart thật.
 9. **Typography & Vietnamese Localization**: UI dùng **Be Vietnam Pro SemiBold** (SIL OFL 1.1) với body/button 14px, secondary 12px và title 16px; glyph hệ thống dùng `LV_SYMBOL_*` và fallback LVGL. Font 10px cũ không được dùng cho nội dung chính.
 10. **Touch Architecture & Diagnostic**: Một reader FT6336 dùng shared-I2C mutex, parse TD_STATUS/event/ID, theo đúng một contact ID tới lúc phát release, loại mẫu ngoài native range rồi áp dụng board normalization và rotation đúng một lần. Với profile hiện tại, invert X/Y của sensor rồi rotation 2 triệt tiêu nhau nên mapping cuối là `screen_x=raw_x`, `screen_y=raw_y` trong miền 240x320. LVGL luôn nhận tọa độ toàn màn hình; Touch Diagnostic đổi screen→local theo origin của overlay nội dung, chạy thụ động 40Hz, không calibration/NVS và không chặn boot.
-11. **System Health**: App chẩn đoán nhẹ, không tạo task riêng; hiển thị Free/Largest/Low-water của internal RAM và PSRAM, trạng thái WiFi/Audio/Music/Xiaozhi, task count và CPU. Status bar cũng hiển thị RAM nội bộ còn trống.
+11. **System Health**: App chẩn đoán nhẹ, không tạo task riêng; hiển thị Free/Largest/Low-water của internal RAM và PSRAM, LVGL pool/fragmentation, heartbeat và stack margin theo task, reset reason, trạng thái WiFi/Audio/Music/Xiaozhi, task count và CPU. Status bar cũng hiển thị RAM nội bộ còn trống.
+
+Hai OTA slot 4.5 MB và SPIFFS 6.875 MB được giữ dành trước; firmware hiện chưa
+triển khai OTA và chưa mount SPIFFS. Quy trình gate/release nằm trong
+`docs/RELEASE_CHECKLIST.md`; các giới hạn production nằm trong
+`docs/PRODUCTION_SECURITY.md`.
 
 Status bar dùng giờ SNTP thật theo UTC+7 (`--:--` trước khi đồng bộ); uptime vẫn hiển thị riêng trong System Monitor. SNTP được yêu cầu bất đồng bộ sau khi WiFi có IP và đồng bộ lại khi reconnect, không ghi NVS mỗi giây.
 

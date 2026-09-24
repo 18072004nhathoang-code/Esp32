@@ -54,6 +54,14 @@ void lvgl_port_unlock(void);
  */
 bool lvgl_port_init(void);
 
+/** Called by the LVGL owner task before lv_timer_handler(). */
+typedef void (*LvglOwnerHook)(void);
+void lvgl_port_set_owner_hook(LvglOwnerHook hook);
+
+/** Snapshot LVGL's fixed pool without exposing LVGL internals to apps. */
+bool lvgl_port_get_memory_stats(uint32_t *free_bytes, uint32_t *largest_free_bytes,
+                                uint8_t *fragmentation_percent);
+
 /**
  * @brief Điều chỉnh độ sáng đèn nền màn hình (0 - 100%)
  */

@@ -7,13 +7,17 @@
 #include <esp_system.h>
 #include <esp_timer.h>
 #include <esp_freertos_hooks.h>
+#include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "../storage/storage_manager.h"
 #include "wifi_manager.h"
 #include "firmware_contracts.h"
+#include "../display/lvgl_port.h"
+#include "../ai/ai_voice_service.h"
+#include <atomic>
 
-static volatile uint32_t s_idle_count[2] = {0, 0};
+static std::atomic<uint32_t> s_idle_count[2];
 static uint32_t s_last_idle_count[2] = {0, 0};
 static uint64_t s_idle_rate_baseline_q20[2] = {0, 0};
 static uint64_t s_last_cpu_sample_us = 0;
@@ -21,8 +25,8 @@ static bool s_cpu_hooks_ready = false;
 static SystemStats s_cached_stats = {};
 static portMUX_TYPE s_stats_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static bool idle_hook_core0(void) { ++s_idle_count[0]; return true; }
-static bool idle_hook_core1(void) { ++s_idle_count[1]; return true; }
+static bool idle_hook_core0(void) { s_idle_count[0].fetch_add(1, std::memory_order_relaxed); return true; }
+static bool idle_hook_core1(void) { s_idle_count[1].fetch_add(1, std::memory_order_relaxed); return true; }
 
 bool system_info_init(void)
 {
@@ -50,7 +54,7 @@ void system_info_update(void)
         uint64_t idle_capacity_rate_q20 = 0;
         for (int core = 0; core < 2; ++core)
         {
-            const uint32_t current = s_idle_count[core];
+            const uint32_t current = s_idle_count[core].load(std::memory_order_relaxed);
             const uint32_t delta = current - s_last_idle_count[core];
             s_last_idle_count[core] = current;
             const uint64_t rate_q20 = (static_cast<uint64_t>(delta) << 20) / elapsed_us;
@@ -109,6 +113,30 @@ SystemStats system_get_stats(void)
     const SystemStats snapshot = s_cached_stats;
     portEXIT_CRITICAL(&s_stats_mux);
     return snapshot;
+}
+
+RuntimeHealthSnapshot system_get_runtime_health(void)
+{
+    RuntimeHealthSnapshot health = {};
+    health.internal_free_bytes = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health.internal_min_free_bytes = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health.internal_largest_free_bytes = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    health.psram_free_bytes = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    health.psram_min_free_bytes = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    health.psram_largest_free_bytes = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    health.loop_stack_free_bytes = uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t);
+    health.task_count = uxTaskGetNumberOfTasks();
+    health.reset_reason = static_cast<uint32_t>(esp_reset_reason());
+    const AiVoiceQueueHealth voice = ai_voice_get_queue_health();
+    health.voice_uplink_queue_depth = voice.uplink_depth;
+    health.voice_inbound_queue_depth = voice.inbound_depth;
+    health.voice_uplink_drops = voice.uplink_drops;
+    health.voice_inbound_drops = voice.inbound_drops;
+    health.lvgl_stats_available = lvgl_port_get_memory_stats(
+        &health.lvgl_free_bytes, &health.lvgl_largest_free_bytes,
+        &health.lvgl_fragmentation_percent);
+    runtime_health_copy_tasks(health.tasks);
+    return health;
 }
 
 BatteryInfo system_get_battery_info(void)

@@ -56,12 +56,44 @@ constexpr uint8_t es8311_volume_register(uint8_t percent)
                                (0xBFU - 0x47U)) / 99U);
 }
 
-// This Mini OS build intentionally runs the speaker at full user-scale volume.
-// 100% maps to ES8311 unity gain (0 dB, register 0xBF), not the codec's
-// positive-gain region above unity.
-constexpr uint8_t audio_forced_volume_percent(uint8_t)
+constexpr uint8_t audio_clamp_volume_percent(uint8_t percent)
 {
-    return 100U;
+    return percent > 100U ? 100U : percent;
+}
+
+struct VoicePcmFilterState
+{
+    int32_t previous_input = 0;
+    int32_t previous_output = 0;
+};
+
+inline void voice_pcm_filter_reset(VoicePcmFilterState *state)
+{
+    if (state) *state = {};
+}
+
+inline int16_t voice_pcm_filter_sample(int16_t sample, VoicePcmFilterState *state)
+{
+    if (!state) return sample;
+    const int32_t input = sample;
+    const int32_t high_pass = input - state->previous_input +
+                              ((31 * state->previous_output) >> 5);
+    const int32_t delta = high_pass - state->previous_output;
+    state->previous_input = input;
+    state->previous_output = high_pass;
+
+    int32_t enhanced = high_pass + (delta >> 3);
+    if (enhanced > 30000)
+    {
+        enhanced = 30000 + ((enhanced - 30000) >> 2);
+        if (enhanced > 32767) enhanced = 32767;
+    }
+    else if (enhanced < -30000)
+    {
+        enhanced = -30000 + ((enhanced + 30000) >> 2);
+        if (enhanced < -32768) enhanced = -32768;
+    }
+    return static_cast<int16_t>(enhanced);
 }
 
 constexpr bool audio_session_cleanup_allowed(uint32_t cleanup_session, uint32_t active_session)
@@ -473,4 +505,3 @@ inline bool strip_url_credentials(const char *src_url,
     }
     return true;
 }
-

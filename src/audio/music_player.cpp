@@ -15,6 +15,7 @@
 #include "service_state_logic.h"
 #include "music_decoder_lifecycle.h"
 #include "music_stream_logic.h"
+#include "../os/runtime_health.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -26,14 +27,20 @@
 #define AI_MUSIC_STREAM_CA_CERT ""
 #endif
 #ifndef YOUTUBE_STREAM_ENDPOINT
-#define YOUTUBE_STREAM_ENDPOINT "http://192.168.1.28:8787/youtube/stream"
+#define YOUTUBE_STREAM_ENDPOINT ""
+#endif
+#ifndef YOUTUBE_PROXY_USER
+#define YOUTUBE_PROXY_USER ""
+#endif
+#ifndef YOUTUBE_PROXY_PASSWORD
+#define YOUTUBE_PROXY_PASSWORD ""
 #endif
 
 static Audio *audio = nullptr;
 static TaskHandle_t audio_task_handle = NULL;
 static SemaphoreHandle_t audio_mutex = NULL;
 
-static MusicTrack playlist[MUSIC_MAX_TRACKS];
+static MusicTrack *playlist = nullptr;
 static int total_tracks_found = 0;
 static MusicPlayerState player_state = {
     .is_playing = false,
@@ -42,7 +49,7 @@ static MusicPlayerState player_state = {
     .total_tracks = 0,
     .current_time_sec = 0,
     .total_duration_sec = 0,
-    .volume = 100
+    .volume = 60
 };
 
 // Các lệnh điều khiển phát nhạc đa luồng gửi qua FreeRTOS Queue
@@ -227,10 +234,6 @@ static Audio *allocate_audio_decoder(void)
     void *mem = heap_caps_malloc(sizeof(Audio), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!mem)
     {
-        mem = malloc(sizeof(Audio));
-    }
-    if (!mem)
-    {
         Serial.println("[MUSIC_AUDIO] ❌ Không thể cấp phát bộ nhớ cho Audio decoder!");
         return nullptr;
     }
@@ -327,6 +330,7 @@ static void music_audio_task(void *pvParameters)
     uint32_t last_stack_report_ms = 0;
     while (true)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_MUSIC);
         const uint32_t now_ms = millis();
         if (now_ms - last_stack_report_ms >= 30000U)
         {
@@ -545,7 +549,7 @@ static void music_audio_task(void *pvParameters)
                 {
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
                     {
-                        player_state.volume = audio_forced_volume_percent((uint8_t)cmd.param);
+                        player_state.volume = audio_clamp_volume_percent((uint8_t)cmd.param);
                         audio_set_volume(player_state.volume);
                         if (audio && player_state.is_playing && !player_state.is_paused)
                             audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, true);
@@ -595,8 +599,11 @@ static void music_audio_task(void *pvParameters)
                                 audio->setTone(-3, 3, 1); // EQ acoustic: -3dB bass (chống rè loa nhỏ), +3dB mid (vocal rõ nét), +1dB treble (trong trẻo)
                                 audio->setVolume(20);     // 1dB headroom an toàn chống méo tiếng / clipping
                                 audio_set_volume(player_state.volume);
+                                const bool is_youtube = strcmp(cmd.source_id, "youtube") == 0;
                                 if (pins_ok && audio_codec_configure_for_stream(44100, 128) &&
-                                    audio->connecttohost(cmd.filepath))
+                                    audio->connecttohost(cmd.filepath,
+                                                         is_youtube ? YOUTUBE_PROXY_USER : "",
+                                                         is_youtube ? YOUTUBE_PROXY_PASSWORD : ""))
                                 {
                                     player_state.current_track_idx = -1;
                                     strlcpy(current_stream_source_id, cmd.source_id,
@@ -727,6 +734,17 @@ static void music_audio_task(void *pvParameters)
 bool music_player_init(void)
 {
     Serial.println("[MUSIC_PLAYER] Đang khởi tạo Music Player...");
+
+    if (!playlist)
+    {
+        playlist = static_cast<MusicTrack *>(heap_caps_calloc(
+            MUSIC_MAX_TRACKS, sizeof(MusicTrack), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!playlist)
+        {
+            Serial.println("[MUSIC_PLAYER] ❌ Thiếu PSRAM cho playlist");
+            return false;
+        }
+    }
 
     if (!audio_mutex)
     {
@@ -991,7 +1009,7 @@ bool music_player_seek(uint32_t sec)
 
 bool music_player_set_volume(uint8_t vol_percent)
 {
-    vol_percent = audio_forced_volume_percent(vol_percent);
+    vol_percent = audio_clamp_volume_percent(vol_percent);
     MusicCommand cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.type = MUSIC_CMD_SET_VOLUME;
@@ -1119,7 +1137,9 @@ bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeou
                     xSemaphoreGive(music_ai_action_mutex);
                     return false;
                 }
-                const int written = snprintf(cmd.filepath, sizeof(cmd.filepath), "%s?q=%s", YOUTUBE_STREAM_ENDPOINT, encoded);
+                const char separator = strchr(YOUTUBE_STREAM_ENDPOINT, '?') ? '&' : '?';
+                const int written = snprintf(cmd.filepath, sizeof(cmd.filepath), "%s%cq=%s",
+                                             YOUTUBE_STREAM_ENDPOINT, separator, encoded);
                 if (written < 0 || static_cast<size_t>(written) >= sizeof(cmd.filepath))
                 {
                     if (error && error_size) strlcpy(error, "YOUTUBE_STREAM_ENDPOINT quá dài", error_size);

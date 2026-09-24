@@ -5,6 +5,11 @@
  */
 
 #include "audio_manager.h"
+
+// Arduino-ESP32 2.0.17 exposes only the legacy I2S driver used by the ES8311
+// integration. Keep this exception local to the one compatibility source.
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#include <esp_task_wdt.h>
 #include "shared_i2c_bus.h"
 #include <driver/i2s.h>
 #include <esp_heap_caps.h>
@@ -13,10 +18,11 @@
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
 #include "xiaozhi_session_logic.h"
+#include "../os/runtime_health.h"
 
 // Quản lý trạng thái hệ thống âm thanh
 static bool is_initialized = false;
-static uint8_t master_volume = 100; // Forced full-scale user volume (0 dB codec gain)
+static uint8_t master_volume = 60; // Safe default; 100% remains codec unity gain.
 static bool pa_enabled = false;
 static bool codec_ready = false;
 static bool codec_muted = true;
@@ -406,8 +412,6 @@ static bool publish_recording_snapshot(size_t count, uint32_t *created_generatio
             fresh->samples = static_cast<int16_t *>(heap_caps_malloc(
                 count * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
             if (!fresh->samples)
-                fresh->samples = static_cast<int16_t *>(malloc(count * sizeof(int16_t)));
-            if (!fresh->samples)
             {
                 delete fresh;
                 fresh = nullptr;
@@ -693,21 +697,20 @@ bool audio_install_duplex_driver(void)
 {
     if (audio_is_driver_installed()) return true;
 
-    i2s_config_t i2s_config = {
-        .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
-        .sample_rate = AUDIO_SAMPLE_RATE,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = 256,
-        .use_apll = true,
-        .tx_desc_auto_clear = true,
-        .fixed_mclk = 0,
-        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
-        .bits_per_chan = I2S_BITS_PER_CHAN_16BIT
-    };
+    i2s_config_t i2s_config = {};
+    i2s_config.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX);
+    i2s_config.sample_rate = AUDIO_SAMPLE_RATE;
+    i2s_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
+    i2s_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    i2s_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
+    i2s_config.dma_buf_count = 8;
+    i2s_config.dma_buf_len = 256;
+    i2s_config.use_apll = true;
+    i2s_config.tx_desc_auto_clear = true;
+    i2s_config.fixed_mclk = 0;
+    i2s_config.mclk_multiple = I2S_MCLK_MULTIPLE_256;
+    i2s_config.bits_per_chan = I2S_BITS_PER_CHAN_16BIT;
 
     i2s_pin_config_t pin_config = {
         .mck_io_num = AUDIO_I2S_MCLK,
@@ -745,13 +748,11 @@ bool audio_install_duplex_driver(void)
 // 1. High-Pass filter (~100 Hz) triệt tiêu tiếng ù nền, DC offset và hiện tượng màng loa rung quá giới hạn
 // 2. Vocal clarity shaper: Tăng cường nhẹ dải tần trung-cao (~2.5 - 3.5 kHz) giúp phát âm tiếng Việt rõ ràng, thanh thoát
 // 3. Soft-knee saturation limiter: Làm tròn đỉnh biên độ cực đại, chống hiện tượng clipping méo vỡ tiếng khi âm lượng lớn
-static int32_t s_voice_hpf_x = 0;
-static int32_t s_voice_hpf_y = 0;
+static VoicePcmFilterState s_voice_filter;
 
 bool audio_drain_tx(uint32_t timeout_ms)
 {
-    s_voice_hpf_x = 0;
-    s_voice_hpf_y = 0;
+    voice_pcm_filter_reset(&s_voice_filter);
     if (timeout_ms == 0) return false;
     // Arduino-ESP32's legacy I2S API has no wait_tx_done. Queue a silence
     // marker behind all existing PCM, then allow the bounded DMA depth to run.
@@ -1249,7 +1250,7 @@ bool audio_is_pa_enabled(void)
 
 void audio_set_volume(uint8_t volume_percent)
 {
-    volume_percent = audio_forced_volume_percent(volume_percent);
+    volume_percent = audio_clamp_volume_percent(volume_percent);
     if (!audio_codec_mutex || xSemaphoreTake(audio_codec_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
         return;
     master_volume = volume_percent;
@@ -1273,7 +1274,7 @@ bool audio_set_volume_async(uint8_t volume_percent)
     if (!audio_command_queue) return false;
     const AudioAsyncCommand cmd = {
         AUDIO_ASYNC_SET_VOLUME,
-        audio_forced_volume_percent(volume_percent),
+        audio_clamp_volume_percent(volume_percent),
         0
     };
     return xQueueSend(audio_command_queue, &cmd, 0) == pdTRUE;
@@ -1341,9 +1342,13 @@ static void audio_background_task(void *pvParameters)
     size_t rx_carry_bytes = 0;
     size_t bytes_read = 0;
     uint32_t last_stack_report_ms = 0;
+    const bool watchdog_registered = esp_task_wdt_add(nullptr) == ESP_OK;
+    if (!watchdog_registered) Serial.println("[AUDIO] WARN: task watchdog registration failed");
 
     while (1)
     {
+        if (watchdog_registered) esp_task_wdt_reset();
+        runtime_health_heartbeat(RUNTIME_TASK_AUDIO);
         const uint32_t now_ms = millis();
         if (now_ms - last_stack_report_ms >= 30000U)
         {
@@ -1673,7 +1678,7 @@ bool audio_manager_init(void)
         return false;
     }
     Serial.println("[AUDIO] ✔ ES8311 Codec được cấu hình thành công");
-    audio_set_volume(100);
+    audio_set_volume(60);
 
     // 4. Cấp phát bộ đệm ghi âm 320KB trong 8MB Octal PSRAM
     if (psramFound())
@@ -2683,30 +2688,7 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         if (chunk > 256) chunk = 256;
         for (size_t i = 0; i < chunk; ++i)
         {
-            int32_t x = static_cast<int32_t>(samples[offset + i]);
-
-            // 1. Single-pole High-Pass Filter (alpha = 31/32 ~= 0.96875, fc ~= 80-120 Hz)
-            int32_t y = x - s_voice_hpf_x + ((31 * s_voice_hpf_y) >> 5);
-            int32_t delta = y - s_voice_hpf_y;
-            s_voice_hpf_x = x;
-            s_voice_hpf_y = y;
-
-            // 2. High-mid vocal presence emphasis (~1.5dB boost ở dải phát âm nguyên âm/phụ âm)
-            int32_t enhanced = y + (delta >> 3);
-
-            // 3. Soft saturation limiter (chống clipping méo tiếng)
-            if (enhanced > 30000)
-            {
-                enhanced = 30000 + ((enhanced - 30000) >> 2);
-                if (enhanced > 32767) enhanced = 32767;
-            }
-            else if (enhanced < -30000)
-            {
-                enhanced = -30000 + ((enhanced - -30000) >> 2);
-                if (enhanced < -32768) enhanced = -32768;
-            }
-
-            int16_t out_s = static_cast<int16_t>(enhanced);
+            const int16_t out_s = voice_pcm_filter_sample(samples[offset + i], &s_voice_filter);
             stereo[i * 2] = out_s;
             stereo[i * 2 + 1] = out_s;
         }

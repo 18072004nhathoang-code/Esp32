@@ -128,6 +128,33 @@ static void open_power_app(void);
 static void open_health_app(void);
 static void close_current_app(void);
 static void prepare_app_window(const char *title, AppID app_id);
+static void process_app_open_requests(void);
+
+static bool request_app_open(AppID app, uint32_t timeout_ms)
+{
+    if (!app_open_queue || !app_open_ack_queue || !app_open_rpc_mutex) return false;
+    const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
+    if (xSemaphoreTake(app_open_rpc_mutex, timeout) != pdTRUE) return false;
+
+    bool opened = false;
+    AppOpenAck stale = {};
+    while (xQueueReceive(app_open_ack_queue, &stale, 0) == pdTRUE) {}
+    const TickType_t started = xTaskGetTickCount();
+    const AppOpenRequest request = {app, ++next_app_open_request_id, started + timeout};
+    if (xQueueSend(app_open_queue, &request, 0) == pdTRUE)
+    {
+        AppOpenAck ack = {};
+        while (true)
+        {
+            const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
+            if (elapsed_ticks >= timeout) break;
+            if (xQueueReceive(app_open_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE) break;
+            if (ack.request_id == request.request_id) { opened = ack.opened; break; }
+        }
+    }
+    xSemaphoreGive(app_open_rpc_mutex);
+    return opened;
+}
 
 static void apply_accent_theme(void)
 {
@@ -1181,11 +1208,7 @@ static void open_wifi_app(void)
 
 void ui_open_wifi_app(void)
 {
-    if (lvgl_port_lock(500))
-    {
-        open_wifi_app();
-        lvgl_port_unlock();
-    }
+    (void)request_app_open(APP_WIFI, 500);
 }
 
 bool ui_is_home_active(void)
@@ -1219,11 +1242,7 @@ static void open_music_app(void)
 
 void ui_open_music_app(void)
 {
-    if (lvgl_port_lock(500))
-    {
-        open_music_app();
-        lvgl_port_unlock();
-    }
+    (void)request_app_open(APP_MUSIC, 500);
 }
 
 static void open_ai_voice_app(void)
@@ -1234,11 +1253,7 @@ static void open_ai_voice_app(void)
 
 void ui_open_ai_voice_app(void)
 {
-    if (lvgl_port_lock(500))
-    {
-        open_ai_voice_app();
-        lvgl_port_unlock();
-    }
+    (void)request_app_open(APP_AI_VOICE, 500);
 }
 
 static void open_camera_app(void)
@@ -1255,29 +1270,30 @@ static void open_health_app(void)
 
 bool ui_open_camera_app(void)
 {
-    if (!app_open_queue || !app_open_ack_queue || !app_open_rpc_mutex) return false;
-    const TickType_t timeout = pdMS_TO_TICKS(1500);
-    if (xSemaphoreTake(app_open_rpc_mutex, timeout) != pdTRUE) return false;
+    return request_app_open(APP_CAMERA, 500);
+}
 
-    bool opened = false;
-    AppOpenAck stale = {};
-    while (xQueueReceive(app_open_ack_queue, &stale, 0) == pdTRUE) {}
-    const TickType_t started = xTaskGetTickCount();
-    const AppOpenRequest request = {APP_CAMERA, ++next_app_open_request_id, started + timeout};
-
-    if (xQueueSend(app_open_queue, &request, 0) == pdTRUE)
+static void process_app_open_requests(void)
+{
+    AppOpenRequest request = {};
+    while (app_open_queue && xQueueReceive(app_open_queue, &request, 0) == pdTRUE)
     {
-        AppOpenAck ack = {};
-        while (true)
+        bool opened = false;
+        if (static_cast<int32_t>(xTaskGetTickCount() - request.deadline) < 0)
         {
-            const TickType_t elapsed_ticks = xTaskGetTickCount() - started;
-            if (elapsed_ticks >= timeout) break;
-            if (xQueueReceive(app_open_ack_queue, &ack, timeout - elapsed_ticks) != pdTRUE) break;
-            if (ack.request_id == request.request_id) { opened = ack.opened; break; }
+            switch (request.app)
+            {
+                case APP_WIFI: open_wifi_app(); break;
+                case APP_MUSIC: open_music_app(); break;
+                case APP_AI_VOICE: open_ai_voice_app(); break;
+                case APP_CAMERA: open_camera_app(); break;
+                default: break;
+            }
+            opened = active_app == request.app;
         }
+        const AppOpenAck ack = {request.request_id, opened};
+        if (app_open_ack_queue) (void)xQueueSend(app_open_ack_queue, &ack, 0);
     }
-    xSemaphoreGive(app_open_rpc_mutex);
-    return opened;
 }
 
 /* =========================================================================
@@ -1288,6 +1304,7 @@ void ui_init(void)
     if (!app_open_queue) app_open_queue = xQueueCreate(4, sizeof(AppOpenRequest));
     if (!app_open_ack_queue) app_open_ack_queue = xQueueCreate(4, sizeof(AppOpenAck));
     if (!app_open_rpc_mutex) app_open_rpc_mutex = xSemaphoreCreateMutex();
+    lvgl_port_set_owner_hook(process_app_open_requests);
     theme_accent = lv_color_hex(settings_service_get().accent_rgb);
     applied_settings_revision = settings_service_get_completion_revision();
     if (lvgl_port_lock(1000))
@@ -1306,20 +1323,6 @@ void ui_init(void)
 void ui_update_periodic(const SystemStats &stats)
 {
     if (!lvgl_port_lock(200)) return;
-
-    AppOpenRequest open_request = {};
-    while (app_open_queue && xQueueReceive(app_open_queue, &open_request, 0) == pdTRUE)
-    {
-        bool opened = false;
-        if (static_cast<int32_t>(xTaskGetTickCount() - open_request.deadline) < 0 &&
-            open_request.app == APP_CAMERA)
-        {
-            open_camera_app();
-            opened = active_app == APP_CAMERA;
-        }
-        const AppOpenAck ack = {open_request.request_id, opened};
-        if (app_open_ack_queue) (void)xQueueSend(app_open_ack_queue, &ack, 0);
-    }
 
     const uint32_t settings_revision = settings_service_get_completion_revision();
     if (settings_revision_needs_reconcile(settings_revision, applied_settings_revision))

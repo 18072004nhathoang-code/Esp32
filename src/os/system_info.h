@@ -6,6 +6,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "runtime_health.h"
 
 struct SystemStats {
     uint32_t cpu_freq_mhz;
@@ -40,12 +41,34 @@ struct BatteryInfo {
     char status_str[40];
 };
 
+struct RuntimeHealthSnapshot {
+    uint32_t internal_free_bytes;
+    uint32_t internal_min_free_bytes;
+    uint32_t internal_largest_free_bytes;
+    uint32_t psram_free_bytes;
+    uint32_t psram_min_free_bytes;
+    uint32_t psram_largest_free_bytes;
+    uint32_t lvgl_free_bytes;
+    uint32_t lvgl_largest_free_bytes;
+    uint32_t loop_stack_free_bytes;
+    uint32_t task_count;
+    uint32_t reset_reason;
+    uint32_t voice_uplink_queue_depth;
+    uint32_t voice_inbound_queue_depth;
+    uint32_t voice_uplink_drops;
+    uint32_t voice_inbound_drops;
+    uint8_t lvgl_fragmentation_percent;
+    bool lvgl_stats_available;
+    RuntimeTaskHealth tasks[RUNTIME_TASK_COUNT];
+};
+
 /**
  * @brief Thu thập thông số hoạt động của chip ESP32-S3
  */
 bool system_info_init(void);
 void system_info_update(void);
 SystemStats system_get_stats(void);
+RuntimeHealthSnapshot system_get_runtime_health(void);
 
 /**
  * @brief Thu thập thông số pin phần cứng thực tế

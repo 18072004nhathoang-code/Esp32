@@ -43,7 +43,6 @@ public:
         : data_(static_cast<uint8_t *>(heap_caps_malloc(capacity + 1,
               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))), size_(0), capacity_(capacity), failed_(false)
     {
-        if (!data_) data_ = static_cast<uint8_t *>(malloc(capacity + 1));
         if (!data_) failed_ = true;
     }
     ~BoundedSink() override { free(data_); }

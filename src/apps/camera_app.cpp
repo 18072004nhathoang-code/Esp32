@@ -13,6 +13,7 @@
 #include "service_state_logic.h"
 #include <esp_heap_caps.h>
 #include <stdlib.h>
+#include <atomic>
 
 static_assert(sizeof(lv_color_t) == sizeof(uint16_t), "Camera preview requires LVGL RGB565");
 
@@ -63,7 +64,7 @@ static size_t preview_back_capacity_pixels = 0;
 static SemaphoreHandle_t preview_mutex = nullptr;
 static QueueHandle_t camera_command_queue = nullptr;
 static TaskHandle_t camera_worker_handle = nullptr;
-static volatile bool preview_active = false;
+static std::atomic<bool> preview_active{false};
 static uint32_t preview_frame_id = 0;
 static uint32_t preview_timestamp_ms = 0;
 static uint32_t preview_jpeg_bytes = 0;
@@ -74,14 +75,14 @@ static uint16_t worker_canvas_h = 0;
 static uint32_t preview_session_id = 0;
 static uint32_t ui_session_id = 0;
 static uint32_t worker_session_id = 0;
-static volatile uint32_t worker_ack_revision = 0;
-static volatile uint32_t worker_received_revision = 0;
+static std::atomic<uint32_t> worker_ack_revision{0};
+static std::atomic<uint32_t> worker_received_revision{0};
 static uint32_t worker_retry_revision = 0;
 static uint8_t worker_retry_count = 0;
 static uint32_t worker_retry_after_ms = 0;
-static volatile bool worker_control_error = false;
-static volatile bool worker_wait_old_worker_exit = false;
-static volatile bool worker_decode_error = false;
+static std::atomic<bool> worker_control_error{false};
+static std::atomic<bool> worker_wait_old_worker_exit{false};
+static std::atomic<bool> worker_decode_error{false};
 static uint32_t service_session_id = 0;
 static uint32_t camera_config_next_request_id = 0;
 static portMUX_TYPE camera_control_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -372,7 +373,6 @@ static uint16_t *allocate_preview_buffer(size_t pixels)
 {
     uint16_t *buffer = static_cast<uint16_t *>(heap_caps_malloc(
         pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!buffer) buffer = static_cast<uint16_t *>(malloc(pixels * sizeof(uint16_t)));
     return buffer;
 }
 
@@ -757,10 +757,6 @@ void camera_app_open(lv_obj_t *parent)
     if (!cam_canvas_buf)
     {
         cam_canvas_buf = (lv_color_t *)heap_caps_malloc(canvas_w * canvas_h * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-        if (!cam_canvas_buf)
-        {
-            cam_canvas_buf = (lv_color_t *)malloc(canvas_w * canvas_h * sizeof(lv_color_t));
-        }
     }
 
     if (cam_canvas_buf)
@@ -1129,10 +1125,12 @@ void camera_app_update(void)
         }
         else if (worker_wait_old_worker_exit)
             lv_label_set_text_fmt(lbl_cam_status, "WAIT_OLD_WORKER_EXIT • received=%u applied=%u",
-                                  worker_received_revision, worker_ack_revision);
+                                  worker_received_revision.load(std::memory_order_acquire),
+                                  worker_ack_revision.load(std::memory_order_acquire));
         else if (worker_control_error)
             lv_label_set_text_fmt(lbl_cam_status, "CONTROL ERROR • received=%u applied=%u",
-                                  worker_received_revision, worker_ack_revision);
+                                  worker_received_revision.load(std::memory_order_acquire),
+                                  worker_ack_revision.load(std::memory_order_acquire));
         else if (state == CAM_STATE_STARTING)
             lv_label_set_text(lbl_cam_status, "WORKER STARTING");
         else if (state == CAM_STATE_STOPPING)

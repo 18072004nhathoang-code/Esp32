@@ -7,6 +7,8 @@
 #include "../os/wifi_manager.h"
 #include <HTTPClient.h>
 #include "firmware_contracts.h"
+#include "../os/network_coordinator.h"
+#include "../os/runtime_health.h"
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
@@ -34,14 +36,15 @@ class BoundedBufferStream final : public Stream
 {
 public:
     BoundedBufferStream(uint8_t *&buffer, size_t &capacity, size_t limit,
-                        volatile bool *running)
+                        const std::atomic<bool> *running)
         : _buffer(buffer), _capacity(capacity), _limit(limit), _running(running) {}
 
     size_t write(uint8_t byte) override { return write(&byte, 1); }
     size_t write(const uint8_t *data, size_t len) override
     {
         if (!data || len == 0) return 0;
-        if ((_running && !*_running) || len > _limit - _size)
+        if ((_running && !_running->load(std::memory_order_acquire)) ||
+            len > _limit - _size || !network_background_allowed())
         {
             _failed = true;
             return 0;
@@ -77,7 +80,7 @@ private:
     uint8_t *&_buffer;
     size_t &_capacity;
     size_t _limit;
-    volatile bool *_running;
+    const std::atomic<bool> *_running;
     size_t _size = 0;
     bool _failed = false;
 };
@@ -175,6 +178,22 @@ NetworkCameraService::~NetworkCameraService()
         vSemaphoreDelete(_worker_exit_sem);
         _worker_exit_sem = nullptr;
     }
+}
+
+void NetworkCameraService::releaseInactiveBuffers()
+{
+    if (!_frame_mutex || xSemaphoreTake(_frame_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (!_front_in_use)
+    {
+        heap_caps_free(_buf_front);
+        heap_caps_free(_buf_back);
+        _buf_front = nullptr;
+        _buf_back = nullptr;
+        _front_capacity = 0;
+        _back_capacity = 0;
+        _frame_front = {};
+    }
+    xSemaphoreGive(_frame_mutex);
 }
 
 void NetworkCameraService::urlEncode(const char *src, char *dst, size_t dst_len)
@@ -349,7 +368,7 @@ CameraTransportSecurity NetworkCameraService::getTransportSecurity() const
 
 CameraFailureReason NetworkCameraService::getFailureReason() const
 {
-    return _failure_reason;
+    return _failure_reason.load(std::memory_order_acquire);
 }
 
 uint32_t NetworkCameraService::getSessionId() const
@@ -534,6 +553,7 @@ void NetworkCameraService::workerTask()
 
     while (_running)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_CAMERA);
         NetworkCameraProfile cur_prof;
         bool is_cfg = false;
         CameraRuntimeState cur_state = CAM_STATE_NOT_CONFIGURED;
@@ -566,7 +586,6 @@ void NetworkCameraService::workerTask()
                 {
                     _buf_front = (uint8_t *)heap_caps_malloc(_front_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
-                if (!_buf_front) _buf_front = (uint8_t *)malloc(_front_capacity);
             }
             if (_buf_back == nullptr)
             {
@@ -574,7 +593,6 @@ void NetworkCameraService::workerTask()
                 {
                     _buf_back = (uint8_t *)heap_caps_malloc(_back_capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 }
-                if (!_buf_back) _buf_back = (uint8_t *)malloc(_back_capacity);
             }
 
             if (_buf_back && _buf_front)
@@ -774,6 +792,7 @@ bool NetworkCameraService::stop(uint32_t timeout_ms)
         if (_runtime_state != CAM_STATE_NOT_CONFIGURED && _runtime_state != CAM_STATE_PASSWORD_REQUIRED)
             _runtime_state = CAM_STATE_STOPPED;
         xSemaphoreGive(_config_mutex);
+        releaseInactiveBuffers();
         return true;
     }
     _runtime_state = CAM_STATE_STOPPING;
@@ -798,6 +817,7 @@ bool NetworkCameraService::stop(uint32_t timeout_ms)
         _runtime_state = CAM_STATE_STOPPED;
     }
     xSemaphoreGive(_config_mutex);
+    releaseInactiveBuffers();
     Serial.println("[NET_CAM] ⏹ Đã dừng dịch vụ IP Camera.");
     return true;
 }
@@ -824,22 +844,22 @@ NetworkCameraProfile NetworkCameraService::getActiveProfile() const
 
 CameraFeatureStatus NetworkCameraService::getSnapshotStatus() const
 {
-    return _snapshot_status;
+    return _snapshot_status.load(std::memory_order_acquire);
 }
 
 CameraFeatureStatus NetworkCameraService::getMjpegStatus() const
 {
-    return _mjpeg_status;
+    return _mjpeg_status.load(std::memory_order_acquire);
 }
 
 CameraFeatureStatus NetworkCameraService::getRtspStatus() const
 {
-    return _rtsp_status;
+    return _rtsp_status.load(std::memory_order_acquire);
 }
 
 CameraFeatureStatus NetworkCameraService::getOnvifStatus() const
 {
-    return _onvif_status;
+    return _onvif_status.load(std::memory_order_acquire);
 }
 
 CameraFrame* NetworkCameraService::getFrame(uint32_t timeout_ms)
@@ -992,6 +1012,7 @@ bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t 
              plaintext ? configured_port : https_port);
 
     HTTPClient http;
+    http.setConnectTimeout(1500);
     WiFiClient plain_client;
     WiFiClientSecure secure_client;
     bool began = false;
@@ -1076,6 +1097,8 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
                                                        const NetworkCameraProfile &request_profile)
 {
     if (!out_buf || current_cap == 0 || !_running) return -1;
+    NetworkBulkLease network_lease(100);
+    if (!network_lease.acquired()) return -1;
 
     char url[256] = {};
     if (request_profile.custom_url[0] != '\0')
@@ -1119,6 +1142,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
     }
 
     HTTPClient http;
+    http.setConnectTimeout(1500);
     WiFiClient plain_client;
     WiFiClientSecure secure_client;
     bool began = false;
@@ -1221,5 +1245,3 @@ const char* NetworkCameraService::getVendorName(CameraVendorProfile vendor)
         default:                   return "ONVIF Generic";
     }
 }
-
-

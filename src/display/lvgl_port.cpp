@@ -9,7 +9,9 @@
 #include "../ui/ui_theme.h"
 #include "../ai/ai_voice_service.h"
 #include "shared_i2c_bus.h"
+#include "../os/runtime_health.h"
 #include <esp_heap_caps.h>
+#include <esp_task_wdt.h>
 #include <Preferences.h>
 
 // Khởi tạo đối tượng LovyanGFX toàn cục
@@ -21,7 +23,6 @@ SemaphoreHandle_t lvgl_mutex = nullptr;
 // Bộ đệm vẽ của LVGL
 static lv_disp_draw_buf_t draw_buf;
 static lv_color_t *disp_buf1 = nullptr;
-static lv_color_t *disp_buf2 = nullptr;
 
 // Display & Input drivers
 static lv_disp_drv_t disp_drv;
@@ -29,6 +30,7 @@ static lv_indev_drv_t indev_drv;
 
 // Task handle
 static TaskHandle_t lvgl_task_handle = nullptr;
+static LvglOwnerHook lvgl_owner_hook = nullptr;
 static uint8_t current_brightness = 85; // Mặc định 85%
 static DisplayDiagnosticState display_diagnostic = {
     BOARD_LCD_RGB_ORDER, BOARD_LCD_INVERT
@@ -155,9 +157,13 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 static void lvgl_render_task(void *pvParameters)
 {
     log_i("LVGL Task bắt đầu chạy trên Core %d", xPortGetCoreID());
+    const bool watchdog_registered = esp_task_wdt_add(nullptr) == ESP_OK;
+    if (!watchdog_registered) Serial.println("[LVGL] WARN: task watchdog registration failed");
 
     while (1)
     {
+        if (watchdog_registered) esp_task_wdt_reset();
+        runtime_health_heartbeat(RUNTIME_TASK_LVGL);
         // Kiểm tra nếu hệ thống đang ở chế độ Sleep (tắt màn hình) để tạm dừng render LVGL
         if (power_manager_is_rendering_paused())
         {
@@ -175,6 +181,7 @@ static void lvgl_render_task(void *pvParameters)
 
         if (lvgl_port_lock(20))
         {
+            if (lvgl_owner_hook) lvgl_owner_hook();
             // lv_timer_handler tính toán animations, vẽ lại các widget cần cập nhật
             lv_timer_handler();
             lvgl_port_unlock();
@@ -214,6 +221,14 @@ const char* display_orientation_name(uint8_t rotation)
 
 bool lvgl_port_init(void)
 {
+    if (!psramFound() ||
+        heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < (128U * 1024U) ||
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) < (96U * 1024U))
+    {
+        log_e("LVGL requires working PSRAM with at least 128KB free");
+        return false;
+    }
+
     log_i("Khởi tạo phần cứng LovyanGFX...");
     if (!gfx.init())
     {
@@ -258,32 +273,19 @@ bool lvgl_port_init(void)
         return false;
     }
 
-    // Cấp phát 2 bộ đệm DMA trong Internal SRAM để đạt tốc độ SPI tối đa
+    // Flush waits for DMA completion, so a second buffer only consumes internal RAM.
     size_t buffer_size = DISP_HOR_RES * DISP_BUF_LINES * sizeof(lv_color_t);
     disp_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    disp_buf2 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-
-    // Nếu không đủ SRAM cho 2 buffer, fallback về 1 buffer
-    if (!disp_buf1)
-    {
-        log_w("Không đủ Internal SRAM DMA cho Buf1, thử malloc thông thường...");
-        disp_buf1 = (lv_color_t *)malloc(buffer_size);
-    }
 
     if (!disp_buf1)
     {
         log_e("Lỗi nghiêm trọng: Không thể cấp phát bộ nhớ đệm hiển thị!");
+        vSemaphoreDelete(lvgl_mutex);
+        lvgl_mutex = nullptr;
         return false;
     }
 
-    // Cảnh báo nếu không đủ SRAM cho Double Buffer (FPS sẽ thấp hơn)
-    if (!disp_buf2)
-    {
-        log_w("Không đủ Internal SRAM cho Buf2 - chạy ở chế độ Single Buffer (FPS thấp hơn).");
-    }
-
-    // Khởi tạo Draw Buffer (Hỗ trợ Double-Buffering nếu có disp_buf2)
-    lv_disp_draw_buf_init(&draw_buf, disp_buf1, disp_buf2, DISP_HOR_RES * DISP_BUF_LINES);
+    lv_disp_draw_buf_init(&draw_buf, disp_buf1, nullptr, DISP_HOR_RES * DISP_BUF_LINES);
 
     // Cấu hình Display Driver (Giữ đầu ra RGB565, không bật screen_transp trên display driver)
     lv_disp_drv_init(&disp_drv);
@@ -326,12 +328,35 @@ bool lvgl_port_init(void)
     if (res != pdPASS)
     {
         log_e("Không thể khởi tạo FreeRTOS Task cho LVGL!");
+        heap_caps_free(disp_buf1);
+        disp_buf1 = nullptr;
+        vSemaphoreDelete(lvgl_mutex);
+        lvgl_mutex = nullptr;
         return false;
     }
 
     log_i("Hệ thống đồ họa LVGL + LovyanGFX khởi tạo thành công!");
     return true;
 
+}
+
+void lvgl_port_set_owner_hook(LvglOwnerHook hook)
+{
+    lvgl_owner_hook = hook;
+}
+
+bool lvgl_port_get_memory_stats(uint32_t *free_bytes, uint32_t *largest_free_bytes,
+                                uint8_t *fragmentation_percent)
+{
+    if (!free_bytes || !largest_free_bytes || !fragmentation_percent) return false;
+    lv_mem_monitor_t monitor = {};
+    if (!lvgl_port_lock(50)) return false;
+    lv_mem_monitor(&monitor);
+    lvgl_port_unlock();
+    *free_bytes = monitor.free_size;
+    *largest_free_bytes = monitor.free_biggest_size;
+    *fragmentation_percent = monitor.frag_pct;
+    return true;
 }
 
 void lvgl_port_set_brightness(uint8_t percent)

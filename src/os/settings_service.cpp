@@ -1,4 +1,5 @@
 #include "settings_service.h"
+#include "runtime_health.h"
 
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
@@ -143,7 +144,8 @@ void settings_worker(void *)
     SettingsCommand command = {};
     for (;;)
     {
-        if (xQueueReceive(s_command_queue, &command, portMAX_DELAY) != pdTRUE) continue;
+        runtime_health_heartbeat(RUNTIME_TASK_SETTINGS);
+        if (xQueueReceive(s_command_queue, &command, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
         bool ok = false;
         switch (command.type)
         {

@@ -15,6 +15,7 @@
 *.bin
 *.elf
 *.hex
+release/
 
 # OS generated files
 .DS_Store
@@ -29,4 +30,3 @@ backend/node_modules/
 # Backup files
 *.bak
 *.backup
-

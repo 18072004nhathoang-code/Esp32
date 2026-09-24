@@ -8,15 +8,16 @@
 #include "firmware_contracts.h"
 
 // Biến trạng thái nội bộ
-static volatile PowerState current_power_state = POWER_STATE_ACTIVE;
-static volatile uint32_t last_activity_millis = 0;
-static volatile uint32_t activity_revision = 0;
+// All state below is serialized by power_mux.
+static PowerState current_power_state = POWER_STATE_ACTIVE;
+static uint32_t last_activity_millis = 0;
+static uint32_t activity_revision = 0;
 static portMUX_TYPE power_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t timeout_dim_sec = POWER_TIMEOUT_DIM_DEFAULT_SEC;
 static uint32_t timeout_sleep_sec = POWER_TIMEOUT_SLEEP_DEFAULT_SEC;
 static uint8_t user_active_brightness = POWER_BRIGHTNESS_ACTIVE_DEFAULT;
-static volatile bool touch_wake_suppressed = false;
-static volatile bool rendering_paused = false;
+static bool touch_wake_suppressed = false;
+static bool rendering_paused = false;
 
 static SemaphoreHandle_t s_brightness_mutex = nullptr;
 static PowerBrightnessCoordinator s_brightness_coordinator;
@@ -238,24 +239,35 @@ uint32_t power_manager_get_inactivity_seconds(void)
 void power_manager_set_timeouts(uint32_t dim_sec, uint32_t sleep_sec)
 {
     if (dim_sec < 10 || sleep_sec <= dim_sec) return;
+    portENTER_CRITICAL(&power_mux);
     timeout_dim_sec = dim_sec;
     timeout_sleep_sec = sleep_sec;
+    portEXIT_CRITICAL(&power_mux);
     Serial.printf("[POWER] Đã cập nhật ngưỡng thời gian: Dim %u s | Sleep %u s\n", dim_sec, sleep_sec);
 }
 
 uint32_t power_manager_get_dim_timeout(void)
 {
-    return timeout_dim_sec;
+    portENTER_CRITICAL(&power_mux);
+    const uint32_t value = timeout_dim_sec;
+    portEXIT_CRITICAL(&power_mux);
+    return value;
 }
 
 uint32_t power_manager_get_sleep_timeout(void)
 {
-    return timeout_sleep_sec;
+    portENTER_CRITICAL(&power_mux);
+    const uint32_t value = timeout_sleep_sec;
+    portEXIT_CRITICAL(&power_mux);
+    return value;
 }
 
 uint8_t power_manager_get_active_brightness(void)
 {
-    return user_active_brightness;
+    portENTER_CRITICAL(&power_mux);
+    const uint8_t value = user_active_brightness;
+    portEXIT_CRITICAL(&power_mux);
+    return value;
 }
 
 void power_manager_set_active_brightness(uint8_t percent)
@@ -281,12 +293,17 @@ void power_manager_set_active_brightness(uint8_t percent)
 
 bool power_manager_should_suppress_touch(void)
 {
-    return touch_wake_suppressed;
+    portENTER_CRITICAL(&power_mux);
+    const bool value = touch_wake_suppressed;
+    portEXIT_CRITICAL(&power_mux);
+    return value;
 }
 
 void power_manager_clear_touch_suppression(void)
 {
+    portENTER_CRITICAL(&power_mux);
     touch_wake_suppressed = false;
+    portEXIT_CRITICAL(&power_mux);
 }
 
 uint32_t power_manager_get_activity_revision(void)

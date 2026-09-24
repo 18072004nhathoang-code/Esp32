@@ -18,6 +18,8 @@
 #include "freertos/queue.h"
 #include "firmware_contracts.h"
 #include "service_state_logic.h"
+#include "../os/network_coordinator.h"
+#include "../os/runtime_health.h"
 
 // Root CA certificates (Google Trust Services GTS Root R1, ISRG Root X1, GlobalSign R3)
 static const char MAPS_TRUSTED_ROOT_CA_PEM[] PROGMEM =
@@ -124,9 +126,10 @@ static lv_color_t *tile_buf_back = nullptr;  // Buffer giải mã ngầm (Core 0
 static SemaphoreHandle_t tile_swap_mutex = nullptr;
 
 // Quản lý trạng thái và đồng bộ đa luồng
-static volatile TileDownloadStatus current_status = TILE_IDLE;
-static volatile TileSource current_source = TILE_SOURCE_NONE;
-static volatile bool has_new_tile = false;
+// Cross-core access to these fields is serialized by tile_swap_mutex.
+static TileDownloadStatus current_status = TILE_IDLE;
+static TileSource current_source = TILE_SOURCE_NONE;
+static bool has_new_tile = false;
 static uint32_t latest_request_id = 0;
 static MapTileMetadata published_metadata = {};
 static TaskHandle_t download_task_handle = nullptr;
@@ -191,7 +194,8 @@ public:
     size_t write(uint8_t value) override { return write(&value, 1); }
     size_t write(const uint8_t *data, size_t length) override
     {
-        if (!data || _overflow || length > _capacity - _size)
+        if (!data || _overflow || length > _capacity - _size ||
+            !network_background_allowed())
         {
             _overflow = true;
             return 0;
@@ -263,6 +267,7 @@ static void map_download_task(void *pvParameters)
 
     while (1)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_MAP);
         // Chờ nhận yêu cầu từ hàng đợi (chống race condition khi người dùng pan/zoom liên tục)
         if (map_request_queue && xQueueReceive(map_request_queue, &req, pdMS_TO_TICKS(50)) == pdTRUE)
         {
@@ -343,6 +348,14 @@ static void map_download_task(void *pvParameters)
                 continue;
             }
 
+            NetworkBulkLease network_lease(100);
+            if (!network_lease.acquired())
+            {
+                set_status(TILE_DEGRADED, req.request_id);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                continue;
+            }
+
             // Xây dựng URL chuẩn Google Maps Static API kèm tham số bắt buộc solution_id
             char url_buf[512];
             snprintf(url_buf, sizeof(url_buf),
@@ -357,6 +370,7 @@ static void map_download_task(void *pvParameters)
             WiFiClientSecure client;
             // Xác thực chứng chỉ TLS bảo mật qua Root CA bundle (GTS Root R1, ISRG Root X1, GlobalSign)
             client.setCACert(MAPS_TRUSTED_ROOT_CA_PEM);
+            http.setConnectTimeout(3000);
             http.setTimeout(5000); // Giới hạn 5 giây timeout chống nghẽn tác vụ
 
             if (http.begin(client, url_buf))
@@ -489,26 +503,26 @@ bool map_tile_downloader_init(void)
     if (jpeg_raw_buffer == nullptr)
     {
         jpeg_raw_buffer = (uint8_t *)heap_caps_malloc(JPEG_MAX_RAW_SIZE, MALLOC_CAP_SPIRAM);
-        if (!jpeg_raw_buffer)
-        {
-            jpeg_raw_buffer = (uint8_t *)malloc(JPEG_MAX_RAW_SIZE);
-        }
     }
 
     size_t dec_size = MAP_TILE_WIDTH * MAP_TILE_HEIGHT * sizeof(lv_color_t);
     if (tile_buf_front == nullptr)
     {
         tile_buf_front = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
-        if (!tile_buf_front) tile_buf_front = (lv_color_t *)malloc(dec_size);
     }
     if (tile_buf_back == nullptr)
     {
         tile_buf_back = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
-        if (!tile_buf_back) tile_buf_back = (lv_color_t *)malloc(dec_size);
     }
 
     if (!jpeg_raw_buffer || !tile_buf_front || !tile_buf_back)
     {
+        heap_caps_free(jpeg_raw_buffer);
+        heap_caps_free(tile_buf_front);
+        heap_caps_free(tile_buf_back);
+        jpeg_raw_buffer = nullptr;
+        tile_buf_front = nullptr;
+        tile_buf_back = nullptr;
         Serial.println("[MAP_TASK] ❌ Lỗi cấp phát bộ đệm kép PSRAM cho bản đồ!");
         current_status = TILE_DEGRADED;
         return false;
@@ -521,6 +535,12 @@ bool map_tile_downloader_init(void)
     }
     if (!map_request_queue)
     {
+        heap_caps_free(jpeg_raw_buffer);
+        heap_caps_free(tile_buf_front);
+        heap_caps_free(tile_buf_back);
+        jpeg_raw_buffer = nullptr;
+        tile_buf_front = nullptr;
+        tile_buf_back = nullptr;
         current_status = TILE_DEGRADED;
         Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được queue");
         return false;
@@ -541,6 +561,14 @@ bool map_tile_downloader_init(void)
         if (created != pdPASS)
         {
             download_task_handle = nullptr;
+            vQueueDelete(map_request_queue);
+            map_request_queue = nullptr;
+            heap_caps_free(jpeg_raw_buffer);
+            heap_caps_free(tile_buf_front);
+            heap_caps_free(tile_buf_back);
+            jpeg_raw_buffer = nullptr;
+            tile_buf_front = nullptr;
+            tile_buf_back = nullptr;
             current_status = TILE_DEGRADED;
             Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được task tải bản đồ");
             return false;

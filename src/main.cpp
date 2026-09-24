@@ -8,6 +8,8 @@
 #include <esp_arduino_version.h>
 #include <esp_idf_version.h>
 #include <esp_system.h>
+#include <esp_partition.h>
+#include <esp_chip_info.h>
 #include "board_config.h"
 #include "shared_i2c_bus.h"
 #include "display/lvgl_port.h"
@@ -22,6 +24,7 @@
 #include "camera/camera_service.h"
 #include "os/power_manager.h"
 #include "os/settings_service.h"
+#include "os/network_coordinator.h"
 #include "firmware_regression.h"
 #include "service_state_logic.h"
 
@@ -46,6 +49,14 @@ static const char *reset_reason_name(esp_reset_reason_t reason)
         case ESP_RST_UNKNOWN:
         default: return "UNKNOWN";
     }
+}
+
+static bool partition_matches(const char *label, esp_partition_type_t type,
+                              esp_partition_subtype_t subtype,
+                              uint32_t address, uint32_t size)
+{
+    const esp_partition_t *partition = esp_partition_find_first(type, subtype, label);
+    return partition && partition->address == address && partition->size == size;
 }
 
 #ifdef MINI_OS_MUSIC_STRESS_TEST
@@ -128,6 +139,8 @@ void setup()
 
     // In thông tin phần cứng nhận diện thực tế
     SystemStats init_stats = system_get_stats();
+    esp_chip_info_t chip_info = {};
+    esp_chip_info(&chip_info);
     Serial.printf("[BOOT] MCU: %s @ %u MHz\n", BOARD_PROFILE_MCU, init_stats.cpu_freq_mhz);
     Serial.printf("[BOOT] Flash: %u MB (Target: %d MB) | PSRAM: %u MB (Target: %d MB)\n",
                   init_stats.flash_size_mb, BOARD_PROFILE_FLASH_MB,
@@ -135,6 +148,37 @@ void setup()
     Serial.printf("[BOOT] Total SRAM: %u KB (Free: %u KB)\n", init_stats.total_heap / 1024, init_stats.free_heap / 1024);
     Serial.printf("[BOOT] Temperature: %.1f °C\n", init_stats.core_temp_c);
     Serial.printf("[HW] Board Profile: %s\n", BOARD_PROFILE_NAME);
+
+    const bool chip_ok = chip_info.model == CHIP_ESP32S3;
+    const bool profile_memory_ok = chip_ok &&
+        init_stats.flash_size_mb == BOARD_PROFILE_FLASH_MB &&
+        init_stats.total_psram == static_cast<uint32_t>(BOARD_PROFILE_PSRAM_MB) * 1024U * 1024U;
+    const esp_partition_t *core_dump = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, "coredump");
+    const bool partitions_ok =
+        partition_matches("app0", ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0,
+                          0x10000, 0x480000) &&
+        partition_matches("app1", ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1,
+                          0x490000, 0x480000) &&
+        partition_matches("spiffs", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS,
+                          0x910000, 0x6e0000) &&
+        partition_matches("coredump", ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP,
+                          0xff0000, 0x10000);
+    Serial.printf("[BOOT] Capability: chip=%s memory=%s partitions=%s coredump=%s\n",
+                  chip_ok ? "ESP32-S3" : "MISMATCH",
+                  profile_memory_ok ? "PASS" : "FAIL",
+                  partitions_ok ? "PASS" : "FAIL",
+                  core_dump ? "READY" : "MISSING");
+    if (!profile_memory_ok || !partitions_ok)
+    {
+        Serial.println("[BOOT] FATAL: firmware requires the ES3C28P N16R8 memory profile");
+        while (true) delay(1000);
+    }
+    if (!network_coordinator_init())
+    {
+        Serial.println("[NETWORK] FATAL: unable to allocate coordinator mutex");
+        while (true) delay(1000);
+    }
 
     // 1b. [I2C] Khởi tạo physical I2C Bus dùng chung cho Touch & Audio Codec
     shared_i2c_init();
@@ -260,6 +304,38 @@ void loop()
         system_info_update();
         time_service_update();
         SystemStats current_stats = system_get_stats();
+
+        static uint32_t last_health_log_ms = 0;
+        if (millis() - last_health_log_ms >= 30000U)
+        {
+            last_health_log_ms = millis();
+            const RuntimeHealthSnapshot health = system_get_runtime_health();
+            uint32_t min_stack = UINT32_MAX;
+            uint32_t max_heartbeat_age = 0;
+            for (uint8_t i = 0; i < RUNTIME_TASK_COUNT; ++i)
+            {
+                if (!health.tasks[i].seen) continue;
+                min_stack = min(min_stack, health.tasks[i].stack_free_bytes);
+                max_heartbeat_age = max(max_heartbeat_age, health.tasks[i].heartbeat_age_ms);
+            }
+            if (min_stack == UINT32_MAX) min_stack = 0;
+            Serial.printf("[HEALTH] int_free=%u int_min=%u int_largest=%u psram_free=%u psram_min=%u psram_largest=%u stack_min=%u heartbeat_max=%u lvgl_free=%u lvgl_largest=%u lvgl_frag=%u queues=%u/%u drops=%u/%u\n",
+                          static_cast<unsigned>(health.internal_free_bytes),
+                          static_cast<unsigned>(health.internal_min_free_bytes),
+                          static_cast<unsigned>(health.internal_largest_free_bytes),
+                          static_cast<unsigned>(health.psram_free_bytes),
+                          static_cast<unsigned>(health.psram_min_free_bytes),
+                          static_cast<unsigned>(health.psram_largest_free_bytes),
+                          static_cast<unsigned>(min_stack),
+                          static_cast<unsigned>(max_heartbeat_age),
+                          static_cast<unsigned>(health.lvgl_free_bytes),
+                          static_cast<unsigned>(health.lvgl_largest_free_bytes),
+                          static_cast<unsigned>(health.lvgl_fragmentation_percent),
+                          static_cast<unsigned>(health.voice_uplink_queue_depth),
+                          static_cast<unsigned>(health.voice_inbound_queue_depth),
+                          static_cast<unsigned>(health.voice_uplink_drops),
+                          static_cast<unsigned>(health.voice_inbound_drops));
+        }
 
         // Cập nhật lên thanh trạng thái và ứng dụng (Thread-Safe qua Mutex)
         ui_update_periodic(current_stats);

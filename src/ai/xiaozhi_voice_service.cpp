@@ -19,6 +19,7 @@
 #include "../camera/camera_service.h"
 #include "../os/wifi_manager.h"
 #include "../ui/ui_manager.h"
+#include "../os/runtime_health.h"
 
 #include <ArduinoJson.h>
 #include <esp_heap_caps.h>
@@ -41,6 +42,8 @@ namespace
 {
 static const char *get_wss_ca_cert()
 {
+    if (XIAOZHI_WSS_CA_CERT && XIAOZHI_WSS_CA_CERT[0] != '\0')
+        return XIAOZHI_WSS_CA_CERT;
     return XIAOZHI_DEFAULT_ROOT_CA_CERT;
 }
 enum class CommandType : uint8_t {
@@ -61,7 +64,7 @@ static SemaphoreHandle_t s_mutex = nullptr;
 static QueueHandle_t s_commands = nullptr;
 static TaskHandle_t s_task = nullptr;
 static AIVoiceState s_state = AI_STATE_ERROR;
-static ChatMessage s_history[AI_MAX_CHAT_MESSAGES] = {};
+static ChatMessage *s_history = nullptr;
 static int s_message_count = 0;
 static uint32_t s_history_revision = 0;
 static uint32_t s_clear_count = 0;
@@ -153,16 +156,12 @@ struct PsramJsonAllocator
 {
     void *allocate(size_t size)
     {
-        void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!ptr) ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
-        return ptr;
+        return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
     void deallocate(void *ptr) { free(ptr); }
     void *reallocate(void *ptr, size_t new_size)
     {
-        void *next = heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!next) next = heap_caps_realloc(ptr, new_size, MALLOC_CAP_8BIT);
-        return next;
+        return heap_caps_realloc(ptr, new_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     }
 };
 
@@ -236,7 +235,8 @@ void mcp_worker(void *)
     McpAsyncJob job = {};
     while (true)
     {
-        if (s_mcp_jobs && xQueueReceive(s_mcp_jobs, &job, portMAX_DELAY) == pdTRUE)
+        runtime_health_heartbeat(RUNTIME_TASK_MCP);
+        if (s_mcp_jobs && xQueueReceive(s_mcp_jobs, &job, pdMS_TO_TICKS(1000)) == pdTRUE)
         {
             if (!current_generation(job.generation) || cancellation_requested(job.generation))
             {
@@ -292,7 +292,7 @@ void mcp_worker(void *)
                         if (device_ack)
                             strlcpy(res.text, "Lệnh âm lượng đã được áp dụng (APPLIED)", sizeof(res.text));
                         else
-                            snprintf(res.text, sizeof(res.text), "Lỗi thực thi âm lượng (FAILED): %s", action_error[0] ? action_error : "Thất bại");
+                            snprintf(res.text, sizeof(res.text), "Lỗi thực thi âm lượng (FAILED): %.80s", action_error[0] ? action_error : "Thất bại");
                     }
                 }
                 else
@@ -305,7 +305,7 @@ void mcp_worker(void *)
                     if (executed)
                         strlcpy(res.text, "Lệnh nhạc đã được thiết bị thực thi (APPLIED)", sizeof(res.text));
                     else
-                        snprintf(res.text, sizeof(res.text), "Lỗi thực thi lệnh nhạc (FAILED): %s", action_error[0] ? action_error : "Thất bại");
+                        snprintf(res.text, sizeof(res.text), "Lỗi thực thi lệnh nhạc (FAILED): %.80s", action_error[0] ? action_error : "Thất bại");
                 }
             }
             else if (job.tool == xiaozhi::McpTool::CAMERA_OPEN)
@@ -406,7 +406,8 @@ uint32_t active_generation_snapshot()
 
 void add_message(bool user, const char *text)
 {
-    if (!text || !*text || !s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return;
+    if (!text || !*text || !s_history || !s_mutex ||
+        xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return;
     if (s_message_count == AI_MAX_CHAT_MESSAGES)
     {
         memmove(s_history, s_history + 1, sizeof(ChatMessage) * (AI_MAX_CHAT_MESSAGES - 1));
@@ -419,16 +420,6 @@ void add_message(bool user, const char *text)
     message.id = ++s_message_seq_id;
     ++s_history_revision;
     xSemaphoreGive(s_mutex);
-}
-
-bool execute_music(AiMusicActionType type, const char *source = nullptr, uint8_t volume = 0)
-{
-    AiMusicAction action = {};
-    action.type = type;
-    action.volume = volume;
-    if (source) strlcpy(action.source_id, source, sizeof(action.source_id));
-    char error[128] = {};
-    return music_player_execute_ai_action(&action, 2500, error, sizeof(error));
 }
 
 void stop_output(bool drain)
@@ -1444,6 +1435,7 @@ PumpResult pump_capture_flush(uint32_t generation)
         {
             rms = static_cast<uint32_t>(sqrt(static_cast<double>(s_mic_sum_sq) / s_mic_total_samples));
         }
+        (void)rms;
         log_i("Xiaozhi: [AUDIO_SENT] samples=%u peak=%d rms=%u enc=%u enq=%u sent=%u bytes=%u drops=%u",
               static_cast<unsigned>(s_mic_total_samples),
               static_cast<int>(s_mic_peak),
@@ -1673,6 +1665,13 @@ void log_runtime_diagnostics(uint32_t generation)
     const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr)) *
                               sizeof(StackType_t);
+    (void)internal_free;
+    (void)internal_min;
+    (void)internal_largest;
+    (void)psram_free;
+    (void)psram_min;
+    (void)psram_largest;
+    (void)stack_free;
     log_i("Xiaozhi diag state=%u gen=%u recorder=%u owner=%u cmdq=%u upq=%u/8 drops=%u/%u stack_free=%uB int=%u/%u/%u psram=%u/%u/%u cleanup=%u",
           static_cast<unsigned>(ai_voice_get_state()), static_cast<unsigned>(generation),
           static_cast<unsigned>(s_record_control_request),
@@ -1875,6 +1874,7 @@ void worker(void *)
     if (!run_codec_self_test()) set_error("Opus encode/decode self-test thất bại");
     while (true)
     {
+        runtime_health_heartbeat(RUNTIME_TASK_XIAOZHI);
         run_provisioning(next_poll_ms, backoff_ms);
         service_cleanup();
 
@@ -2098,6 +2098,7 @@ void release_service_allocations()
     heap_caps_free(s_capture_chunk);
     heap_caps_free(s_opus_packet);
     heap_caps_free(s_framed_packet);
+    heap_caps_free(s_history);
     s_mcp_jobs = nullptr;
     s_mcp_results = nullptr;
     s_commands = nullptr;
@@ -2108,6 +2109,7 @@ void release_service_allocations()
     s_capture_chunk = nullptr;
     s_opus_packet = nullptr;
     s_framed_packet = nullptr;
+    s_history = nullptr;
 }
 }
 
@@ -2118,6 +2120,8 @@ bool ai_voice_init(void)
     s_commands = xQueueCreate(8, sizeof(Command));
     s_mcp_jobs = xQueueCreate(4, sizeof(McpAsyncJob));
     s_mcp_results = xQueueCreate(4, sizeof(McpAsyncResult));
+    s_history = static_cast<ChatMessage *>(heap_caps_calloc(
+        AI_MAX_CHAT_MESSAGES, sizeof(ChatMessage), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_inbound = static_cast<uint8_t *>(heap_caps_malloc(
         xiaozhi::kMaxJsonMessageBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_capture_frame = static_cast<int16_t *>(heap_caps_malloc(960 * sizeof(int16_t),
@@ -2130,7 +2134,7 @@ bool ai_voice_init(void)
         xiaozhi::kMaxOpusPacketBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     s_framed_packet = static_cast<uint8_t *>(heap_caps_malloc(
         xiaozhi::kMaxOpusPacketBytes + 16U, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!s_mutex || !s_commands || !s_mcp_jobs || !s_mcp_results ||
+    if (!s_mutex || !s_commands || !s_mcp_jobs || !s_mcp_results || !s_history ||
         !s_inbound || !s_capture_frame || !s_decoded ||
         !s_capture_chunk || !s_opus_packet || !s_framed_packet)
     {
@@ -2166,6 +2170,11 @@ bool ai_voice_init(void)
         s_task = nullptr;
         s_state = AI_STATE_ERROR;
         strlcpy(s_last_error, "Không tạo được Xiaozhi worker", sizeof(s_last_error));
+        if (s_mcp_task)
+        {
+            vTaskDelete(s_mcp_task);
+            s_mcp_task = nullptr;
+        }
         release_service_allocations();
         return false;
     }
@@ -2310,6 +2319,16 @@ bool ai_voice_is_connected(void)
            s_server_hello.load(std::memory_order_acquire);
 }
 
+AiVoiceQueueHealth ai_voice_get_queue_health(void)
+{
+    return {
+        static_cast<uint32_t>(s_transport.uplinkPending()),
+        static_cast<uint32_t>(s_transport.inboundPending()),
+        s_transport.droppedUplink(),
+        s_transport.droppedDownlink()
+    };
+}
+
 bool ai_voice_preconnect(void)
 {
     s_app_open.store(true, std::memory_order_release);
@@ -2402,7 +2421,7 @@ int ai_voice_get_message_count(void)
 
 bool ai_voice_get_message_copy(int index, ChatMessage *message)
 {
-    if (!message || index < 0 || !s_mutex ||
+    if (!message || index < 0 || !s_history || !s_mutex ||
         xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return false;
     const bool ok = index < s_message_count;
     if (ok) *message = s_history[index];
@@ -2423,7 +2442,7 @@ uint32_t ai_voice_get_history_revision(void)
 void ai_voice_clear_history(void)
 {
     if (!s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
-    memset(s_history, 0, sizeof(s_history));
+    if (s_history) memset(s_history, 0, sizeof(ChatMessage) * AI_MAX_CHAT_MESSAGES);
     s_message_count = 0;
     ++s_history_revision;
     ++s_clear_count;
