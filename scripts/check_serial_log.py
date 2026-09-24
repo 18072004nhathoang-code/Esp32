@@ -2,14 +2,8 @@
 """Fail a hardware run when the serial log contains fatal signatures."""
 
 import argparse
-import re
 
-
-FATAL = re.compile(
-    r"Guru Meditation|Core \d panic|TASK_WDT|INT_WDT|stack overflow|"
-    r"Brownout detector|assert failed|abort\(\)|Backtrace:",
-    re.IGNORECASE,
-)
+from hil_common import FATAL
 
 
 def main() -> int:

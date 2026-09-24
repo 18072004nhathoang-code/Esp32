@@ -72,6 +72,9 @@ jobs:
       - name: Validate partition contract
         run: python scripts/validate_partitions.py partitions.csv
 
+      - name: Run release-tool tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+
       - name: Compile ESP32-S3 Firmware
         run: |
           set -o pipefail

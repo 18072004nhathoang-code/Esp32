@@ -7,8 +7,9 @@ import time
 from pathlib import Path
 
 FATAL = re.compile(
-    r"Guru Meditation|Task watchdog|watchdog.*triggered|stack overflow|"
-    r"Brownout detector|assert failed|panic'ed|unexpected reset",
+    r"Guru Meditation|Core \d panic|Task watchdog|TASK_WDT|INT_WDT|"
+    r"watchdog.*triggered|stack overflow|Brownout detector|assert failed|"
+    r"panic'ed|abort\(\)|Backtrace:|unexpected reset",
     re.IGNORECASE,
 )
 HEALTH = re.compile(r"\[HEALTH\]\s+(.*)")
