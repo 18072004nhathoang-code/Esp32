@@ -10,6 +10,7 @@
 #include "../ai/ai_voice_service.h"
 #include "shared_i2c_bus.h"
 #include "../os/runtime_health.h"
+#include "../os/nvs_utils.h"
 #include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
@@ -244,7 +245,7 @@ bool lvgl_port_init(void)
 #endif
     gfx.setRotation(rot);
     Preferences display_prefs;
-    if (display_prefs.begin("display_diag", true))
+    if (nvs_namespace_exists("display_diag") && display_prefs.begin("display_diag", true))
     {
         const bool has_bgr = display_prefs.isKey("bgr");
         const bool has_invert = display_prefs.isKey("invert");

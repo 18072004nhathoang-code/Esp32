@@ -12,6 +12,7 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <Preferences.h>
+#include "../os/nvs_utils.h"
 #include <esp_heap_caps.h>
 #include <stdio.h>
 #include <string.h>
@@ -433,6 +434,7 @@ bool NetworkCameraService::saveProfileToNVS()
 bool NetworkCameraService::loadProfileFromNVS()
 {
     if (!ensureSynchronizationPrimitives()) return false;
+    if (!nvs_namespace_exists("netcam")) return false;
     Preferences prefs;
     if (!prefs.begin("netcam", true)) return false;
 
