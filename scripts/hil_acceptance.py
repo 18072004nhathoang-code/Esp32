@@ -20,6 +20,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("hil-acceptance.log"))
     args = parser.parse_args()
     print("Run the full checklist in docs/RELEASE_CHECKLIST.md during this window.")
+    print("Required short-lived tasks: save Settings, export one recording to SD, "
+          "and complete the speaker self-test.")
     text = capture(args.port, args.baud, args.duration, args.output)
     validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK)
     final = parse_health(text)[-1]

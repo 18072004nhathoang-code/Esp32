@@ -31,6 +31,13 @@ are not release features.
 - Run the eight-hour acceptance sequence: app open/close, sleep/wake, Wi-Fi
   loss/recovery, SD and YouTube music, twenty Xiaozhi sessions, maps, camera
   snapshots and repeated cancellation.
+- Exercise every release task at least once before ending the soak. In
+  particular, change and save one Settings value (ID 10), record audio and use
+  the UI action that exports the WAV to SD (ID 11), and run the speaker
+  self-test to completion (ID 12). Opening/using Music, Map, Camera and
+  Xiaozhi covers IDs 3, 5, 6–9; Main/LVGL/Audio/Wi-Fi cover IDs 0, 1, 2 and 4
+  during normal operation. Restore the changed Settings value afterward if
+  needed.
 - Confirm internal heap low-water >= 32 KB, largest internal block >= 16 KB,
   largest PSRAM block >= 2 MB and every observed task stack margin >= 2 KB.
 - Confirm post-soak internal/PSRAM drift stays within 8 KB / 32 KB.
