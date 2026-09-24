@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from hil_common import parse_health, validate  # noqa: E402
+from package_release import validate_build_provenance  # noqa: E402
 from verify_unprovisioned_config import configured_macros  # noqa: E402
 
 
@@ -69,6 +70,25 @@ class ReleaseConfigurationTests(unittest.TestCase):
     def test_credentials_are_detected_without_exposing_values(self) -> None:
         text = '#define DEFAULT_WIFI_PASS "private value"\n'
         self.assertEqual(configured_macros(text), {"DEFAULT_WIFI_PASS"})
+
+    def test_release_provenance_accepts_exact_clean_build(self) -> None:
+        metadata = {
+            "head_revision": "a" * 40,
+            "firmware_revision": "a" * 12,
+            "source_dirty": False,
+        }
+        validate_build_provenance(metadata, "a" * 40, "a" * 12, False)
+
+    def test_release_provenance_rejects_stale_or_dirty_build(self) -> None:
+        metadata = {
+            "head_revision": "a" * 40,
+            "firmware_revision": "a" * 12,
+            "source_dirty": False,
+        }
+        with self.assertRaisesRegex(ValueError, "different Git HEAD"):
+            validate_build_provenance(metadata, "b" * 40, "b" * 12, False)
+        with self.assertRaisesRegex(ValueError, "dirty working tree"):
+            validate_build_provenance(metadata, "a" * 40, "a" * 12 + "+wt123", True)
 
 
 if __name__ == "__main__":
