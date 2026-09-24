@@ -17,6 +17,9 @@
 *.hex
 release/
 
+# Local hardware-in-loop evidence (may contain device/network diagnostics)
+hil-*.log
+
 # Python-generated test/build caches. macOS may redirect these through
 # PYTHONPYCACHEPREFIX, while clean Linux CI runners create them in-tree.
 __pycache__/
