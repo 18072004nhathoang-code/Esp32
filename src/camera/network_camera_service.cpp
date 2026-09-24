@@ -1006,68 +1006,9 @@ void NetworkCameraService::buildSnapshotUrl(char *out_url, size_t max_len) const
 
 bool NetworkCameraService::onvifProbeCapabilities(char *out_service_url, size_t max_len)
 {
-    const NetworkCameraProfile request_profile = getActiveProfile();
-    if ((!request_profile.ip[0] && !request_profile.custom_url[0]) || !wifi_manager_is_connected()) return false;
-    uint16_t configured_port = request_profile.onvif_port > 0 ? request_profile.onvif_port : 80;
-    uint16_t https_port = configured_port == 80 ? 443 : configured_port;
-    char probe_url[128];
-    const bool plaintext = request_profile.security_mode == CAM_SECURITY_HTTP_PLAINTEXT;
-    snprintf(probe_url, sizeof(probe_url), "%s://%s:%u/onvif/device_service",
-             plaintext ? "http" : "https", request_profile.ip,
-             plaintext ? configured_port : https_port);
-
-    HTTPClient http;
-    http.setConnectTimeout(1500);
-    WiFiClient plain_client;
-    WiFiClientSecure secure_client;
-    bool began = false;
-    if (plaintext)
-    {
-        setTransportSecurity(CAM_TRANSPORT_HTTP_PLAINTEXT);
-        began = http.begin(plain_client, probe_url);
-    }
-    else if (request_profile.security_mode == CAM_SECURITY_TLS_INSECURE)
-    {
-        secure_client.setInsecure();
-        setTransportSecurity(CAM_TRANSPORT_HTTPS_UNVERIFIED);
-        began = http.begin(secure_client, probe_url);
-    }
-    else if (CAMERA_TLS_CA_CERT[0] != '\0')
-    {
-        secure_client.setCACert(CAMERA_TLS_CA_CERT);
-        setTransportSecurity(CAM_TRANSPORT_HTTPS_VERIFIED);
-        began = http.begin(secure_client, probe_url);
-    }
-    if (!began) return false;
-    http.setTimeout(1500);
-    http.addHeader("Content-Type", "application/soap+xml; charset=utf-8");
-    if (strlen(request_profile.username) > 0)
-    {
-        http.setAuthorization(request_profile.username, request_profile.password);
-    }
-
-    const char *soap_req =
-        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\">"
-        "<s:Body><tds:GetCapabilities xmlns:tds=\"http://www.onvif.org/ver10/device/wsdl\"/></s:Body>"
-        "</s:Envelope>";
-
-    int httpCode = http.POST(soap_req);
-    if (httpCode == 200)
-    {
-        _onvif_status = CAM_STATUS_PARTIAL_FALLBACK;
-        _onvif_probed = true;
-        if (out_service_url && max_len > 0)
-        {
-            strncpy(out_service_url, probe_url, max_len - 1);
-            out_service_url[max_len - 1] = '\0';
-        }
-        http.end();
-        return true;
-    }
-
+    if (out_service_url && max_len > 0) out_service_url[0] = '\0';
+    _onvif_probed = false;
     _onvif_status = CAM_STATUS_NOT_IMPLEMENTED;
-    http.end();
     return false;
 }
 

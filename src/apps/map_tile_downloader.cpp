@@ -157,6 +157,23 @@ static bool request_is_current(uint32_t request_id)
     return current;
 }
 
+static bool requeue_current_request(const MapTileRequest &request)
+{
+    if (!map_request_queue || !tile_swap_mutex ||
+        xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return false;
+    bool queued = false;
+    if (service_generation_current(request.request_id, latest_request_id, false))
+    {
+        // Hold the generation mutex through overwrite. A newer UI request then
+        // runs afterwards and overwrites this deferred request, never vice versa.
+        queued = xQueueOverwrite(map_request_queue, &request) == pdPASS;
+        if (queued) current_status = TILE_DOWNLOADING;
+    }
+    xSemaphoreGive(tile_swap_mutex);
+    return queued;
+}
+
 static bool cache_request_is_current(void *context)
 {
     return context && request_is_current(*static_cast<const uint32_t *>(context));
@@ -351,7 +368,10 @@ static void map_download_task(void *pvParameters)
             NetworkBulkLease network_lease(100);
             if (!network_lease.acquired())
             {
-                set_status(TILE_DEGRADED, req.request_id);
+                // Voice/music owns network priority. Preserve only the latest
+                // map generation and retry it after real-time traffic yields.
+                if (!requeue_current_request(req) && request_is_current(req.request_id))
+                    set_status(TILE_DEGRADED, req.request_id);
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
