@@ -69,6 +69,20 @@ int main()
     assert(lifecycle.finish_stop(timed_out, true));
     decoder.destroy();
 
+    // A decoder whose connect/open fails is still in STARTING. Its worker must
+    // receive the same positive shutdown acknowledgement before destruction.
+    const uint32_t failed_start = lifecycle.begin_start();
+    assert(failed_start != 0 && decoder.create());
+    assert(lifecycle.begin_stop(failed_start));
+    assert(!decoder.shutdown(false));
+    assert(lifecycle.finish_stop(failed_start, false));
+    assert(lifecycle.phase() == MusicDecoderPhase::RECOVERY_REQUIRED);
+    assert(!lifecycle.can_destroy());
+    assert(lifecycle.begin_stop(failed_start));
+    assert(decoder.shutdown(true));
+    assert(lifecycle.finish_stop(failed_start, true));
+    decoder.destroy();
+
     const uint32_t current = lifecycle.begin_start();
     assert(decoder.create());
     assert(lifecycle.finish_start(current, true));

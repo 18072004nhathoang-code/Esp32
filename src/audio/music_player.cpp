@@ -398,6 +398,7 @@ static void music_audio_task(void *pvParameters)
                                 {
                                     Serial.println("[MUSIC_AUDIO] Play FAILED: lifecycle busy");
                                     xSemaphoreGive(audio_mutex);
+                                    if (newly_acquired) release_music_audio();
                                     break;
                                 }
                                 audio = allocate_audio_decoder();
@@ -577,6 +578,7 @@ static void music_audio_task(void *pvParameters)
                     if (!music_stream_url_supported(cmd.filepath, AI_MUSIC_STREAM_CA_CERT[0] != '\0'))
                         break;
                     const bool newly_acquired = !music_owns_audio;
+                    bool retain_for_recovery = false;
                     if (!acquire_music_audio()) break;
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(200)) == pdTRUE)
                     {
@@ -587,6 +589,7 @@ static void music_audio_task(void *pvParameters)
                             {
                                 Serial.println("[MUSIC_AUDIO] Stream play FAILED: lifecycle busy");
                                 xSemaphoreGive(audio_mutex);
+                                if (newly_acquired) release_music_audio();
                                 break;
                             }
                             audio = allocate_audio_decoder();
@@ -622,17 +625,26 @@ static void music_audio_task(void *pvParameters)
                             }
                             if (!command_ok)
                             {
-                                if (audio)
+                                // Never destroy Audio until its PeriodicTask confirms exit.
+                                // On timeout the lifecycle remains RECOVERY_REQUIRED and
+                                // MUSIC keeps I2S ownership until the bounded recovery loop
+                                // gets a positive shutdown acknowledgement.
+                                const bool stopped = internal_stop_audio_locked();
+                                if (!stopped)
                                 {
-                                    audio->shutdown(500);
-                                    free_audio_decoder(audio);
+                                    retain_for_recovery = true;
+                                    Serial.println("[MUSIC_AUDIO] Stream cleanup deferred: decoder recovery required");
                                 }
-                                (void)decoder_lifecycle.finish_start(generation, false);
                             }
+                        }
+                        else
+                        {
+                            retain_for_recovery = true;
                         }
                         xSemaphoreGive(audio_mutex);
                     }
-                    if (!command_ok && newly_acquired) release_music_audio();
+                    if (!command_ok && newly_acquired && !retain_for_recovery)
+                        release_music_audio();
                 }
                 break;
 
@@ -1092,6 +1104,7 @@ bool music_player_is_paused(void)
 static bool execute_music_command_wait_locked(MusicCommand &cmd, uint32_t timeout_ms)
 {
     cmd.request_id = ++next_music_request_id;
+    if (cmd.request_id == 0) cmd.request_id = ++next_music_request_id;
     if (!music_ack_queue || !enqueue_music_command(cmd)) return false;
     const TickType_t started = xTaskGetTickCount();
     const TickType_t timeout = pdMS_TO_TICKS(timeout_ms);
@@ -1275,7 +1288,7 @@ bool music_player_restore_after_voice(const MusicVoiceHandoff *handoff, uint32_t
         int track_idx = handoff->track_index;
         if (track_idx < 0 || track_idx >= total_tracks_found)
         {
-            track_idx = player_state.current_track_idx;
+            track_idx = music_player_get_current_index();
             if (track_idx < 0 || track_idx >= total_tracks_found) track_idx = 0;
         }
         if (total_tracks_found <= 0 || track_idx < 0 || track_idx >= total_tracks_found)
