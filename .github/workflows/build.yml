@@ -60,6 +60,18 @@ jobs:
       - name: Run release-tool tests
         run: python -m unittest discover -s tests -p 'test_*.py'
 
+      - name: Verify tests leave source tree clean
+        shell: bash
+        run: |
+          dirty=$(git status --porcelain=v1 --untracked-files=all)
+          if [ -n "$dirty" ]; then
+            escaped=${dirty//'%'/'%25'}
+            escaped=${escaped//$'\r'/'%0D'}
+            escaped=${escaped//$'\n'/'%0A'}
+            echo "::error title=Tests modified the source tree::$escaped"
+            exit 1
+          fi
+
       - name: Compile release firmware
         run: |
           set -o pipefail

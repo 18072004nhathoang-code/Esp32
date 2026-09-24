@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -62,6 +63,15 @@ class HilMonitorTests(unittest.TestCase):
 
 
 class ReleaseConfigurationTests(unittest.TestCase):
+    def test_python_cache_files_are_repository_ignored(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", "scripts/__pycache__/release_tool.pyc"],
+            cwd=root,
+            check=False,
+        )
+        self.assertEqual(ignored.returncode, 0)
+
     def test_empty_template_is_unprovisioned(self) -> None:
         template = (Path(__file__).resolve().parents[1] / "include" /
                     "secrets.example.h").read_text(encoding="utf-8")

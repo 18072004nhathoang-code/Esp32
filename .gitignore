@@ -17,6 +17,11 @@
 *.hex
 release/
 
+# Python-generated test/build caches. macOS may redirect these through
+# PYTHONPYCACHEPREFIX, while clean Linux CI runners create them in-tree.
+__pycache__/
+*.py[cod]
+
 # OS generated files
 .DS_Store
 Thumbs.db
