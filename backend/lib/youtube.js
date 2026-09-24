@@ -76,11 +76,12 @@ export function streamYouTubeAudio(query,req,res,config={}){
     const room=MAX_STDERR_BYTES-Buffer.byteLength(stderrData,"utf8");
     if(room>0) stderrData+=chunk.slice(0,room);
   });
-  child.once("error",err=>{console.error("[YOUTUBE] Spawn error:",err.message);fail(500,"YTDLP_START_FAILED","Không khởi động được yt-dlp");});
+  child.once("error",err=>{console.error(`[YOUTUBE ${requestId}] Spawn failed: ${err?.name||"Error"}`);fail(500,"YTDLP_START_FAILED","Không khởi động được yt-dlp");});
   child.once("close",async code=>{
     if(terminal)return; terminal=true; cleanup();
     if(code!==0){
-      console.error(`[YOUTUBE ${requestId}] yt-dlp exited with code ${code}: ${stderrData.trim().slice(0,512)}`);
+      // yt-dlp stderr can contain a signed media URL. Never copy it to logs.
+      console.error(`[YOUTUBE ${requestId}] yt-dlp exited with code ${code}`);
       return sendError(res,502,"YTDLP_FAILED","Không tìm thấy hoặc không trích xuất được bài hát YouTube");
     }
     const streamUrl=stdoutData.split(/\r?\n/).map(x=>x.trim()).find(x=>/^https?:\/\//i.test(x));
@@ -115,11 +116,11 @@ export function streamYouTubeAudio(query,req,res,config={}){
       nodeStream.once("end",clearIdle);
       res.once("close",clearIdle);
       resetIdle();
-      nodeStream.once("error",err=>{console.error("[YOUTUBE] Stream pipe error:",err.message);controller.abort();if(!res.destroyed)res.destroy(err);});
+      nodeStream.once("error",err=>{console.error(`[YOUTUBE ${requestId}] Stream failed: ${err?.name||"Error"}`);controller.abort();if(!res.destroyed)res.destroy(err);});
       nodeStream.pipe(res);
     }catch(err){
       clearTimeout(fetchTimer); res.removeListener("close",abortUpstream); req.removeListener("aborted",abortUpstream);
-      if(err?.name!=="AbortError")console.error("[YOUTUBE] Fetch exception:",err);
+      if(err?.name!=="AbortError")console.error(`[YOUTUBE ${requestId}] Fetch failed: ${err?.name||"Error"}`);
       sendError(res,502,"UPSTREAM_UNAVAILABLE","Không kết nối được tới máy chủ âm thanh YouTube");
     }
   });

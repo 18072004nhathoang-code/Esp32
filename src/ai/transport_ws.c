@@ -610,7 +610,10 @@ esp_transport_handle_t esp_transport_ws_init(esp_transport_handle_t parent_handl
         return NULL;
     }
     transport_ws_t *ws = calloc(1, sizeof(transport_ws_t));
-    ESP_TRANSPORT_MEM_CHECK(TAG, ws, return NULL);
+    ESP_TRANSPORT_MEM_CHECK(TAG, ws, {
+        esp_transport_destroy(t);
+        return NULL;
+    });
     ws->parent = parent_handle;
     t->foundation = parent_handle->foundation;
 

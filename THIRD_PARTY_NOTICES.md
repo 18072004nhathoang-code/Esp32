@@ -38,7 +38,7 @@ shipped by LovyanGFX and TJpg_Decoder.
 
 - `src/ai/transport_ws.c` is an Apache-2.0 Espressif WebSocket transport source
   retained locally for the Arduino-ESP32 2.0.17 transport API. The audited file
-  SHA-256 is `76372a79ec6b870b72c84dc3da21b8bf6b9afd278193066cd59d8c817b922416`;
+  SHA-256 is `34cd86f0f17c771861c1aefc651b9e89c65bb22799b5f45f0b791bf201b02770`;
   its copyright and license header are preserved in the file.
 - `scripts/framework_wifi_patch.py` generates build-directory-only adaptations
   from Arduino-ESP32 package `3.20017.241212+sha.dcc1105b`. It verifies exact

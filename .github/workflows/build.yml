@@ -54,6 +54,9 @@ jobs:
       - name: Validate partition contract
         run: python scripts/validate_partitions.py partitions.csv
 
+      - name: Validate dependency provenance
+        run: python scripts/verify_dependency_provenance.py
+
       - name: Run release-tool tests
         run: python -m unittest discover -s tests -p 'test_*.py'
 

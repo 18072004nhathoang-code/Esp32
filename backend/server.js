@@ -86,7 +86,7 @@ export function createServer(config = {}, streamHandler = streamYouTubeAudio) {
       const release=()=>{if(!released){released=true;activeStreams-=1;}};
       res.once("finish",release);res.once("close",release);
       try{return streamHandler(q,req,res,{...config,requestId});}
-      catch(error){release();console.error(`[YOUTUBE ${requestId}] Handler error`,error);return sendJson(res,500,{error:{code:"INTERNAL_ERROR",message:"Lỗi proxy nội bộ."}});}
+      catch(error){release();console.error(`[YOUTUBE ${requestId}] Handler error: ${error?.name||"Error"}`);return sendJson(res,500,{error:{code:"INTERNAL_ERROR",message:"Lỗi proxy nội bộ."}});}
     }
     return sendJson(res,404,{error:{code:"NOT_FOUND",message:"Endpoint không tồn tại."}});
   });

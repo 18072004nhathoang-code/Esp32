@@ -9,6 +9,8 @@ are not release features.
 - Build release, music-stress and diagnostic environments with PlatformIO 6.1.16.
 - Pass native C++ contracts, backend tests and simulator regression under Node 20.
 - Pass partition, warning and 120 KB RAM / 3 MB flash budget checks.
+- Pass `scripts/verify_dependency_provenance.py`; audited shim hashes, vendored
+  audio metadata and every direct PlatformIO pin must agree with notices.
 - Package the bootloader, partition table, application binary, ELF/map files,
   source revision, sizes and SHA-256 hashes with `scripts/package_release.py`.
 - Packaging is fail-closed: the build provenance must match the exact current

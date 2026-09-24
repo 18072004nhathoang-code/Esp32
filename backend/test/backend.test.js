@@ -40,6 +40,18 @@ test("mocked HEAD resolves metadata without a response body",async()=>{const chi
 
 test("mocked yt-dlp failure returns deterministic JSON",async()=>{const child=spawnFixture({stdout:"",stderr:"not found",code:1});const base=await start({spawnImpl:child.spawnImpl},streamYouTubeAudio);const res=await fetch(`${base}/youtube/stream?q=missing`);assert.equal(res.status,502);assert.equal((await res.json()).error.code,"YTDLP_FAILED");});
 
+test("yt-dlp failure logs never expose signed media URLs",async()=>{
+  const secretUrl="https://media.example/audio.m4a?token=super-secret";
+  const child=spawnFixture({stdout:"",stderr:`ERROR ${secretUrl}`,code:1});
+  const lines=[];const original=console.error;console.error=(...args)=>lines.push(args.join(" "));
+  try{
+    const base=await start({spawnImpl:child.spawnImpl},streamYouTubeAudio);
+    const res=await fetch(`${base}/youtube/stream?q=missing`);
+    assert.equal(res.status,502);await res.json();
+  }finally{console.error=original;}
+  assert.equal(lines.some(line=>line.includes(secretUrl)||line.includes("super-secret")),false);
+});
+
 test("invalid direct URL is rejected before spawn",async()=>{let spawned=false;const base=await start({spawnImpl:()=>{spawned=true;}},streamYouTubeAudio);const res=await fetch(`${base}/youtube/stream?q=${encodeURIComponent("http://127.0.0.1/private")}`);assert.equal(res.status,400);assert.equal((await res.json()).error.code,"UNSUPPORTED_URL");assert.equal(spawned,false);});
 
 test("client abort terminates a pending yt-dlp child",async()=>{const fixture=spawnFixture({hold:true});const base=await start({spawnImpl:fixture.spawnImpl},streamYouTubeAudio);await new Promise(resolve=>{const req=http.get(`${base}/youtube/stream?q=abort`);req.on("error",()=>resolve());setTimeout(()=>req.destroy(),20);});await new Promise(resolve=>setTimeout(resolve,20));assert.equal(fixture.child.killed,true);});
