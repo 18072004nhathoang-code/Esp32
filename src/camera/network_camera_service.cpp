@@ -36,15 +36,18 @@ class BoundedBufferStream final : public Stream
 {
 public:
     BoundedBufferStream(uint8_t *&buffer, size_t &capacity, size_t limit,
-                        const std::atomic<bool> *running)
-        : _buffer(buffer), _capacity(capacity), _limit(limit), _running(running) {}
+                        const std::atomic<bool> *running, uint32_t deadline_ms)
+        : _buffer(buffer), _capacity(capacity), _limit(limit), _running(running),
+          _deadline_ms(deadline_ms) {}
 
     size_t write(uint8_t byte) override { return write(&byte, 1); }
     size_t write(const uint8_t *data, size_t len) override
     {
         if (!data || len == 0) return 0;
         if ((_running && !_running->load(std::memory_order_acquire)) ||
-            len > _limit - _size || !network_background_allowed())
+            len > _limit - _size ||
+            millis_deadline_reached(millis(), _deadline_ms) ||
+            !network_background_allowed())
         {
             _failed = true;
             return 0;
@@ -81,6 +84,7 @@ private:
     size_t &_capacity;
     size_t _limit;
     const std::atomic<bool> *_running;
+    uint32_t _deadline_ms;
     size_t _size = 0;
     bool _failed = false;
 };
@@ -181,17 +185,23 @@ NetworkCameraService::~NetworkCameraService()
 void NetworkCameraService::releaseInactiveBuffers()
 {
     if (!_frame_mutex || xSemaphoreTake(_frame_mutex, portMAX_DELAY) != pdTRUE) return;
-    if (!_front_in_use)
-    {
-        heap_caps_free(_buf_front);
-        heap_caps_free(_buf_back);
-        _buf_front = nullptr;
-        _buf_back = nullptr;
-        _front_capacity = 0;
-        _back_capacity = 0;
-        _frame_front = {};
-    }
+    if (!_front_in_use) releaseBuffersLocked();
     xSemaphoreGive(_frame_mutex);
+}
+
+void NetworkCameraService::releaseBuffersLocked()
+{
+    heap_caps_free(_buf_front);
+    heap_caps_free(_buf_back);
+    _buf_front = nullptr;
+    _buf_back = nullptr;
+    // Keep the allocation contract armed for the next start. Setting these to
+    // zero made a close/open cycle call heap_caps_malloc(0), permanently
+    // starving the restarted worker of snapshot buffers.
+    _front_capacity = NET_CAM_DEFAULT_BUF_CAP;
+    _back_capacity = NET_CAM_DEFAULT_BUF_CAP;
+    _frame_front = {};
+    _frame_back = {};
 }
 
 void NetworkCameraService::urlEncode(const char *src, char *dst, size_t dst_len)
@@ -220,25 +230,19 @@ void NetworkCameraService::urlEncode(const char *src, char *dst, size_t dst_len)
 
 void NetworkCameraService::sanitizeUrl(const char *src, char *dst, size_t dst_len)
 {
-    if (!src || !dst || dst_len == 0) return;
-    const char *scheme_end = strstr(src, "://");
-    const char *at_sign = strchr(src, '@');
-
-    if (scheme_end && at_sign && at_sign > scheme_end + 3)
+    if (!dst || dst_len == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+    char discarded_user[2] = {};
+    char discarded_secret[2] = {};
+    bool had_credentials = false;
+    if (!strip_url_credentials(src, dst, dst_len,
+                               discarded_user, sizeof(discarded_user),
+                               discarded_secret, sizeof(discarded_secret),
+                               &had_credentials))
     {
-        // Có credential nằm giữa :// và @ -> Mask thành ***:***
-        size_t scheme_len = (scheme_end - src) + 3;
-        if (scheme_len < dst_len)
-        {
-            strncpy(dst, src, scheme_len);
-            dst[scheme_len] = '\0';
-            strncat(dst, "***:***", dst_len - strlen(dst) - 1);
-            strncat(dst, at_sign, dst_len - strlen(dst) - 1);
-            return;
-        }
+        strlcpy(dst, "[redacted]", dst_len);
     }
-    strncpy(dst, src, dst_len - 1);
-    dst[dst_len - 1] = '\0';
 }
 
 bool NetworkCameraService::parseJpegDimensions(const uint8_t *buf, size_t len, size_t &width, size_t &height)
@@ -523,10 +527,12 @@ bool NetworkCameraService::loadProfileFromNVS()
         xSemaphoreGive(_config_mutex);
     }
 
+    char safe_custom_url[sizeof(prof.custom_url)] = {};
+    sanitizeUrl(prof.custom_url, safe_custom_url, sizeof(safe_custom_url));
     Serial.printf("[NET_CAM] Đã nạp profile camera '%s' tại %s%s%s (password không lưu, state=%s)\n",
                   prof.name, prof.ip[0] ? prof.ip : "",
-                  (prof.ip[0] && prof.custom_url[0]) ? " / " : "",
-                  prof.custom_url[0] ? prof.custom_url : "",
+                  (prof.ip[0] && safe_custom_url[0]) ? " / " : "",
+                  safe_custom_url,
                   camera_runtime_state_to_string(_runtime_state));
     return true;
 }
@@ -882,7 +888,10 @@ CameraFrame* NetworkCameraService::getFrame(uint32_t timeout_ms)
 
 void NetworkCameraService::returnFrame(CameraFrame *frame)
 {
-    if (frame && _front_in_use && _frame_mutex)
+    // getFrame() deliberately returns with _frame_mutex held. Only the exact
+    // leased frame may release it. stop() waits for the worker to exit before
+    // releaseInactiveBuffers() takes this mutex and reclaims the storage.
+    if (frame == &_frame_front && _front_in_use && _frame_mutex)
     {
         _front_in_use = false;
         xSemaphoreGive(_frame_mutex);
@@ -1122,6 +1131,7 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
         return -1;
     }
     const uint32_t request_timeout_ms = 1500;
+    const uint32_t request_deadline_ms = millis() + 5000U;
     http.setTimeout(request_timeout_ms);
     if (strlen(request_profile.username) > 0)
     {
@@ -1144,7 +1154,8 @@ int NetworkCameraService::fetchHttpSnapshotForProfile(uint8_t *&out_buf, size_t 
 
         if (_running)
         {
-            BoundedBufferStream sink(out_buf, current_cap, NET_CAM_MAX_SAFETY_LIMIT, &_running);
+            BoundedBufferStream sink(out_buf, current_cap, NET_CAM_MAX_SAFETY_LIMIT,
+                                     &_running, request_deadline_ms);
             const int written = http.writeToStream(&sink);
             const size_t total = sink.size();
             const bool complete_body = http_dechunked_body_complete(

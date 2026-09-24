@@ -326,6 +326,13 @@ void test_camera_url_credential_stripping()
     assert(out_user[0] == '\0');
     assert(out_pass[0] == '\0');
 
+    // Secret query names are case-insensitive and cover common signed-URL forms.
+    const char *url4 = "https://cam.local/frame.jpg?channel=2&Access_Token=topsecret&API_KEY=alsosecret";
+    assert(strip_url_credentials(url4, out_url, sizeof(out_url), out_user, sizeof(out_user),
+                                 out_pass, sizeof(out_pass), &had_creds));
+    assert(had_creds == true);
+    assert(strcmp(out_url, "https://cam.local/frame.jpg?channel=2") == 0);
+
     printf("[PASS] test_camera_url_credential_stripping\n");
 }
 

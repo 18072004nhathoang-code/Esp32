@@ -24,6 +24,13 @@ constexpr bool bounded_body_append_allowed(size_t current, size_t incoming, size
     return current <= limit && incoming <= limit - current;
 }
 
+// Valid for deadlines no more than INT32_MAX milliseconds into the future.
+// Signed subtraction preserves ordering when Arduino millis() wraps at 2^32.
+constexpr bool millis_deadline_reached(uint32_t now_ms, uint32_t deadline_ms)
+{
+    return static_cast<int32_t>(now_ms - deadline_ms) >= 0;
+}
+
 constexpr bool http_dechunked_body_complete(int expected_length, size_t actual_length,
                                             int stream_result, bool sink_failed)
 {
@@ -375,6 +382,20 @@ struct PowerBrightnessCoordinator
     }
 };
 
+inline bool url_query_key_equals(const char *key, size_t key_len, const char *expected)
+{
+    if (!key || !expected || strlen(expected) != key_len) return false;
+    for (size_t i = 0; i < key_len; ++i)
+    {
+        char lhs = key[i];
+        char rhs = expected[i];
+        if (lhs >= 'A' && lhs <= 'Z') lhs = static_cast<char>(lhs - 'A' + 'a');
+        if (rhs >= 'A' && rhs <= 'Z') rhs = static_cast<char>(rhs - 'A' + 'a');
+        if (lhs != rhs) return false;
+    }
+    return true;
+}
+
 inline bool strip_url_credentials(const char *src_url,
                                   char *out_url, size_t out_size,
                                   char *out_user, size_t user_size,
@@ -470,15 +491,20 @@ inline bool strip_url_credentials(const char *src_url,
             size_t key_len = (eq && eq < (p + param_len)) ? (eq - p) : param_len;
 
             bool is_secret = false;
-            const char *secret_keys[] = {"token", "pass", "password", "pwd", "auth", "key", "secret"};
+            const char *secret_keys[] = {
+                "token", "access_token", "id_token", "api_key", "apikey",
+                "pass", "password", "pwd", "auth", "authorization",
+                "key", "secret", "signature", "sig", "credential"
+            };
             for (const char *sk : secret_keys)
             {
-                if (strlen(sk) == key_len && strncmp(p, sk, key_len) == 0)
+                if (url_query_key_equals(p, key_len, sk))
                 {
                     is_secret = true;
                     if (had_credentials) *had_credentials = true;
                     if (eq && out_pass && out_pass[0] == '\0' && pass_size > 0 &&
-                        (strcmp(sk, "pass") == 0 || strcmp(sk, "password") == 0 || strcmp(sk, "pwd") == 0))
+                        (strcmp(sk, "pass") == 0 || strcmp(sk, "password") == 0 ||
+                         strcmp(sk, "pwd") == 0))
                     {
                         size_t val_len = (p + param_len) - (eq + 1);
                         if (val_len >= pass_size) val_len = pass_size - 1;

@@ -15,6 +15,9 @@ static_assert(bounded_body_append_allowed(16380, 4, 16384), "exact JSON limit ac
 static_assert(!bounded_body_append_allowed(16380, 5, 16384), "oversize JSON rejected");
 static_assert(http_dechunked_body_complete(-1, 128, 128, false), "chunked body accepted after dechunk");
 static_assert(!http_dechunked_body_complete(128, 127, 127, false), "truncated body rejected");
+static_assert(!millis_deadline_reached(0xFFFFFFF0U, 0x00000020U), "deadline before millis wrap");
+static_assert(millis_deadline_reached(0x00000020U, 0x00000020U), "deadline at millis wrap");
+static_assert(millis_deadline_reached(0x00000030U, 0x00000020U), "deadline after millis wrap");
 static_assert(camera_session_accepts(7, 7, true), "current camera session accepted");
 static_assert(!camera_session_accepts(6, 7, true), "stale camera session rejected");
 static_assert(camera_control_needs_apply(9, 8), "critical camera control retries until ACK");

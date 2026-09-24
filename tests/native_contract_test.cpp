@@ -6,6 +6,10 @@
 
 int main()
 {
+    assert(!millis_deadline_reached(0xFFFFFFF0U, 0x00000020U));
+    assert(millis_deadline_reached(0x00000020U, 0x00000020U));
+    assert(millis_deadline_reached(0x00000030U, 0x00000020U));
+
     TouchTransformConfig transform = {240, 320, 240, 320, 2, false, true, true};
     uint16_t x = 0, y = 0;
     assert(touch_transform_point(transform, 0, 0, &x, &y) && x == 0 && y == 0);

@@ -211,16 +211,24 @@ class BoundedBufferStream final : public Stream
 {
 public:
     BoundedBufferStream(uint8_t *buffer, size_t capacity,
-                        const std::atomic<bool> *active)
-        : _buffer(buffer), _capacity(capacity), _active(active) {}
+                        const std::atomic<bool> *active, uint32_t deadline_ms)
+        : _buffer(buffer), _capacity(capacity), _active(active),
+          _deadline_ms(deadline_ms) {}
     size_t write(uint8_t value) override { return write(&value, 1); }
     size_t write(const uint8_t *data, size_t length) override
     {
-        if (!data || _overflow || (_active && !_active->load(std::memory_order_acquire)) ||
-            length > _capacity - _size ||
+        if (!data || _failed) return 0;
+        if (length > _capacity - _size)
+        {
+            _too_large = true;
+            _failed = true;
+            return 0;
+        }
+        if ((_active && !_active->load(std::memory_order_acquire)) ||
+            millis_deadline_reached(millis(), _deadline_ms) ||
             !network_background_allowed())
         {
-            _overflow = true;
+            _failed = true;
             return 0;
         }
         memcpy(_buffer + _size, data, length);
@@ -232,13 +240,16 @@ public:
     int peek() override { return -1; }
     void flush() override {}
     size_t size() const { return _size; }
-    bool overflowed() const { return _overflow; }
+    bool failed() const { return _failed; }
+    bool tooLarge() const { return _too_large; }
 private:
     uint8_t *_buffer;
     size_t _capacity;
     const std::atomic<bool> *_active;
+    uint32_t _deadline_ms;
     size_t _size = 0;
-    bool _overflow = false;
+    bool _failed = false;
+    bool _too_large = false;
 };
 
 static void release_inactive_buffers(void)
@@ -423,6 +434,7 @@ static void map_download_task(void *pvParameters)
 
             if (http.begin(client, url_buf))
             {
+                const uint32_t body_deadline_ms = millis() + 10000U;
                 const char *header_keys[] = { "Content-Type" };
                 http.collectHeaders(header_keys, 1);
                 int httpCode = http.GET();
@@ -445,13 +457,13 @@ static void map_download_task(void *pvParameters)
                     else if (jpeg_raw_buffer != nullptr)
                     {
                         BoundedBufferStream sink(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE,
-                                                 &map_service_active);
+                                                 &map_service_active, body_deadline_ms);
                         const int received = http.writeToStream(&sink); // HTTPClient dechunks first.
-                        const bool complete = received >= 0 && !sink.overflowed() &&
+                        const bool complete = received >= 0 && !sink.failed() &&
                             static_cast<size_t>(received) == sink.size() &&
                             (total_len < 0 || received == total_len);
                         if (complete) bytes_read = received;
-                        else if (sink.overflowed()) set_status(TILE_IMAGE_TOO_LARGE, req.request_id);
+                        else if (sink.tooLarge()) set_status(TILE_IMAGE_TOO_LARGE, req.request_id);
 
                         const MapJpegValidation validation = bytes_read > 200
                             ? validate_map_jpeg(jpeg_raw_buffer, bytes_read) : MAP_JPEG_INVALID;
@@ -508,7 +520,14 @@ static void map_download_task(void *pvParameters)
                         {
                             Serial.printf("[MAP_TASK] ❌ JPEG invalid/truncated/oversize: got=%d len=%d type=%s\n",
                                           bytes_read, total_len, content_type.c_str());
-                            if (!sink.overflowed()) set_status(TILE_ERROR, req.request_id);
+                            if (!network_background_allowed())
+                            {
+                                (void)requeue_current_request(req);
+                            }
+                            else if (!sink.tooLarge())
+                            {
+                                set_status(TILE_ERROR, req.request_id);
+                            }
                         }
                     }
                     else

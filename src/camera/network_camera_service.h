@@ -98,6 +98,7 @@ private:
     void setTransportSecurity(CameraTransportSecurity security);
     bool snapshotState(NetworkCameraProfile &profile, bool &configured,
                        CameraRuntimeState &state) const;
+    void releaseBuffersLocked();
     void releaseInactiveBuffers();
 };
 
