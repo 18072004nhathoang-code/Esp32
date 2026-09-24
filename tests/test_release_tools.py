@@ -25,6 +25,8 @@ def health_line(**overrides: int) -> str:
         "psram_largest": 3 * 1024 * 1024,
         "stack_min": 3072,
         "heartbeat_max": 1000,
+        "tasks_seen": (1 << 13) - 1,
+        "tasks_active": 0x7F,
     }
     fields.update(overrides)
     scalar = " ".join(f"{key}={value}" for key, value in fields.items())
@@ -60,6 +62,13 @@ class HilMonitorTests(unittest.TestCase):
     def test_missing_samples_are_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "expected at least"):
             validate("boot only\n", 120)
+
+    def test_acceptance_can_require_every_exercised_task(self) -> None:
+        required = (1 << 13) - 1
+        validate(health_line(tasks_seen=required), 60, required_tasks_mask=required)
+        with self.assertRaisesRegex(SystemExit, "required tasks were not exercised"):
+            validate(health_line(tasks_seen=required & ~(1 << 6)), 60,
+                     required_tasks_mask=required)
 
 
 class ReleaseConfigurationTests(unittest.TestCase):

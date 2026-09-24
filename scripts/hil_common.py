@@ -47,7 +47,7 @@ def parse_health(text: str) -> list[dict[str, int]]:
     return samples
 
 
-def validate(text: str, duration: int) -> None:
+def validate(text: str, duration: int, required_tasks_mask: int = 0) -> None:
     fatal = FATAL.search(text)
     if fatal:
         raise SystemExit(f"fatal serial signature: {fatal.group(0)}")
@@ -73,6 +73,16 @@ def validate(text: str, duration: int) -> None:
             f"task heartbeat stalled: age={oldest_heartbeat} ms, "
             f"required <= {heartbeat_ceiling_ms} ms"
         )
+    if required_tasks_mask:
+        seen_mask = 0
+        for sample in samples:
+            seen_mask |= sample.get("tasks_seen", 0)
+        missing = required_tasks_mask & ~seen_mask
+        if missing:
+            raise SystemExit(
+                f"required tasks were not exercised: missing mask=0x{missing:x}, "
+                f"seen=0x{seen_mask:x}"
+            )
     first, last = samples[0], samples[-1]
     if first.get("int_free", 0) - last.get("int_free", 0) > 8192:
         raise SystemExit("internal RAM drift exceeds 8 KB")

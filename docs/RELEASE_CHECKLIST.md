@@ -34,6 +34,8 @@ are not release features.
 - Confirm internal heap low-water >= 32 KB, largest internal block >= 16 KB,
   largest PSRAM block >= 2 MB and every observed task stack margin >= 2 KB.
 - Confirm post-soak internal/PSRAM drift stays within 8 KB / 32 KB.
+- Confirm the final `tasks_seen` mask includes release task IDs 0 through 12;
+  completed short-lived workers retain their historical minimum stack margin.
 
 The pinned Arduino-ESP32 SDK initializes the task watchdog at five seconds.
 LVGL and the bounded audio worker are registered with that watchdog; this is

@@ -318,14 +318,21 @@ void loop()
             const RuntimeHealthSnapshot health = system_get_runtime_health();
             uint32_t min_stack = UINT32_MAX;
             uint32_t max_heartbeat_age = 0;
+            uint32_t tasks_seen = 0;
+            uint32_t tasks_active = 0;
             for (uint8_t i = 0; i < RUNTIME_TASK_COUNT; ++i)
             {
                 if (!health.tasks[i].seen) continue;
+                tasks_seen |= 1UL << i;
                 min_stack = min(min_stack, health.tasks[i].stack_free_bytes);
-                max_heartbeat_age = max(max_heartbeat_age, health.tasks[i].heartbeat_age_ms);
+                if (health.tasks[i].active)
+                {
+                    tasks_active |= 1UL << i;
+                    max_heartbeat_age = max(max_heartbeat_age, health.tasks[i].heartbeat_age_ms);
+                }
             }
             if (min_stack == UINT32_MAX) min_stack = 0;
-            Serial.printf("[HEALTH] int_free=%u int_min=%u int_largest=%u psram_free=%u psram_min=%u psram_largest=%u stack_min=%u heartbeat_max=%u lvgl_free=%u lvgl_largest=%u lvgl_frag=%u queues=%u/%u drops=%u/%u stale=%u\n",
+            Serial.printf("[HEALTH] int_free=%u int_min=%u int_largest=%u psram_free=%u psram_min=%u psram_largest=%u stack_min=%u heartbeat_max=%u tasks_seen=%u tasks_active=%u lvgl_free=%u lvgl_largest=%u lvgl_frag=%u queues=%u/%u drops=%u/%u stale=%u\n",
                           static_cast<unsigned>(health.internal_free_bytes),
                           static_cast<unsigned>(health.internal_min_free_bytes),
                           static_cast<unsigned>(health.internal_largest_free_bytes),
@@ -334,6 +341,8 @@ void loop()
                           static_cast<unsigned>(health.psram_largest_free_bytes),
                           static_cast<unsigned>(min_stack),
                           static_cast<unsigned>(max_heartbeat_age),
+                          static_cast<unsigned>(tasks_seen),
+                          static_cast<unsigned>(tasks_active),
                           static_cast<unsigned>(health.lvgl_free_bytes),
                           static_cast<unsigned>(health.lvgl_largest_free_bytes),
                           static_cast<unsigned>(health.lvgl_fragmentation_percent),

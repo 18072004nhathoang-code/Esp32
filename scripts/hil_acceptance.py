@@ -7,6 +7,11 @@ from pathlib import Path
 from hil_common import capture, parse_health, validate
 
 
+# Release firmware task IDs 0..12. MusicStress (ID 13) belongs only to the
+# dedicated stress environment and is intentionally excluded here.
+RELEASE_REQUIRED_TASKS_MASK = (1 << 13) - 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", required=True)
@@ -16,7 +21,7 @@ def main() -> int:
     args = parser.parse_args()
     print("Run the full checklist in docs/RELEASE_CHECKLIST.md during this window.")
     text = capture(args.port, args.baud, args.duration, args.output)
-    validate(text, args.duration)
+    validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK)
     final = parse_health(text)[-1]
     if final.get("drops_uplink", 0) or final.get("drops_inbound", 0):
         raise SystemExit("Xiaozhi queue drops were non-zero at acceptance completion")

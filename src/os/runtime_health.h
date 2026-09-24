@@ -24,6 +24,7 @@ struct RuntimeTaskHealth {
     uint32_t heartbeat_age_ms;
     uint32_t stack_free_bytes;
     bool seen;
+    bool active;
 };
 
 void runtime_health_heartbeat(RuntimeTaskId id);
