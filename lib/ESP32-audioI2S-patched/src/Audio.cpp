@@ -6392,7 +6392,8 @@ bool Audio::startAudioTask() {
     // Mini OS reserves Core 1 for LVGL. Keep decoder/I2S work on Core 0 so
     // starting network music cannot compete with the UI render task at the
     // same priority and make the touchscreen/display appear frozen.
-    if(xTaskCreatePinnedToCore(&Audio::taskWrapper, "PeriodicTask", 3300, ctx, 4,
+    // Hardware MP3 stress measured only 1.35 KiB free with the prior stack.
+    if(xTaskCreatePinnedToCore(&Audio::taskWrapper, "PeriodicTask", 5 * 1024, ctx, 4,
                                &m_audioTaskHandle, 0) != pdPASS) {
         delete ctx;
         m_f_audioTaskIsRunning = false;

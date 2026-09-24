@@ -14,4 +14,8 @@ schedule a same-priority decoder task onto the UI core. The 7 ms decoder sleep
 uses `pdMS_TO_TICKS()` with a one-tick minimum to prevent a zero-delay hot loop
 on configurations with a lower FreeRTOS tick rate.
 
+The decoder worker stack is 5 KiB. Hardware MP3 stress showed that the former
+3.3 KiB allocation left only 1.35 KiB free, below the project's 2 KiB release
+margin.
+
 The upstream GPL-3.0 license is preserved in `LICENSE`.

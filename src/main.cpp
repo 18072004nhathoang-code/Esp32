@@ -292,7 +292,7 @@ void setup()
     Serial.println("[SYSTEM] Mini OS Pro Max đã sẵn sàng hoạt động!");
 #ifdef MINI_OS_MUSIC_STRESS_TEST
     TaskHandle_t stress_handle = nullptr;
-    if (xTaskCreatePinnedToCore(music_stress_task, "MusicStress", 4096, nullptr, 1,
+    if (xTaskCreatePinnedToCore(music_stress_task, "MusicStress", 5 * 1024, nullptr, 1,
                                 &stress_handle, 1) != pdPASS)
         Serial.println("[HW_STRESS] FAIL task allocation");
 #endif

@@ -473,7 +473,6 @@ static void music_audio_task(void *pvParameters)
 
                 case MUSIC_CMD_PAUSE:
                 {
-                    bool release_after_pause = false;
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
                         if (audio && player_state.is_playing && player_state.is_paused)
@@ -484,14 +483,15 @@ static void music_audio_task(void *pvParameters)
                             {
                                 player_state.is_paused = true;
                                 audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
-                                release_after_pause = true;
                                 command_ok = true;
                                 Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng phát nhạc");
                             }
                         }
                         xSemaphoreGive(audio_mutex);
                     }
-                    if (release_after_pause) command_ok = release_music_audio();
+                    // pauseResume() keeps the decoder's I2S driver installed.
+                    // Retain MUSIC ownership until stop/suspend destroys the
+                    // decoder; duplex cannot coexist with that driver.
                 }
                 break;
 

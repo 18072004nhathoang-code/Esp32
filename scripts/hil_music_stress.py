@@ -12,6 +12,12 @@ MUSIC_STRESS_TASK_MASK = 1 << 13
 COMPLETE = re.compile(
     r"\[HW_STRESS\] COMPLETE heap=(\d+) delta=(-?\d+) tasks=(\d+) delta=(-?\d+)"
 )
+DECODER_STACK = re.compile(r"PeriodicTask high-water=(\d+) bytes")
+MUSIC_FATAL = re.compile(
+    r"register I2S object to platform failed|duplex restore failed|"
+    r"ownership retained for retry",
+    re.IGNORECASE,
+)
 
 
 def main() -> int:
@@ -26,6 +32,16 @@ def main() -> int:
     validate(text, args.duration, required_tasks_mask=MUSIC_STRESS_TASK_MASK)
     if "[HW_STRESS] FAIL" in text:
         raise SystemExit("music stress firmware reported a failure")
+    music_fatal = MUSIC_FATAL.search(text)
+    if music_fatal:
+        raise SystemExit(f"music/I2S failure signature: {music_fatal.group(0)}")
+    decoder_margins = [int(value) for value in DECODER_STACK.findall(text)]
+    if not decoder_margins:
+        raise SystemExit("decoder task stack margin was not reported")
+    if min(decoder_margins) < 2048:
+        raise SystemExit(
+            f"decoder task stack margin is {min(decoder_margins)} bytes; required >= 2048"
+        )
     complete = COMPLETE.search(text)
     if not complete:
         raise SystemExit("music stress did not reach COMPLETE")
