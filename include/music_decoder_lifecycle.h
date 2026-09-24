@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <stdint.h>
 
 enum class MusicDecoderPhase : uint8_t
@@ -19,28 +20,38 @@ class MusicWorkerExitTracker
 public:
     uint32_t begin()
     {
-        uint32_t next = generation_ + 1;
-        if (next == 0) ++next;
-        generation_ = next;
+        uint32_t current = generation_.load(std::memory_order_relaxed);
+        uint32_t next = 0;
+        do
+        {
+            next = current + 1;
+            if (next == 0) next = 1;
+        } while (!generation_.compare_exchange_weak(
+            current, next, std::memory_order_acq_rel, std::memory_order_relaxed));
         return next;
     }
 
     void acknowledge(uint32_t generation)
     {
-        if (generation == generation_) acknowledged_generation_ = generation;
+        if (generation == generation_.load(std::memory_order_acquire))
+            acknowledged_generation_.store(generation, std::memory_order_release);
     }
 
     bool confirmed(uint32_t generation) const
     {
-        return generation != 0 && generation == generation_ &&
-               acknowledged_generation_ == generation;
+        return generation != 0 &&
+               generation == generation_.load(std::memory_order_acquire) &&
+               acknowledged_generation_.load(std::memory_order_acquire) == generation;
     }
 
-    uint32_t generation() const { return generation_; }
+    uint32_t generation() const
+    {
+        return generation_.load(std::memory_order_acquire);
+    }
 
 private:
-    volatile uint32_t generation_ = 0;
-    volatile uint32_t acknowledged_generation_ = 0;
+    std::atomic<uint32_t> generation_{0};
+    std::atomic<uint32_t> acknowledged_generation_{0};
 };
 
 // Platform-independent state machine used by the firmware and native tests.

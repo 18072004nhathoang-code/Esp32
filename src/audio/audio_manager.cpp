@@ -59,7 +59,7 @@ static uint32_t playback_next_token = 0;
 static uint32_t playback_sample_idx = 0;
 static uint32_t playback_owner_session = 0;
 static AudioRecordingLease playback_lease = {};
-static volatile AudioRecordingFileState recording_file_state = AUDIO_FILE_NONE;
+static AudioRecordingFileState recording_file_state = AUDIO_FILE_NONE;
 static TaskHandle_t recording_export_task_handle = nullptr;
 static constexpr const char *kRecordingPath = "/voice/last_recording.wav";
 static constexpr const char *kRecordingTempPath = "/voice/last_recording.wav.tmp";
@@ -80,8 +80,8 @@ static SemaphoreHandle_t audio_codec_mutex = nullptr;
 static SemaphoreHandle_t audio_state_mutex = nullptr;
 
 // Máy trạng thái phân quyền I2S phần cứng (Exclusive Ownership với RefCount Lease)
-static volatile AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
-static volatile uint32_t audio_owner_refcount = 0;
+static AudioOwner current_audio_owner = AUDIO_OWNER_NONE;
+static uint32_t audio_owner_refcount = 0;
 static uint32_t audio_owner_session = 0;
 static uint32_t audio_next_session = 0;
 static SemaphoreHandle_t audio_owner_mutex = nullptr;
@@ -343,11 +343,19 @@ enum AudioTaskState
     AUDIO_TASK_PAUSED,
     AUDIO_TASK_RESUME_REQUESTED
 };
-static volatile AudioTaskState audio_task_state = AUDIO_TASK_ACTIVE;
+static AudioTaskState audio_task_state = AUDIO_TASK_ACTIVE;
 static SemaphoreHandle_t audio_task_ack_sem = nullptr;
 static portMUX_TYPE audio_task_state_mux = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t audio_pause_request_id = 0;
 static uint32_t audio_pause_ack_id = 0;
+
+static AudioTaskState audio_task_state_snapshot(void)
+{
+    portENTER_CRITICAL(&audio_task_state_mux);
+    const AudioTaskState state = audio_task_state;
+    portEXIT_CRITICAL(&audio_task_state_mux);
+    return state;
+}
 
 static void put_le16(uint8_t *p, uint16_t value)
 {
@@ -1930,7 +1938,7 @@ static void play_sound_effect_sync(SoundEffect fx)
 
 bool audio_play_sound_effect(SoundEffect fx)
 {
-    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+    if (!audio_command_queue || audio_task_state_snapshot() != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
         fx < FX_CLICK || fx > FX_XIAOZHI_WAKE) return false;
     const AudioAsyncCommand cmd = { AUDIO_ASYNC_SOUND_EFFECT, static_cast<uint8_t>(fx), 0 };
@@ -2053,7 +2061,7 @@ bool audio_start_recording(uint32_t max_duration_sec)
 
 bool audio_start_recording_async(uint32_t max_duration_sec, uint32_t *request_id)
 {
-    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+    if (!audio_command_queue || audio_task_state_snapshot() != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
         max_duration_sec == 0 || max_duration_sec > AUDIO_RECORD_MAX_SEC)
         return false;
@@ -2473,7 +2481,7 @@ bool audio_start_playback(void)
 
 bool audio_start_playback_async(uint32_t *request_id)
 {
-    if (!audio_command_queue || audio_task_state != AUDIO_TASK_ACTIVE ||
+    if (!audio_command_queue || audio_task_state_snapshot() != AUDIO_TASK_ACTIVE ||
         audio_get_current_owner() == AUDIO_OWNER_MUSIC ||
         audio_get_recorded_sample_count() == 0) return false;
     uint32_t previous = 0;
