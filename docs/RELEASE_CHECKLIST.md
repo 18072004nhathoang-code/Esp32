@@ -51,6 +51,10 @@ are not release features.
   unexpected reset and rejects the wrong release/music-stress environment. Use
   `--revision` only when intentionally validating an artifact from another
   known commit.
+- Boot identity is checked using the complete revision and explicit PlatformIO
+  environment fields. Dirty builds (`+wt...`), diagnostic firmware and logs
+  without an environment report cannot satisfy the release gate. Warm-boot
+  testing applies the same checks and defaults to the current Git revision.
 - Exercise every release task at least once before ending the soak. In
   particular, change and save one Settings value (ID 10), record audio and use
   the UI action that exports the WAV to SD (ID 11), and run the speaker

@@ -10,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from hil_common import parse_health, validate, validate_event_counts  # noqa: E402
+from hil_common import (parse_health, validate, validate_event_counts,
+                        validate_firmware_identity)  # noqa: E402
 from package_release import validate_build_provenance  # noqa: E402
 from verify_unprovisioned_config import configured_macros  # noqa: E402
 
@@ -69,6 +70,7 @@ class HilMonitorTests(unittest.TestCase):
     def test_hil_can_require_fresh_boot_exact_revision_and_environment(self) -> None:
         boot = (
             "[BOOT] Commit: abcdef123456\n"
+            "[BOOT] Environment: esp32-s3-es3c28p\n"
             "[BOOT] Capability: chip=ESP32-S3 memory=PASS partitions=PASS\n"
         )
         validate(boot + health_line(), 60, expected_revision="abcdef123456",
@@ -77,11 +79,36 @@ class HilMonitorTests(unittest.TestCase):
             validate(health_line(), 60, require_fresh_boot=True)
         with self.assertRaisesRegex(SystemExit, "firmware revision mismatch"):
             validate(boot + health_line(), 60, expected_revision="000000000000")
-        with self.assertRaisesRegex(SystemExit, "music-stress firmware"):
-            validate(boot + health_line() + "[HW_STRESS] START\n", 60,
+        with self.assertRaisesRegex(SystemExit, "environment mismatch"):
+            validate(boot.replace("es3c28p\n", "es3c28p-music-stress\n") + health_line(), 60,
                      expect_music_stress=False)
-        with self.assertRaisesRegex(SystemExit, "release firmware"):
+        with self.assertRaisesRegex(SystemExit, "environment mismatch"):
             validate(boot + health_line(), 60, expect_music_stress=True)
+
+    def test_identity_rejects_dirty_prefix_duplicate_and_missing_revisions(self) -> None:
+        for observed in (
+            "[BOOT] Commit: abcdef123456+wt0123456789ab\n",
+            "[BOOT] Commit: abcdef1234567\n",
+            "[BOOT] Commit: abcdef123456\n[BOOT] Commit: abcdef123456\n",
+            "",
+        ):
+            with self.subTest(observed=observed):
+                with self.assertRaisesRegex(SystemExit, "revision mismatch"):
+                    validate_firmware_identity(observed, "abcdef123456")
+        validate_firmware_identity("[BOOT] Commit: abcdef123456\r\n", "abcdef123456")
+
+    def test_identity_rejects_diagnostic_or_unknown_environment(self) -> None:
+        for environment in ("esp32-s3-es3c28p-diagnostic", "unknown", ""):
+            with self.subTest(environment=environment):
+                with self.assertRaisesRegex(SystemExit, "environment mismatch"):
+                    validate_firmware_identity(
+                        f"[BOOT] Environment: {environment}\n",
+                        expected_environment="esp32-s3-es3c28p",
+                    )
+        validate_firmware_identity(
+            "[BOOT] Environment: esp32-s3-es3c28p-music-stress\r\n",
+            expected_environment="esp32-s3-es3c28p-music-stress",
+        )
 
     def test_stale_heartbeat_is_rejected(self) -> None:
         with self.assertRaisesRegex(SystemExit, "task heartbeat stalled"):

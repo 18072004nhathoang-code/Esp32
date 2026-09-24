@@ -5,7 +5,7 @@ import argparse
 import time
 from pathlib import Path
 
-from hil_common import FATAL
+from hil_common import FATAL, current_git_revision, validate_firmware_identity
 
 
 REQUIRED_MARKERS = (
@@ -58,6 +58,7 @@ def main() -> int:
     args = parser.parse_args()
     if args.cycles < 1:
         raise SystemExit("--cycles must be positive")
+    expected_revision = args.revision or current_git_revision()
 
     logs: list[str] = []
     for cycle in range(1, args.cycles + 1):
@@ -68,10 +69,7 @@ def main() -> int:
         missing = [marker for marker in REQUIRED_MARKERS if marker not in text]
         if missing:
             raise SystemExit(f"cycle {cycle}: boot did not reach required marker: {missing[0]}")
-        if args.revision and f"[BOOT] Commit: {args.revision}" not in text:
-            raise SystemExit(f"cycle {cycle}: firmware revision mismatch")
-        if "[HW_STRESS]" in text:
-            raise SystemExit(f"cycle {cycle}: stress firmware is installed instead of release")
+        validate_firmware_identity(text, expected_revision, "esp32-s3-es3c28p")
         logs.append(f"===== WARM BOOT {cycle}/{args.cycles} =====\n{text}")
         print(f"warm boot {cycle}/{args.cycles}: PASS", flush=True)
         time.sleep(0.25)

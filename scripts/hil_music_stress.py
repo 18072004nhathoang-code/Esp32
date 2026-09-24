@@ -28,10 +28,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("hil-music-stress.log"))
     parser.add_argument("--revision", default="")
     args = parser.parse_args()
+    expected_revision = args.revision or current_git_revision()
 
     text = capture(args.port, args.baud, args.duration, args.output)
     validate(text, args.duration, required_tasks_mask=MUSIC_STRESS_TASK_MASK,
-             expected_revision=args.revision or current_git_revision(),
+             expected_revision=expected_revision,
              require_fresh_boot=True, expect_music_stress=True)
     if "[HW_STRESS] FAIL" in text:
         raise SystemExit("music stress firmware reported a failure")

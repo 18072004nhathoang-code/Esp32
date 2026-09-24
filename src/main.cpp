@@ -126,6 +126,7 @@ void setup()
     Serial.printf(" %s MINI OS \n", BOARD_PROFILE_NAME);
     Serial.println("=======================================================");
     Serial.printf("[BOOT] Commit: %s\n", FW_GIT_SHA);
+    Serial.printf("[BOOT] Environment: %s\n", FW_BUILD_ENV);
     const esp_reset_reason_t reset_reason = esp_reset_reason();
     Serial.printf("[BOOT] Reset reason: %s (%d)\n",
                   reset_reason_name(reset_reason), static_cast<int>(reset_reason));

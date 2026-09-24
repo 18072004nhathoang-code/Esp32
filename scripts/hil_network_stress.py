@@ -18,10 +18,11 @@ def main() -> int:
     parser.add_argument("--camera-cycles", type=int, default=100)
     parser.add_argument("--revision", default="")
     args = parser.parse_args()
+    expected_revision = args.revision or current_git_revision()
     print("Exercise AP loss/recovery, map refresh and camera open/close during this window.")
     text = capture(args.port, args.baud, args.duration, args.output)
     validate(text, args.duration,
-             expected_revision=args.revision or current_git_revision(),
+             expected_revision=expected_revision,
              require_fresh_boot=True, expect_music_stress=False)
     validate_event_counts(text, {
         "wifi_loss": args.wifi_recoveries,

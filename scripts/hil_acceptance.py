@@ -22,12 +22,13 @@ def main() -> int:
     parser.add_argument("--voice-sessions", type=int, default=20)
     parser.add_argument("--revision", default="")
     args = parser.parse_args()
+    expected_revision = args.revision or current_git_revision()
     print("Run the full checklist in docs/RELEASE_CHECKLIST.md during this window.")
     print("Required short-lived tasks: save Settings, export one recording to SD, "
           "and complete the speaker self-test.")
     text = capture(args.port, args.baud, args.duration, args.output)
     validate(text, args.duration, required_tasks_mask=RELEASE_REQUIRED_TASKS_MASK,
-             expected_revision=args.revision or current_git_revision(),
+             expected_revision=expected_revision,
              require_fresh_boot=True, expect_music_stress=False)
     validate_event_counts(text, {
         "voice_start": args.voice_sessions,

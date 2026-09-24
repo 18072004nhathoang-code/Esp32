@@ -19,6 +19,24 @@ HEALTH_EVENTS = re.compile(r"\[HEALTH_EVENTS\]\s+(.*)")
 BOOT_CAPABILITY = re.compile(r"\[BOOT\] Capability:")
 
 
+def validate_firmware_identity(text: str, expected_revision: str = "",
+                               expected_environment: str = "") -> None:
+    # Compare complete field values: a dirty build adds +wt<fingerprint> to
+    # the revision and must not count as evidence for its clean parent commit.
+    for field, expected, label in (
+        ("Commit", expected_revision, "revision"),
+        ("Environment", expected_environment, "environment"),
+    ):
+        if not expected:
+            continue
+        observed = re.findall(r"\[BOOT\] " + field + r": ([^\r\n]+)", text)
+        if observed != [expected]:
+            raise SystemExit(
+                f"firmware {label} mismatch: expected exactly one {expected!r}, "
+                f"observed {observed!r}"
+            )
+
+
 def current_git_revision() -> str:
     try:
         return subprocess.check_output(
@@ -97,15 +115,12 @@ def validate(text: str, duration: int, required_tasks_mask: int = 0,
         raise SystemExit("unexpected reset: boot capability report repeated during soak")
     if require_fresh_boot and boot_reports != 1:
         raise SystemExit(f"fresh boot report count is {boot_reports}; expected exactly one")
-    if expected_revision and f"[BOOT] Commit: {expected_revision}" not in text:
-        raise SystemExit(
-            f"firmware revision mismatch: expected boot revision {expected_revision}"
-        )
-    stress_installed = "[HW_STRESS]" in text
-    if expect_music_stress is True and not stress_installed:
-        raise SystemExit("release firmware is installed instead of music-stress firmware")
-    if expect_music_stress is False and stress_installed:
-        raise SystemExit("music-stress firmware is installed instead of release firmware")
+    expected_environment = ""
+    if expect_music_stress is not None:
+        expected_environment = "esp32-s3-es3c28p"
+        if expect_music_stress:
+            expected_environment += "-music-stress"
+    validate_firmware_identity(text, expected_revision, expected_environment)
     samples = parse_health(text)
     minimum_samples = max(1, duration // 60)
     if len(samples) < minimum_samples:

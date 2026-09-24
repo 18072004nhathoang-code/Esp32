@@ -50,4 +50,7 @@ build_dir.mkdir(parents=True, exist_ok=True)
     encoding="utf-8",
 )
 
-env.Append(CPPDEFINES=[("FW_GIT_SHA", env.StringifyMacro(revision))])
+env.Append(CPPDEFINES=[
+    ("FW_GIT_SHA", env.StringifyMacro(revision)),
+    ("FW_BUILD_ENV", env.StringifyMacro(env["PIOENV"])),
+])
