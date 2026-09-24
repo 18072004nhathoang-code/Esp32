@@ -32,7 +32,7 @@ public:
     void buildStreamUrl(char *out_url, size_t max_len, bool mask_credential = false) const;
     void buildSnapshotUrl(char *out_url, size_t max_len) const;
 
-    // ONVIF Client Protocol (Thực tế, không return fake success)
+    // API tương thích cho protocol chưa hỗ trợ; luôn fail-closed/NOT_IMPLEMENTED.
     bool onvifProbeCapabilities(char *out_service_url, size_t max_len);
     bool onvifGetProfiles(char *out_profile_token, size_t max_len);
     bool onvifGetSnapshotUri(const char *profile_token, char *out_uri, size_t max_len);

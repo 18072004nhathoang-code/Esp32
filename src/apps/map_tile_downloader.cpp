@@ -20,6 +20,7 @@
 #include "service_state_logic.h"
 #include "../os/network_coordinator.h"
 #include "../os/runtime_health.h"
+#include <atomic>
 
 // Root CA certificates (Google Trust Services GTS Root R1, ISRG Root X1, GlobalSign R3)
 static const char MAPS_TRUSTED_ROOT_CA_PEM[] PROGMEM =
@@ -134,6 +135,7 @@ static uint32_t latest_request_id = 0;
 static MapTileMetadata published_metadata = {};
 static TaskHandle_t download_task_handle = nullptr;
 static QueueHandle_t map_request_queue = nullptr;
+static std::atomic<bool> map_service_active{false};
 
 static void set_status(TileDownloadStatus status, uint32_t request_id = 0)
 {
@@ -152,7 +154,8 @@ static bool request_is_current(uint32_t request_id)
 {
     if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
         return false;
-    const bool current = service_generation_current(request_id, latest_request_id, false);
+    const bool current = map_service_active.load(std::memory_order_acquire) &&
+        service_generation_current(request_id, latest_request_id, false);
     xSemaphoreGive(tile_swap_mutex);
     return current;
 }
@@ -183,7 +186,8 @@ static bool publish_current_tile(const MapTileRequest &req, TileSource source)
 {
     if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
         return false;
-    if (!service_generation_current(req.request_id, latest_request_id, false))
+    if (!map_service_active.load(std::memory_order_acquire) ||
+        !service_generation_current(req.request_id, latest_request_id, false))
     {
         xSemaphoreGive(tile_swap_mutex);
         return false;
@@ -206,12 +210,14 @@ static bool publish_current_tile(const MapTileRequest &req, TileSource source)
 class BoundedBufferStream final : public Stream
 {
 public:
-    BoundedBufferStream(uint8_t *buffer, size_t capacity)
-        : _buffer(buffer), _capacity(capacity) {}
+    BoundedBufferStream(uint8_t *buffer, size_t capacity,
+                        const std::atomic<bool> *active)
+        : _buffer(buffer), _capacity(capacity), _active(active) {}
     size_t write(uint8_t value) override { return write(&value, 1); }
     size_t write(const uint8_t *data, size_t length) override
     {
-        if (!data || _overflow || length > _capacity - _size ||
+        if (!data || _overflow || (_active && !_active->load(std::memory_order_acquire)) ||
+            length > _capacity - _size ||
             !network_background_allowed())
         {
             _overflow = true;
@@ -230,9 +236,31 @@ public:
 private:
     uint8_t *_buffer;
     size_t _capacity;
+    const std::atomic<bool> *_active;
     size_t _size = 0;
     bool _overflow = false;
 };
+
+static void release_inactive_buffers(void)
+{
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+        return;
+    // Recheck while holding the same mutex used by init/deactivate. A reopen may
+    // have raced with the worker between its outer active check and this lock.
+    if (!map_service_active.load(std::memory_order_acquire))
+    {
+        heap_caps_free(jpeg_raw_buffer);
+        heap_caps_free(tile_buf_front);
+        heap_caps_free(tile_buf_back);
+        jpeg_raw_buffer = nullptr;
+        tile_buf_front = nullptr;
+        tile_buf_back = nullptr;
+        has_new_tile = false;
+        current_source = TILE_SOURCE_NONE;
+        published_metadata = {};
+    }
+    xSemaphoreGive(tile_swap_mutex);
+}
 
 enum MapJpegValidation : uint8_t
 {
@@ -416,7 +444,8 @@ static void map_download_task(void *pvParameters)
                     }
                     else if (jpeg_raw_buffer != nullptr)
                     {
-                        BoundedBufferStream sink(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE);
+                        BoundedBufferStream sink(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE,
+                                                 &map_service_active);
                         const int received = http.writeToStream(&sink); // HTTPClient dechunks first.
                         const bool complete = received >= 0 && !sink.overflowed() &&
                             static_cast<size_t>(received) == sink.size() &&
@@ -499,6 +528,9 @@ static void map_download_task(void *pvParameters)
             }
         }
 
+        if (!map_service_active.load(std::memory_order_acquire))
+            release_inactive_buffers();
+
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
@@ -519,30 +551,35 @@ bool map_tile_downloader_init(void)
         return false;
     }
 
-    // 2. Cấp phát bộ đệm thô và bộ đệm điểm ảnh kép (Front & Back) trong 8MB Octal PSRAM
-    if (jpeg_raw_buffer == nullptr)
+    // 2. Cấp phát buffer dưới generation mutex. Worker chỉ được giải phóng khi
+    // app inactive và phải giữ cùng mutex, nên reopen không thể free nhầm buffer mới.
+    bool buffers_ready = false;
+    if (xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(250)) == pdTRUE)
     {
-        jpeg_raw_buffer = (uint8_t *)heap_caps_malloc(JPEG_MAX_RAW_SIZE, MALLOC_CAP_SPIRAM);
+        map_service_active.store(true, std::memory_order_release);
+        if (!jpeg_raw_buffer)
+            jpeg_raw_buffer = (uint8_t *)heap_caps_malloc(JPEG_MAX_RAW_SIZE, MALLOC_CAP_SPIRAM);
+        const size_t dec_size = MAP_TILE_WIDTH * MAP_TILE_HEIGHT * sizeof(lv_color_t);
+        if (!tile_buf_front)
+            tile_buf_front = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
+        if (!tile_buf_back)
+            tile_buf_back = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
+        buffers_ready = jpeg_raw_buffer && tile_buf_front && tile_buf_back;
+        if (!buffers_ready)
+        {
+            map_service_active.store(false, std::memory_order_release);
+            heap_caps_free(jpeg_raw_buffer);
+            heap_caps_free(tile_buf_front);
+            heap_caps_free(tile_buf_back);
+            jpeg_raw_buffer = nullptr;
+            tile_buf_front = nullptr;
+            tile_buf_back = nullptr;
+        }
+        xSemaphoreGive(tile_swap_mutex);
     }
 
-    size_t dec_size = MAP_TILE_WIDTH * MAP_TILE_HEIGHT * sizeof(lv_color_t);
-    if (tile_buf_front == nullptr)
+    if (!buffers_ready)
     {
-        tile_buf_front = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
-    }
-    if (tile_buf_back == nullptr)
-    {
-        tile_buf_back = (lv_color_t *)heap_caps_malloc(dec_size, MALLOC_CAP_SPIRAM);
-    }
-
-    if (!jpeg_raw_buffer || !tile_buf_front || !tile_buf_back)
-    {
-        heap_caps_free(jpeg_raw_buffer);
-        heap_caps_free(tile_buf_front);
-        heap_caps_free(tile_buf_back);
-        jpeg_raw_buffer = nullptr;
-        tile_buf_front = nullptr;
-        tile_buf_back = nullptr;
         Serial.println("[MAP_TASK] ❌ Lỗi cấp phát bộ đệm kép PSRAM cho bản đồ!");
         current_status = TILE_DEGRADED;
         return false;
@@ -561,6 +598,7 @@ bool map_tile_downloader_init(void)
         jpeg_raw_buffer = nullptr;
         tile_buf_front = nullptr;
         tile_buf_back = nullptr;
+        map_service_active.store(false, std::memory_order_release);
         current_status = TILE_DEGRADED;
         Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được queue");
         return false;
@@ -589,6 +627,7 @@ bool map_tile_downloader_init(void)
             jpeg_raw_buffer = nullptr;
             tile_buf_front = nullptr;
             tile_buf_back = nullptr;
+            map_service_active.store(false, std::memory_order_release);
             current_status = TILE_DEGRADED;
             Serial.println("[MAP_TASK] ❌ Chế độ suy giảm: không tạo được task tải bản đồ");
             return false;
@@ -596,6 +635,22 @@ bool map_tile_downloader_init(void)
     }
     current_status = TILE_IDLE;
     return true;
+}
+
+void map_tile_downloader_deactivate(void)
+{
+    if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
+    {
+        map_service_active.store(false, std::memory_order_release);
+        return;
+    }
+    map_service_active.store(false, std::memory_order_release);
+    ++latest_request_id;
+    if (latest_request_id == 0) ++latest_request_id;
+    has_new_tile = false;
+    current_status = TILE_IDLE;
+    current_source = TILE_SOURCE_NONE;
+    xSemaphoreGive(tile_swap_mutex);
 }
 
 bool map_tile_downloader_request(double lat, double lon, int zoom, const char *maptype)

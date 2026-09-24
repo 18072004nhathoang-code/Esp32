@@ -67,6 +67,15 @@ struct MapTileMetadata
 bool map_tile_downloader_init(void);
 
 /**
+ * @brief Hủy generation hiện tại và đánh dấu dịch vụ không hoạt động.
+ *
+ * Worker nền không bị xóa để lần mở kế tiếp không phải tạo lại task, nhưng sẽ
+ * tự giải phóng toàn bộ buffer ảnh PSRAM sau khi request đang chạy đã thoát.
+ * Hàm này không chờ socket/SD nên an toàn để gọi từ LVGL task khi đóng app.
+ */
+void map_tile_downloader_deactivate(void);
+
+/**
  * @brief Gửi yêu cầu tải hoặc nạp ảnh bản đồ cho tọa độ và mức zoom
  * @param lat Vĩ độ (Latitude)
  * @param lon Kinh độ (Longitude)

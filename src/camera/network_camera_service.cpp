@@ -1,6 +1,6 @@
 /**
  * @file network_camera_service.cpp
- * @brief Triển khai dịch vụ IP Camera qua mạng (HTTP Snapshot thật, ONVIF scaffold, bảo mật credential)
+ * @brief Dịch vụ IP Camera Snapshot HTTP(S); ONVIF/MJPEG/RTSP được báo unsupported.
  */
 
 #include "network_camera_service.h"
@@ -112,8 +112,6 @@ NetworkCameraService::NetworkCameraService()
     memset(&_frame_back, 0, sizeof(_frame_back));
     _onvif_snapshot_url[0] = '\0';
     _onvif_stream_url[0] = '\0';
-    _config_mutex = xSemaphoreCreateMutex();
-    _worker_exit_sem = xSemaphoreCreateBinary();
 }
 
 bool NetworkCameraService::ensureSynchronizationPrimitives()

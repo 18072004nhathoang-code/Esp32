@@ -1,7 +1,8 @@
 /**
  * @file camera_service.h
  * @brief Tầng dịch vụ thống nhất quản lý Camera cho UI (Vendor-Agnostic Facade)
- * Kết nối LocalCameraService (DVP) và NetworkCameraService (IP Camera Hikvision, KBVision, Ezviz, Yoosee, ONVIF)
+ * Profile ES3C28P chỉ phát hành NetworkCameraService HTTP(S) Snapshot;
+ * local DVP, ONVIF, MJPEG và RTSP được báo rõ là không hỗ trợ.
  */
 
 #pragma once

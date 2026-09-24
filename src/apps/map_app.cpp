@@ -576,6 +576,10 @@ void map_app_open(lv_obj_t *parent)
 
 void map_app_close(void)
 {
+    // Invalidate network/SD work before releasing LVGL-owned objects. The map
+    // worker observes this flag, drops stale generations and frees its PSRAM
+    // buffers asynchronously without blocking the UI task on an HTTP timeout.
+    map_tile_downloader_deactivate();
     if (map_canvas) lv_obj_del(map_canvas);
     if (canvas_buffer)
     {
