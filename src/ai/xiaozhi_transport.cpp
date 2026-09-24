@@ -36,7 +36,6 @@ XiaozhiTransport::XiaozhiTransport()
       connection_epoch_(0), generation_(0), dropped_uplink_(0), dropped_downlink_(0),
       frames_sent_(0), bytes_sent_(0), last_audio_sent_ms_(0), inbound_bytes_(0), closing_(false)
 {
-    rx_mutex_ = xSemaphoreCreateMutex();
 }
 
 XiaozhiTransport::~XiaozhiTransport()
@@ -68,6 +67,9 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
         if (error && error_size) strlcpy(error, "Cấu hình WSS Xiaozhi không hợp lệ", error_size);
         return false;
     }
+    // The transport is a static object. Create RTOS primitives lazily after
+    // setup/scheduler startup instead of allocating from its global constructor.
+    if (!rx_mutex_) rx_mutex_ = xSemaphoreCreateMutex();
     if (!uplink_queue_) uplink_queue_ = xQueueCreate(8, sizeof(AudioPacket));
     if (!inbound_queue_) inbound_queue_ = xQueueCreate(kInboundQueueCapacity, sizeof(InboundMessage *));
     if (!fragment_storage_)
@@ -76,7 +78,8 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
     if (!fragment_assembler_ && fragment_storage_)
         fragment_assembler_ = new xiaozhi::FragmentAssembler(
             fragment_storage_, xiaozhi::kMaxJsonMessageBytes);
-    if (!uplink_queue_ || !inbound_queue_ || !fragment_storage_ || !fragment_assembler_)
+    if (!rx_mutex_ || !uplink_queue_ || !inbound_queue_ ||
+        !fragment_storage_ || !fragment_assembler_)
     {
         if (error && error_size) strlcpy(error, "Thiếu RAM cho queue WebSocket Xiaozhi", error_size);
         return false;
