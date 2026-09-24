@@ -634,6 +634,7 @@ void NetworkCameraService::workerTask()
                             _frame_front.len = (size_t)bytes;
                             _frame_front.width = real_w;
                             _frame_front.height = real_h;
+                            _frame_front.source = CAM_SOURCE_NETWORK_STREAM;
                             _frame_front.format = CAM_PIXFORMAT_JPEG;
                             _frame_front.timestamp_ms = millis();
                             _frame_front.frame_id = _frame_sequence;

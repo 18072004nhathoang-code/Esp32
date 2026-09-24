@@ -141,6 +141,7 @@ struct CameraFrame
     size_t len;
     size_t width;
     size_t height;
+    CameraSourceType source; // Owner used to return a lease even if source selection changes.
     CameraPixelFormat format;
     uint32_t timestamp_ms;
     uint32_t frame_id; // Sequence ID phân biệt frame mới

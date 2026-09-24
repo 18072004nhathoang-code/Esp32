@@ -5,9 +5,17 @@
 
 #include "camera_service.h"
 #include "board_config.h"
+#include <atomic>
 
-static CameraSourceType active_source = CAM_SOURCE_LOCAL_DVP;
-static char status_text_buffer[64] = "Chưa kết nối Camera";
+namespace
+{
+std::atomic<CameraSourceType> active_source{CAM_SOURCE_LOCAL_DVP};
+
+CameraSourceType current_source()
+{
+    return active_source.load(std::memory_order_acquire);
+}
+}
 
 bool camera_service_init(void)
 {
@@ -21,18 +29,15 @@ bool camera_service_init(void)
 
     if (g_local_camera.isAvailable())
     {
-        active_source = CAM_SOURCE_LOCAL_DVP;
-        snprintf(status_text_buffer, sizeof(status_text_buffer), "DVP: %s", g_local_camera.getSensorName());
+        active_source.store(CAM_SOURCE_LOCAL_DVP, std::memory_order_release);
     }
     else
     {
-        active_source = CAM_SOURCE_NETWORK_STREAM;
-        snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
+        active_source.store(CAM_SOURCE_NETWORK_STREAM, std::memory_order_release);
     }
 #else
-    active_source = CAM_SOURCE_NETWORK_STREAM;
+    active_source.store(CAM_SOURCE_NETWORK_STREAM, std::memory_order_release);
     g_network_camera.loadProfileFromNVS();
-    snprintf(status_text_buffer, sizeof(status_text_buffer), "Mạng: Sẵn sàng kết nối IP Cam");
     Serial.println("[CAMERA] Board không có local DVP camera -> Chuyển hoàn toàn sang Network Camera (IP Cam).");
 #endif
 
@@ -41,22 +46,17 @@ bool camera_service_init(void)
 
 void camera_service_set_source(CameraSourceType source)
 {
-    active_source = source;
+    active_source.store(source, std::memory_order_release);
 }
 
 CameraSourceType camera_service_get_source(void)
 {
-    return active_source;
+    return current_source();
 }
 
 bool camera_service_configure_network(const NetworkCameraProfile &profile)
 {
     bool ok = g_network_camera.configure(profile);
-    if (ok)
-    {
-        snprintf(status_text_buffer, sizeof(status_text_buffer), "%s (%s)",
-                 NetworkCameraService::getVendorName(profile.vendor), profile.ip);
-    }
     return ok;
 }
 
@@ -72,7 +72,7 @@ NetworkCameraProfile camera_service_get_network_profile(void)
 
 CameraRuntimeState camera_service_get_runtime_state(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    if (current_source() == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.isAvailable() ? CAM_STATE_RUNNING : CAM_STATE_NOT_CONFIGURED;
     }
@@ -81,24 +81,24 @@ CameraRuntimeState camera_service_get_runtime_state(void)
 
 uint32_t camera_service_get_session_id(void)
 {
-    return active_source == CAM_SOURCE_NETWORK_STREAM ? g_network_camera.getSessionId() : 0;
+    return current_source() == CAM_SOURCE_NETWORK_STREAM ? g_network_camera.getSessionId() : 0;
 }
 
 CameraFailureReason camera_service_get_failure_reason(void)
 {
-    return active_source == CAM_SOURCE_NETWORK_STREAM
+    return current_source() == CAM_SOURCE_NETWORK_STREAM
         ? g_network_camera.getFailureReason() : CAM_FAILURE_NONE;
 }
 
 CameraTransportSecurity camera_service_get_transport_security(void)
 {
-    return active_source == CAM_SOURCE_NETWORK_STREAM
+    return current_source() == CAM_SOURCE_NETWORK_STREAM
         ? g_network_camera.getTransportSecurity() : CAM_TRANSPORT_NONE;
 }
 
 bool camera_service_is_connected(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    if (current_source() == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.isAvailable();
     }
@@ -107,11 +107,12 @@ bool camera_service_is_connected(void)
 
 bool camera_service_start(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    const CameraSourceType source = current_source();
+    if (source == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.start();
     }
-    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    else if (source == CAM_SOURCE_NETWORK_STREAM)
     {
         return g_network_camera.start();
     }
@@ -120,12 +121,13 @@ bool camera_service_start(void)
 
 bool camera_service_stop(uint32_t timeout_ms)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    const CameraSourceType source = current_source();
+    if (source == CAM_SOURCE_LOCAL_DVP)
     {
         g_local_camera.stop();
         return true;
     }
-    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    else if (source == CAM_SOURCE_NETWORK_STREAM)
     {
         return g_network_camera.stop(timeout_ms);
     }
@@ -134,11 +136,12 @@ bool camera_service_stop(uint32_t timeout_ms)
 
 CameraFrame* camera_service_get_frame(uint32_t timeout_ms)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    const CameraSourceType source = current_source();
+    if (source == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.getFrame(timeout_ms);
     }
-    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    else if (source == CAM_SOURCE_NETWORK_STREAM)
     {
         return g_network_camera.getFrame(timeout_ms);
     }
@@ -147,11 +150,14 @@ CameraFrame* camera_service_get_frame(uint32_t timeout_ms)
 
 void camera_service_return_frame(CameraFrame *frame)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    if (!frame) return;
+    // A source switch may happen after getFrame(). Return the lease to the
+    // service that produced it, not to whichever source is selected now.
+    if (frame->source == CAM_SOURCE_LOCAL_DVP)
     {
         g_local_camera.returnFrame(frame);
     }
-    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    else if (frame->source == CAM_SOURCE_NETWORK_STREAM)
     {
         g_network_camera.returnFrame(frame);
     }
@@ -159,11 +165,12 @@ void camera_service_return_frame(CameraFrame *frame)
 
 bool camera_service_is_available(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    const CameraSourceType source = current_source();
+    if (source == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.isAvailable();
     }
-    else if (active_source == CAM_SOURCE_NETWORK_STREAM)
+    else if (source == CAM_SOURCE_NETWORK_STREAM)
     {
         return g_network_camera.isConnected();
     }
@@ -172,7 +179,7 @@ bool camera_service_is_available(void)
 
 const char* camera_service_get_status_text(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    if (current_source() == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.isAvailable() ? "CONNECTED" : "NOT_DETECTED";
     }
@@ -198,7 +205,7 @@ const char* camera_service_get_status_text(void)
 
 const char* camera_service_get_model_name(void)
 {
-    if (active_source == CAM_SOURCE_LOCAL_DVP)
+    if (current_source() == CAM_SOURCE_LOCAL_DVP)
     {
         return g_local_camera.getSensorName();
     }
