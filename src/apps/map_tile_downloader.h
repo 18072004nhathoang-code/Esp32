@@ -42,14 +42,16 @@ enum TileDownloadStatus {
     TILE_PROVIDER_NOT_CONFIGURED,
     TILE_CANCELED_STALE,
     TILE_IMAGE_TOO_LARGE,
-    TILE_UNSUPPORTED_FORMAT
+    TILE_UNSUPPORTED_FORMAT,
+    TILE_WAITING_PHONE
 };
 
 // Nguồn cung cấp ảnh bản đồ hiện tại
 enum TileSource {
     TILE_SOURCE_NONE = 0,
     TILE_SOURCE_SD_CACHE,     // Đọc trực tiếp từ thẻ nhớ MicroSD FAT32 (Tức thì, không tốn quota)
-    TILE_SOURCE_NETWORK       // Tải mới qua HTTPS (Google Static API hoặc OpenStreetMap)
+    TILE_SOURCE_NETWORK,      // Tải mới qua HTTPS Google Static API
+    TILE_SOURCE_PHONE         // Điện thoại dựng OpenStreetMap rồi gửi JPEG qua LAN
 };
 
 struct MapTileMetadata

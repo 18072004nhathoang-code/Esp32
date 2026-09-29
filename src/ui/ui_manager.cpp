@@ -1256,6 +1256,11 @@ void ui_open_ai_voice_app(void)
     (void)request_app_open(APP_AI_VOICE, 500);
 }
 
+bool ui_open_map_app(void)
+{
+    return request_app_open(APP_MAP, 750);
+}
+
 static void open_camera_app(void)
 {
     prepare_app_window("IP Camera", APP_CAMERA);
@@ -1286,6 +1291,7 @@ static void process_app_open_requests(void)
                 case APP_WIFI: open_wifi_app(); break;
                 case APP_MUSIC: open_music_app(); break;
                 case APP_AI_VOICE: open_ai_voice_app(); break;
+                case APP_MAP: open_map_app(); break;
                 case APP_CAMERA: open_camera_app(); break;
                 default: break;
             }

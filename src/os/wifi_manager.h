@@ -21,6 +21,10 @@
 #define DEFAULT_WIFI_PASS ""
 #endif
 
+#ifndef DEFAULT_WIFI_FORCE_PROVISION
+#define DEFAULT_WIFI_FORCE_PROVISION 0
+#endif
+
 enum WiFiState {
     WIFI_STATE_DISCONNECTED,
     WIFI_STATE_SCANNING,
@@ -64,6 +68,9 @@ struct WiFiScanSnapshot {
  * @brief Khởi tạo hệ thống WiFi, đọc thông tin mạng đã lưu trong NVS Flash
  */
 bool wifi_manager_init(void);
+
+/** True after the WiFi worker has initialized the Arduino/IDF network stack. */
+bool wifi_manager_is_driver_ready(void);
 
 /**
  * @brief Bắt đầu quét mạng WiFi xung quanh (bất đồng bộ)

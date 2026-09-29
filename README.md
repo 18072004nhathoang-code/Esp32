@@ -23,7 +23,7 @@ Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.
 ```text
 +-------------------------------------------------------------------------------+
 |             Mini OS Desktop & Application Layer (240x320 Portrait Flipped)    |
-| [Status Bar] [System Monitor] [Google Maps] [Music Player] [XiaoZhi AI Voice] |
+| [Status Bar] [System Monitor] [Network Map] [Music Player] [XiaoZhi AI Voice] |
 |          [WiFi Settings] [Control Center] [Power Manager] [Camera IP]         |
 +-------------------------------------------------------------------------------+
 |                     LVGL 8.3.11 High-Level Graphics Engine                    |
@@ -95,7 +95,7 @@ Tất cả các thư viện trong `platformio.ini` được khóa phiên bản c
 | `lvgl/lvgl` | **8.3.11** | Nhân giao diện đồ họa chính |
 | `lovyan03/LovyanGFX` | **1.1.16** | Driver đồ họa ILI9341V SPI và touch controller |
 | `ESP32-audioI2S` | vendored từ commit **`928c420d49fce2a09fa91f490b9fcabed6447c67`**, local patch `2.0.0-mini-os.1` | Giải mã MP3; `PeriodicTask` shutdown bằng ACK trước khi giải phóng object |
-| `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã ảnh JPEG Google Maps & Camera Snapshot vào PSRAM |
+| `bodmer/TJpg_Decoder` | **1.1.0** | Giải mã JPEG Google Maps, nguồn điện thoại và Camera Snapshot vào PSRAM |
 | `bblanchon/ArduinoJson` | **6.21.5** | Parse/serialize JSON AI có giới hạn bộ nhớ |
 | `sh123/esp32_opus_arduino` | commit **`a3816682932b8792f90072ee05c33fe25c055628`** | Encode/decode Opus mono cho giao thức Xiaozhi |
 
@@ -113,7 +113,8 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | **MusicAudioTask (MP3)** | **Core 0** | **3** | Nhận lệnh qua FreeRTOS Queue, giải mã MP3, theo dõi generation và chỉ xóa decoder sau shutdown ACK; timeout giữ tài nguyên ở `RECOVERY_REQUIRED`. |
 | **Audio_Task (AudioManager)** | **Core 0** | **3** | Đọc DMA theo số stereo frame thực nhận, ghi bù partial I2S không lặp frame, lệnh start/stop/cancel theo generation + ACK, snapshot bản thu bất biến và commit WAV `.tmp`/`.bak` có recovery. |
 | **WiFi_Manager** | **Core 0** | **2** | Một worker sở hữu radio/NVS; scan có request ID và trạng thái `QUEUED/WAITING_FOR_RADIO/RUNNING/DONE/FAILED/CANCELED`, driver có `STARTING/STOPPING/DRAINING/RECOVERING`, snapshot revision nguyên tử, deadline/retry hữu hạn và loại completion cũ; Disconnect/Forget dùng control mailbox độc lập queue thường. |
-| **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. Đóng app hủy generation ngay và worker tự giải phóng khoảng 435 KB buffer PSRAM khi request cũ thoát. |
+| **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. Đóng app hủy generation ngay, giải phóng khoảng 435 KB buffer worker và yêu cầu nguồn điện thoại giải phóng thêm tối đa 128 KB PSRAM. |
+| **PhoneMapHTTP** | **Core 0** | **1** | Trang companion LAN trên cổng 8080; nhận JPEG tối đa 128 KB vào PSRAM, xác thực mã ghép nối/generation và nhường mạng cho Xiaozhi/nhạc. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
 | **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, queue uplink/downlink hữu hạn, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. |
 
@@ -129,7 +130,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
    ```c
    #define DEFAULT_WIFI_SSID           "Your_SSID"
    #define DEFAULT_WIFI_PASS           "Your_Password"
-   #define GOOGLE_MAPS_STATIC_API_KEY  "AIzaSy..."
+   #define GOOGLE_MAPS_STATIC_API_KEY  "" // tùy chọn; trống: điện thoại + OpenStreetMap
    #define AI_VOICE_PROVIDER_XIAOZHI   1
    #define XIAOZHI_OTA_ENDPOINT        "https://api.tenclass.net/xiaozhi/ota/"
    #define XIAOZHI_OTA_CA_CERT         "" // rỗng: dùng CA gốc bundled dùng chung
@@ -186,12 +187,28 @@ Cấu hình `YOUTUBE_STREAM_ENDPOINT` (mặc định rỗng), `YOUTUBE_PROXY_USE
 phát triển. Proxy giới hạn hai stream, hỗ trợ Range/206, báo readiness của
 `yt-dlp`, hủy upstream khi client ngắt và áp dụng timeout hữu hạn.
 
+### Dùng điện thoại làm nguồn bản đồ
+
+Chế độ này không cần Google Maps API key. ESP32 và điện thoại phải ở cùng một
+mạng Wi-Fi 2.4 GHz; có thể dùng chính hotspot 2.4 GHz của điện thoại.
+
+1. Để `GOOGLE_MAPS_STATIC_API_KEY` trống rồi nạp firmware.
+2. Mở ứng dụng **Network Map** trên ESP32. Dòng trạng thái hiển thị địa chỉ
+   `<IP-ESP32>:8080` và mã ghép nối sáu ký tự.
+3. Trên điện thoại, mở `http://<IP-ESP32>:8080`, nhập mã rồi nhấn **Kết nối**.
+4. Giữ trang mở. Khi pan, zoom hoặc đổi vị trí trên ESP32, điện thoại tải các
+   tile OpenStreetMap cần thiết, dựng JPEG 240×320 có attribution và gửi về bo.
+
+Endpoint chỉ dùng HTTP trong LAN, thay mã sau mỗi lần khởi động, giới hạn ảnh
+128 KB và loại upload sai generation. Không mở cổng 8080 ra Internet. Chế độ
+điện thoại chỉ cung cấp roadmap; satellite vẫn cần Google Maps Static API key.
+
 ---
 
 ## 📱 7. Các phân hệ ứng dụng
 
 1. **System Monitor**: Đọc tần số CPU, tải CPU ước lượng từ idle hooks của hai core, heap/PSRAM, nhiệt độ chip, uptime 64-bit, dung lượng MicroSD, WiFi/RSSI và số task FreeRTOS thật.
-2. **Network Map**: Tải ảnh bản đồ HTTPS từ Google Static Maps khi có key; hỗ trợ pan/zoom, cache MicroSD, ping-pong RGB565 và empty/error state khi mất mạng. Khi thiếu key, cache offline vẫn đọc được và mạng báo `PROVIDER_NOT_CONFIGURED`; không dùng endpoint fallback không được cấu hình. Đóng app vô hiệu hóa generation hiện tại không chặn LVGL; worker hủy stream cũ và thu hồi toàn bộ buffer tile/JPEG PSRAM, lần mở sau cấp phát lại có kiểm tra.
+2. **Network Map**: Tải ảnh HTTPS từ Google Static Maps khi có key; khi key trống, trang companion trên điện thoại dựng OpenStreetMap và upload JPEG đã ghép nối/gắn generation qua LAN. Hỗ trợ pan/zoom, cache MicroSD và ping-pong RGB565. Satellite chỉ bật với Google key. Đóng app vô hiệu hóa generation hiện tại, hủy upload cũ và thu hồi toàn bộ buffer tile/JPEG/phone-frame PSRAM.
 3. **Music Player**: Quét file MP3 thật trong `/music`, phát/tạm dừng/tua/chuyển bài qua command queue, lấy thời lượng từ decoder, quản lý độc quyền I2S và khóa I/O MicroSD.
 4. **AI Voice / Xiaozhi**: Push-to-talk đọc PCM16 mono 16kHz thật từ AudioManager trong lúc đang thu, gom frame 60ms, encode Opus và gửi qua WSS. Server hello được kiểm tra trước khi gửi `listen/start`; protocol binary v1/v2/v3, fragment, heartbeat, timeout và session generation loại dữ liệu cũ. Opus downlink chấp nhận sample rate hợp lệ do server hello công bố, decode rồi resample về 16kHz trước ES8311. Cancel gửi abort, hủy recording, đóng WSS và không phát frame cũ. Trước khi thu, Music lưu bookmark rồi Stop/ACK và hủy decoder để trả hẳn driver I2S; sau hội thoại chỉ dựng lại bài/vị trí/stream nếu không có lệnh Pause/Stop mới. MCP chỉ công bố Music, mở/start/stop/refresh/status Camera và giờ SNTP; tên lệnh/argument/source ID nằm trong allowlist, kết quả thành công chỉ gửi sau ACK thực của service/UI. Không hỗ trợ lệnh hệ thống, URL tùy ý hay OTA từ server.
 5. **WiFi Hub & Control Center**: Quét nền mạng 2.4GHz không ngắt STA đang ổn định; kết nối/ngắt/quên mạng, ghi nhớ credential trong NVS, lỗi scan tách khỏi lỗi kết nối và auto-reconnect hữu hạn do cùng một worker radio điều phối. Cấu hình WiFi mặc định để trống; firmware chỉ dùng credential thật từ NVS hoặc `secrets.h` do người dùng cung cấp.

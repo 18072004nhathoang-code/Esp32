@@ -16,6 +16,14 @@ by `platformio.ini`; it is attribution information, not legal advice.
 | Be Vietnam Pro SemiBold | SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71` | SIL Open Font License 1.1 | https://github.com/bettergui/Be-Vietnam-Pro |
 | lv_font_conv | 1.5.3 | MIT | https://github.com/lvgl/lv_font_conv |
 
+The optional phone-map companion requests interactive map tiles from the
+OpenStreetMap standard tile service. Map data is © OpenStreetMap contributors
+and available under ODbL; the rendered JPEG includes visible attribution. The
+companion does not bulk-download, prefetch or build an offline tile archive.
+Deployments with sustained or multi-device traffic must use a compliant tile
+provider or operate their own tile service instead of relying on the community
+server.
+
 Dependency license texts are retained in each resolved PlatformIO package; the
 vendored ESP32-audioI2S license and provenance are in
 `lib/ESP32-audioI2S-patched/`. The Be Vietnam Pro OFL text is distributed in

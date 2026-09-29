@@ -1,4 +1,5 @@
 #include "firmware_contracts.h"
+#include "phone_map_protocol.h"
 #include "touch_contact_tracker.h"
 #include "touch_transform.h"
 #include <assert.h>
@@ -65,6 +66,14 @@ int main()
     const uint8_t jpeg[] = {0xFF, 0xD8, 0x11, 0xFF, 0xD9};
     assert(complete_jpeg_signature(jpeg, sizeof(jpeg)));
     assert(!complete_jpeg_signature(jpeg, sizeof(jpeg) - 1));
+    uint8_t phone_jpeg[201] = {0xFF, 0xD8};
+    phone_jpeg[199] = 0xFF;
+    phone_jpeg[200] = 0xD9;
+    assert(phone_map_jpeg_envelope_valid(phone_jpeg, sizeof(phone_jpeg)));
+    assert(!phone_map_jpeg_envelope_valid(phone_jpeg, sizeof(phone_jpeg) - 1));
+    assert(phone_map_generation_accepts(9, 9, true));
+    assert(!phone_map_generation_accepts(8, 9, true));
+    assert(!phone_map_generation_accepts(9, 9, false));
     assert(cache_temp_can_replace(true, true, true));
     assert(!cache_temp_can_replace(false, true, true));
 

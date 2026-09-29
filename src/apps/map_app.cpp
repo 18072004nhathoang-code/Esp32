@@ -7,6 +7,7 @@
 
 #include "map_app.h"
 #include "map_tile_downloader.h"
+#include "phone_map_source.h"
 #include "../ui/ui_theme.h"
 #include "../os/runtime_health.h"
 #include <esp_heap_caps.h>
@@ -157,6 +158,16 @@ void map_app_render(void)
             {
                 lv_label_set_text(hud_lbl_source, LV_SYMBOL_REFRESH " Đang tải ảnh...");
                 lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0xF39C12), 0);
+            }
+        }
+        else if (st == TILE_WAITING_PHONE)
+        {
+            if (hud_lbl_source)
+            {
+                char hint[80];
+                phone_map_source_get_pairing_hint(hint, sizeof(hint));
+                lv_label_set_text_fmt(hud_lbl_source, LV_SYMBOL_WIFI " %s", hint);
+                lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00F2FE), 0);
             }
         }
         else if (st == TILE_ERROR || st == TILE_DEGRADED || st == TILE_PROVIDER_NOT_CONFIGURED ||
@@ -567,6 +578,8 @@ void map_app_open(lv_obj_t *parent)
 
     hud_lbl_source = lv_label_create(hud_source_pill);
     lv_label_set_text(hud_lbl_source, LV_SYMBOL_SD_CARD " Nạp SD Cache...");
+    lv_obj_set_width(hud_lbl_source, SCREEN_WIDTH - 120);
+    lv_label_set_long_mode(hud_lbl_source, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_color(hud_lbl_source, lv_color_hex(0x00E676), 0);
     lv_obj_set_style_text_font(hud_lbl_source, UI_FONT_12, 0);
     lv_obj_center(hud_lbl_source);

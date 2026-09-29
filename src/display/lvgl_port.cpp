@@ -168,6 +168,15 @@ static void lvgl_render_task(void *pvParameters)
         // Kiểm tra nếu hệ thống đang ở chế độ Sleep (tắt màn hình) để tạm dừng render LVGL
         if (power_manager_is_rendering_paused())
         {
+            // Keep owner-side RPC/event work moving while the panel is asleep.
+            // Rendering stays paused, but external app-open requests must not
+            // time out merely because the backlight has gone to sleep.
+            if (lvgl_port_lock(5))
+            {
+                if (lvgl_owner_hook) lvgl_owner_hook();
+                lvgl_port_unlock();
+            }
+
             // Trong chế độ Sleep: Tạm dừng lv_timer_handler(), chỉ quét cảm ứng tiết kiệm điện để chờ Touch to Wake
             uint16_t touchX = 0, touchY = 0;
             if (shared_i2c_touch_read(&touchX, &touchY))

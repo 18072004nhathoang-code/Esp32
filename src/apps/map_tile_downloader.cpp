@@ -7,6 +7,7 @@
 #include "map_tile_downloader.h"
 #include "map_app.h"
 #include "sd_map_cache.h"
+#include "phone_map_source.h"
 #include "../os/wifi_manager.h"
 #include "../display/tjpg_guard.h"
 #include <WiFi.h>
@@ -318,14 +319,70 @@ static bool tjpg_output_callback(int16_t x, int16_t y, uint16_t w, uint16_t h, u
     return true;
 }
 
+static void process_phone_frame_if_available()
+{
+    if (!jpeg_raw_buffer) return;
+
+    PhoneMapFrameMetadata metadata = {};
+    size_t frame_size = 0;
+    if (!phone_map_source_take_frame(jpeg_raw_buffer, JPEG_MAX_RAW_SIZE,
+                                     &frame_size, &metadata))
+        return;
+
+    MapTileRequest request = {};
+    request.request_id = metadata.generation;
+    request.lat = metadata.lat;
+    request.lon = metadata.lon;
+    request.zoom = metadata.zoom;
+    strlcpy(request.maptype, metadata.maptype, sizeof(request.maptype));
+
+    const MapJpegValidation validation = validate_map_jpeg(jpeg_raw_buffer, frame_size);
+    if (validation == MAP_JPEG_WRONG_DIMENSIONS)
+    {
+        set_status(TILE_UNSUPPORTED_FORMAT, request.request_id);
+        return;
+    }
+    if (validation != MAP_JPEG_VALID || !request_is_current(request.request_id))
+    {
+        if (request_is_current(request.request_id)) set_status(TILE_ERROR, request.request_id);
+        else runtime_health_count_event(RUNTIME_EVENT_MAP_STALE_DROP);
+        return;
+    }
+
+    JRESULT result = JDR_INTR;
+    if (tjpg_guard_lock())
+    {
+        TJpgDec.setJpgScale(1);
+        TJpgDec.setSwapBytes(false);
+        TJpgDec.setCallback(tjpg_output_callback);
+        result = TJpgDec.drawJpg(0, 0, jpeg_raw_buffer, frame_size);
+        tjpg_guard_unlock();
+    }
+    if (result != JDR_OK || !publish_current_tile(request, TILE_SOURCE_PHONE))
+    {
+        if (request_is_current(request.request_id)) set_status(TILE_ERROR, request.request_id);
+        return;
+    }
+
+    Serial.println("[MAP_TASK] ✔ Đã nhận bản đồ từ điện thoại");
+    if (sd_map_cache_is_available())
+    {
+        sd_map_cache_write_guarded(request.lat, request.lon, request.zoom,
+            request.maptype, jpeg_raw_buffer, frame_size,
+            cache_request_is_current, &request.request_id);
+    }
+}
+
 /* Tác vụ nền chạy trên Core 0: Độc lập với Core 1 để tránh hoàn toàn hiện tượng giật/treo màn hình */
 static void map_download_task(void *pvParameters)
 {
+    (void)pvParameters;
     MapTileRequest req;
 
     while (1)
     {
         runtime_health_heartbeat(RUNTIME_TASK_MAP);
+        process_phone_frame_if_available();
         // Chờ nhận yêu cầu từ hàng đợi (chống race condition khi người dùng pan/zoom liên tục)
         if (map_request_queue && xQueueReceive(map_request_queue, &req, pdMS_TO_TICKS(50)) == pdTRUE)
         {
@@ -403,8 +460,8 @@ static void map_download_task(void *pvParameters)
 
             if (!map_tile_downloader_supports_satellite())
             {
-                Serial.println("[MAP_TASK] PROVIDER_NOT_CONFIGURED: GOOGLE_MAPS_STATIC_API_KEY trống");
-                set_status(TILE_PROVIDER_NOT_CONFIGURED, req.request_id);
+                Serial.println("[MAP_TASK] Chờ điện thoại gửi frame OpenStreetMap...");
+                set_status(TILE_WAITING_PHONE, req.request_id);
                 continue;
             }
 
@@ -663,6 +720,7 @@ bool map_tile_downloader_init(void)
 
 void map_tile_downloader_deactivate(void)
 {
+    phone_map_source_clear_request();
     if (!tile_swap_mutex || xSemaphoreTake(tile_swap_mutex, pdMS_TO_TICKS(100)) != pdTRUE)
     {
         map_service_active.store(false, std::memory_order_release);
@@ -700,11 +758,20 @@ bool map_tile_downloader_request(double lat, double lon, int zoom, const char *m
     strncpy(req.maptype, requested_type, sizeof(req.maptype) - 1);
     req.maptype[sizeof(req.maptype) - 1] = '\0';
 
+    if (!map_tile_downloader_supports_satellite() &&
+        !phone_map_source_set_request(req.request_id, req.lat, req.lon,
+                                      req.zoom, req.maptype))
+    {
+        set_status(TILE_DEGRADED, req.request_id);
+        return false;
+    }
+
     if (map_request_queue && xQueueOverwrite(map_request_queue, &req) == pdPASS)
     {
         runtime_health_count_event(RUNTIME_EVENT_MAP_REQUEST);
         return true;
     }
+    if (!map_tile_downloader_supports_satellite()) phone_map_source_clear_request();
     set_status(TILE_DEGRADED);
     Serial.println("[MAP_TASK] ❌ Không thể đưa yêu cầu bản đồ vào queue");
     return false;
@@ -809,5 +876,6 @@ bool map_tile_downloader_supports_satellite(void)
 
 const char *map_tile_downloader_get_network_provider(void)
 {
-    return map_tile_downloader_supports_satellite() ? "Google Static API" : "PROVIDER_NOT_CONFIGURED";
+    return map_tile_downloader_supports_satellite()
+        ? "Google Static API" : "Phone / OpenStreetMap";
 }

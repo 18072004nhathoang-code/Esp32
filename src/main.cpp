@@ -22,6 +22,7 @@
 #include "audio/music_player.h"
 #include "ai/ai_voice_service.h"
 #include "camera/camera_service.h"
+#include "apps/phone_map_source.h"
 #include "os/power_manager.h"
 #include "os/settings_service.h"
 #include "os/network_coordinator.h"
@@ -274,6 +275,8 @@ void setup()
     bool wifi_ok = wifi_manager_init();
     wifi_manager_set_auto_reconnect(saved_settings.wifi_auto_reconnect);
     time_service_init();
+    const bool phone_map_ok = phone_map_source_init();
+    Serial.printf("[PHONE_MAP] Status: %s\n", phone_map_ok ? "Ready" : "DEGRADED");
     Serial.printf("[WIFI] Status: %s\n", wifi_ok ? "Ready" : "DEGRADED");
 
     // 7. Khởi tạo Module Quản lý Nguồn và áp dụng cấu hình đã lưu.

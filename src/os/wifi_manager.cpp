@@ -5,6 +5,7 @@
 
 #include "wifi_manager.h"
 #include "wifi_config.h"
+#include <atomic>
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_heap_caps.h>
@@ -24,6 +25,7 @@ static TaskHandle_t wifi_task_handle = nullptr;
 static SemaphoreHandle_t wifi_mutex = nullptr;
 static SemaphoreHandle_t prefs_mutex = nullptr;
 static QueueHandle_t wifi_command_queue = nullptr;
+static std::atomic<bool> wifi_driver_ready{false};
 
 enum WiFiCommandType : uint8_t
 {
@@ -493,7 +495,9 @@ static void wifi_service_task(void *pvParameters)
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(true);
     delay(100);
-    if (!WiFi.mode(WIFI_STA) || !scan_driver.begin())
+    const bool driver_ready = WiFi.mode(WIFI_STA) && scan_driver.begin();
+    wifi_driver_ready.store(driver_ready, std::memory_order_release);
+    if (!driver_ready)
     {
         lock_wifi();
         current_state = WIFI_STATE_FAILED;
@@ -505,7 +509,16 @@ static void wifi_service_task(void *pvParameters)
     // 1. Kiểm tra xem có cấu hình WiFi lưu trong NVS hoặc cấu hình mặc định không
     const bool is_forgotten = is_wifi_forgotten_persisted();
     String saved_ssid, saved_pass;
-    if (!is_forgotten && wifi_manager_load_credentials(saved_ssid, saved_pass) && saved_ssid.length() > 0)
+    if (DEFAULT_WIFI_FORCE_PROVISION && strlen(DEFAULT_WIFI_SSID) > 0 &&
+        !wifi_is_sample_ssid(DEFAULT_WIFI_SSID))
+    {
+        // Explicit local provisioning build: connect once with save enabled so
+        // a successful transaction clears the persistent "forgotten" marker.
+        // Normal builds keep this macro at zero and retain Forget semantics.
+        log_i("Provisioning DEFAULT_WIFI_SSID: %s", DEFAULT_WIFI_SSID);
+        wifi_manager_connect(DEFAULT_WIFI_SSID, DEFAULT_WIFI_PASS, true);
+    }
+    else if (!is_forgotten && wifi_manager_load_credentials(saved_ssid, saved_pass) && saved_ssid.length() > 0)
     {
         log_i("Tìm thấy thông tin WiFi trong NVS: %s, tiến hành tự động kết nối...", saved_ssid.c_str());
         lock_wifi();
@@ -1186,6 +1199,11 @@ bool wifi_manager_init(void)
         return false;
     }
     return true;
+}
+
+bool wifi_manager_is_driver_ready(void)
+{
+    return wifi_driver_ready.load(std::memory_order_acquire);
 }
 
 bool wifi_manager_scan_async(void)

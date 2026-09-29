@@ -39,6 +39,12 @@ void ui_open_music_app(void);
 void ui_open_ai_voice_app(void);
 
 /**
+ * @brief Yêu cầu LVGL task mở ứng dụng Bản đồ.
+ * @return true khi yêu cầu đã được LVGL task áp dụng trước thời hạn.
+ */
+bool ui_open_map_app(void);
+
+/**
  * @brief Mở màn hình ứng dụng Camera & RTSP Streamer
  */
 bool ui_open_camera_app(void);

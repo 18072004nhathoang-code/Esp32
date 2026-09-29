@@ -95,7 +95,7 @@ const char *runtime_health_task_name(RuntimeTaskId id)
     static const char *names[RUNTIME_TASK_COUNT] = {
         "Main", "LVGL", "Audio", "Music", "WiFi", "Map", "Camera",
         "CameraUI", "Xiaozhi", "MCP", "Settings", "RecorderExport",
-        "SpeakerTest", "MusicStress"
+        "SpeakerTest", "MusicStress", "PhoneMapHTTP"
     };
     return id < RUNTIME_TASK_COUNT ? names[id] : "Unknown";
 }
