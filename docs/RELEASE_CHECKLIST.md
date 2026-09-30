@@ -11,14 +11,22 @@ are not release features.
 - Pass partition, warning and 120 KB RAM / 3 MB flash budget checks.
 - Pass `scripts/verify_dependency_provenance.py`; audited shim hashes, vendored
   audio metadata and every direct PlatformIO pin must agree with notices.
-- Package the bootloader, partition table, application binary, ELF/map files,
+- Package the bootloader, partition table, Arduino `boot_app0.bin`, application
+  binary, ELF/map files, flash layout, licenses, Corresponding Source link,
   source revision, sizes and SHA-256 hashes with `scripts/package_release.py`.
+- Independently check the complete inventory, pinned `boot_app0.bin`, offsets
+  and checksums with `python scripts/verify_release_bundle.py release`.
 - Packaging is fail-closed: the build provenance must match the exact current
   Git HEAD/source fingerprint and the working tree must be clean. Re-run
   `pio run -e esp32-s3-es3c28p` after committing; `--allow-dirty` is only for
   explicitly labeled developer bundles.
 - Confirm CI release artifacts use the empty `secrets.example.h` configuration;
   never publish a locally provisioned firmware image containing device secrets.
+  Build provenance fingerprints the ignored `include/secrets.h`, and public
+  packaging rejects configured fields by default. `--allow-provisioned` creates
+  only a private developer bundle and never copies secret values into its docs.
+- Factory flashing uses offsets `0x0000` bootloader, `0x8000` partitions,
+  `0xe000` boot_app0 and `0x10000` firmware, as recorded in `FLASHING.md`.
 
 ## Reference-board gate
 

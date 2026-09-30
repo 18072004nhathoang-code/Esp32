@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,7 +13,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from hil_common import (parse_health, validate, validate_event_counts,
                         validate_firmware_identity)  # noqa: E402
-from package_release import validate_build_provenance  # noqa: E402
+from config_provenance import ConfigProvenance, inspect_config  # noqa: E402
+from package_release import (locate_boot_app0, source_instructions,
+                             validate_build_provenance)  # noqa: E402
 from verify_unprovisioned_config import configured_macros  # noqa: E402
 
 
@@ -154,6 +157,20 @@ class ReleaseConfigurationTests(unittest.TestCase):
         text = '#define DEFAULT_WIFI_PASS "private value"\n'
         self.assertEqual(configured_macros(text), {"DEFAULT_WIFI_PASS"})
 
+    def test_config_fingerprint_changes_without_exposing_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "secrets.h"
+            config.write_text('#define DEFAULT_WIFI_PASS "first private value"\n',
+                              encoding="utf-8")
+            first = inspect_config(config)
+            config.write_text('#define DEFAULT_WIFI_PASS "second private value"\n',
+                              encoding="utf-8")
+            second = inspect_config(config)
+        self.assertTrue(first.provisioned)
+        self.assertEqual(first.configured_fields, ("DEFAULT_WIFI_PASS",))
+        self.assertNotEqual(first.sha256, second.sha256)
+        self.assertNotIn("private value", repr(first))
+
     def test_release_provenance_accepts_exact_clean_build(self) -> None:
         metadata = {
             "head_revision": "a" * 40,
@@ -172,6 +189,39 @@ class ReleaseConfigurationTests(unittest.TestCase):
             validate_build_provenance(metadata, "b" * 40, "b" * 12, False)
         with self.assertRaisesRegex(ValueError, "dirty working tree"):
             validate_build_provenance(metadata, "a" * 40, "a" * 12 + "+wt123", True)
+
+    def test_release_provenance_binds_ignored_config_and_fails_closed(self) -> None:
+        config = ConfigProvenance(True, "1" * 64, ("DEFAULT_WIFI_SSID",))
+        metadata = {
+            "head_revision": "a" * 40,
+            "firmware_revision": "a" * 12,
+            "source_dirty": False,
+            "config_present": True,
+            "config_sha256": "1" * 64,
+            "config_fields": ["DEFAULT_WIFI_SSID"],
+            "config_provisioned": True,
+        }
+        with self.assertRaisesRegex(ValueError, "provisioned firmware"):
+            validate_build_provenance(metadata, "a" * 40, "a" * 12, False, config)
+        validate_build_provenance(metadata, "a" * 40, "a" * 12, False, config,
+                                  allow_provisioned=True)
+        changed = ConfigProvenance(True, "2" * 64, ("DEFAULT_WIFI_SSID",))
+        with self.assertRaisesRegex(ValueError, "stale.*configuration"):
+            validate_build_provenance(metadata, "a" * 40, "a" * 12, False, changed,
+                                      allow_provisioned=True)
+
+    def test_boot_app0_rejects_unpinned_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            candidate = Path(temporary) / "boot_app0.bin"
+            candidate.write_bytes(b"not the pinned framework image")
+            with self.assertRaisesRegex(ValueError, "does not match pinned"):
+                locate_boot_app0(candidate)
+
+    def test_source_document_never_contains_config_hash_or_values(self) -> None:
+        config = ConfigProvenance(True, "f" * 64, ("YOUTUBE_PROXY_PASSWORD",))
+        document = source_instructions("a" * 40, False, config)
+        self.assertIn("YOUTUBE_PROXY_PASSWORD", document)
+        self.assertNotIn("f" * 64, document)
 
 
 if __name__ == "__main__":

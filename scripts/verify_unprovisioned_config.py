@@ -4,35 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
-
-SENSITIVE_MACROS = {
-    "DEFAULT_WIFI_SSID",
-    "DEFAULT_WIFI_PASS",
-    "GOOGLE_MAPS_STATIC_API_KEY",
-    "MAPS_API_KEY",
-    "AI_VOICE_BEARER_TOKEN",
-    "AI_MUSIC_STREAM_SOURCES_JSON",
-    "YOUTUBE_STREAM_ENDPOINT",
-    "YOUTUBE_PROXY_USER",
-    "YOUTUBE_PROXY_PASSWORD",
-}
-
-
-def configured_macros(text: str) -> set[str]:
-    configured: set[str] = set()
-    definitions = dict(re.findall(
-        r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s+\"([^\"]*)\"",
-        text,
-        re.MULTILINE,
-    ))
-    for name in SENSITIVE_MACROS:
-        value = definitions.get(name, "")
-        if value and not (name == "AI_MUSIC_STREAM_SOURCES_JSON" and value == "[]"):
-            configured.add(name)
-    return configured
+from config_provenance import configured_macros
 
 
 def main() -> int:

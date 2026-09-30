@@ -169,7 +169,18 @@ pio device monitor -b 115200
 
 # Công cụ HIL/serial dùng Python 3 + pyserial
 python3 -m pip install -r scripts/requirements-hil.txt
+
+# Gói release công khai đầy đủ (yêu cầu secrets.h chưa provision)
+python3 scripts/package_release.py --output release
+python3 scripts/verify_release_bundle.py release
 ```
+
+Gói release chứa đủ bốn image để flash bo factory-reset (`bootloader`,
+`partitions`, `boot_app0`, `firmware`), sơ đồ offset, checksum, license và liên
+kết Corresponding Source. Công cụ đóng gói ràng buộc cả fingerprint của
+`include/secrets.h` dù file này bị Git bỏ qua; mặc định nó từ chối firmware có
+Wi-Fi/API/proxy credentials. Chỉ dùng `--allow-provisioned` cho gói riêng tư và
+không tải gói đó lên GitHub.
 
 ### Backend YouTube Audio Proxy
 

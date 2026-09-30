@@ -23,8 +23,8 @@
 #include "secrets.h"
 #endif
 
-// Cấu hình Google Maps Static API Key
-// Để trống: chỉ cache offline hoạt động; UI báo PROVIDER_NOT_CONFIGURED.
+// Cấu hình Google Maps Static API Key.
+// Để trống: dùng cache SD hoặc companion điện thoại + OpenStreetMap.
 #ifndef GOOGLE_MAPS_STATIC_API_KEY
 #define GOOGLE_MAPS_STATIC_API_KEY ""
 #endif

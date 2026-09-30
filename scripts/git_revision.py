@@ -4,7 +4,11 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(env["PROJECT_DIR"]) / "scripts"))
+from config_provenance import inspect_config
 
 try:
     full_revision = subprocess.check_output(
@@ -41,8 +45,13 @@ except (OSError, subprocess.CalledProcessError):
 
 build_dir = Path(env.subst("$BUILD_DIR"))
 build_dir.mkdir(parents=True, exist_ok=True)
+config = inspect_config(Path(env["PROJECT_DIR"]) / "include" / "secrets.h")
 (build_dir / "source_revision.json").write_text(
     json.dumps({
+        "config_fields": list(config.configured_fields),
+        "config_present": config.present,
+        "config_provisioned": config.provisioned,
+        "config_sha256": config.sha256,
         "firmware_revision": revision,
         "head_revision": full_revision,
         "source_dirty": source_dirty,

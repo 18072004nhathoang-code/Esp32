@@ -97,6 +97,7 @@ jobs:
             exit "$package_status"
           fi
           printf '%s\n' "$package_output"
+          python scripts/verify_release_bundle.py release
 
       - name: Compile stress and diagnostic firmware
         run: |

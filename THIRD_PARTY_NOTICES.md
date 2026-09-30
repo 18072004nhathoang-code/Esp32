@@ -41,6 +41,10 @@ shipped by LovyanGFX and TJpg_Decoder.
 - Preserve source offers and license texts for the Arduino-ESP32/ESP-IDF
   components included in the produced image. Review the resolved PlatformIO
   package notices for every release because transitive components may change.
+- The generated release bundle includes the project license, this notice,
+  ESP32-audioI2S GPL-3.0 text/provenance, font OFL, immutable source commit link,
+  build inputs and installation information. Keep those files with any binary
+  redistribution.
 
 ## Local compatibility source provenance
 
