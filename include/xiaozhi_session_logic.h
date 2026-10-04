@@ -261,6 +261,14 @@ public:
         last_progress_ms_ = now_ms;
     }
 
+    // Complete this before publishing IDLE/new-generation admission to the UI.
+    // A new START can be observed between queue polling and deadline checking.
+    void finish_cleanup(SessionTiming &timing)
+    {
+        reset();
+        timing.reset();
+    }
+
     void record_progress(uint32_t now_ms)
     {
         last_progress_ms_ = now_ms;

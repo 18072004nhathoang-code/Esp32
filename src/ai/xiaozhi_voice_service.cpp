@@ -28,6 +28,8 @@
 #include <freertos/task.h>
 #include <atomic>
 #include <cmath>
+#include <time.h>
+#include "xiaozhi_mcp_control.h"
 
 #ifndef XIAOZHI_WSS_CA_CERT
 #define XIAOZHI_WSS_CA_CERT ""
@@ -574,6 +576,15 @@ void finalize_cleanup(uint32_t generation)
             xSemaphoreGive(s_mutex);
         }
     }
+    s_phase_tracker.finish_cleanup(s_timing);
+    s_cleanup_pending = false;
+    s_cleanup_generation = 0;
+    s_cleanup_recorder_request = 0;
+    s_record_control_request = 0;
+    s_cleanup_timeout_reported = false;
+    s_cleanup_retries = 0;
+    // Publish admission last: no caller can start a new turn while old phase
+    // deadlines or recorder/cleanup IDs still describe the previous turn.
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (xiaozhi::cleanup_may_mutate(generation, s_active_generation))
@@ -585,12 +596,6 @@ void finalize_cleanup(uint32_t generation)
         }
         xSemaphoreGive(s_mutex);
     }
-    s_cleanup_pending = false;
-    s_cleanup_generation = 0;
-    s_cleanup_recorder_request = 0;
-    s_record_control_request = 0;
-    s_cleanup_timeout_reported = false;
-    s_cleanup_retries = 0;
 }
 
 void service_cleanup()
@@ -689,7 +694,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
         s_session_id[0] = '\0';
 #endif
         s_codec.end();
-        s_mcp.resetSession();
+        if (!s_transport.connected()) s_mcp.resetSession();
         s_capture_offset = 0;
         s_capture_frame_fill = 0;
         s_total_frames_sent = 0;
@@ -815,7 +820,10 @@ void handle_music_handoff(const char *tool_name)
 
 bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
 {
-    if (!current_generation(generation) || !data || size == 0) return false;
+    const bool idle_control = generation == 0 && s_app_open && s_warm_connected &&
+                              s_server_hello && !s_cleanup_pending &&
+                              active_generation_snapshot() == 0;
+    if ((!idle_control && !current_generation(generation)) || !data || size == 0) return false;
     if (size > xiaozhi::kMaxJsonMessageBytes)
     {
         log_w("Xiaozhi: JSON text message exceeds capacity (%u > %u)",
@@ -838,6 +846,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         return false;
     }
     JsonObjectConst root = document.as<JsonObjectConst>();
+    if (idle_control && !xiaozhi::is_idle_mcp_control(root)) return false;
     const char *type = root["type"] | "";
     if (strcmp(type, "hello") == 0)
     {
@@ -1061,7 +1070,10 @@ void process_inbound()
                                &size, &generation))
     {
         ++processed;
-        if (!current_generation(generation) || cancellation_requested(generation)) continue;
+        const bool idle_control = generation == 0 && kind == XiaozhiInboundKind::TEXT &&
+                                  s_app_open && s_warm_connected && s_server_hello &&
+                                  !s_cleanup_pending && active_generation_snapshot() == 0;
+        if (!idle_control && (!current_generation(generation) || cancellation_requested(generation))) continue;
         const bool ok = kind == XiaozhiInboundKind::TEXT
             ? handle_text_message(s_inbound, size, generation)
             : handle_audio_message(s_inbound, size, generation);
@@ -1177,6 +1189,7 @@ bool connect_session(uint32_t generation)
 
     for (uint8_t attempt = 0; attempt < 3 && current_generation(generation) && !xiaozhi::deadline_reached(millis(), connect_budget_deadline); ++attempt)
     {
+        s_mcp.resetSession();
         char error[128] = {};
         if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
                                s_device_id, s_client_id, generation,
@@ -1776,12 +1789,18 @@ static bool do_preconnect()
     }
 
     log_i("Xiaozhi: [PRECONNECT] Connecting WebSocket in background...");
+    log_i("Xiaozhi: [TLS_DIAG] epoch=%lld internal_free=%u largest=%u psram_free=%u",
+          static_cast<long long>(time(nullptr)),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
     if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return false;
     uint32_t preconnect_gen = ++s_next_generation;
     if (preconnect_gen == 0) preconnect_gen = ++s_next_generation;
     xSemaphoreGive(s_mutex);
     s_preconnect_generation = preconnect_gen;
 
+    s_mcp.resetSession();
     char error[128] = {};
     if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
                            s_device_id, s_client_id, preconnect_gen,
@@ -2038,6 +2057,9 @@ void worker(void *)
                 continue;
             }
         }
+
+        if (generation == 0 && s_app_open && s_warm_connected && s_server_hello && !s_cleanup_pending)
+            process_inbound();
 
         if (generation && !s_cleanup_pending)
         {

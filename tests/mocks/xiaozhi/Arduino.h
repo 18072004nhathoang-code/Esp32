@@ -27,6 +27,12 @@ public:
     long toInt() const { return std::strtol(c_str(), nullptr, 10); }
     String &operator+=(const String &other) { value_ += other.value_; return *this; }
     bool operator==(const char *other) const { return value_ == other; }
+    size_t write(uint8_t value) { value_ += static_cast<char>(value); return 1; }
+    size_t write(const uint8_t *value, size_t count)
+    {
+        value_.append(reinterpret_cast<const char *>(value), count);
+        return count;
+    }
     friend String operator+(const String &left, const String &right)
     {
         return String((left.value_ + right.value_).c_str());

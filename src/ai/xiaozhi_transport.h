@@ -99,6 +99,7 @@ private:
     void onEvent(int32_t event_id, esp_websocket_event_data_t *event);
     bool enqueueInbound(XiaozhiInboundKind kind, const uint8_t *data, size_t size);
     void clearInbound();
+    void retainControlForGeneration(uint32_t generation);
     void resetInboundAssembly();
     void releaseBuffers();
     bool turnCancelled(uint32_t generation) const;

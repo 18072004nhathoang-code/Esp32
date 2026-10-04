@@ -142,6 +142,115 @@ using an ELF built from a different SHA.
 
 ## Remaining board acceptance gate — NOT_TESTED
 
+### Live connection repair, 2026-10-05
+
+COM10 testing reproduced `mbedtls_ssl_setup -0x7F00` (allocation failure) and
+`mbedtls_ssl_handshake -0x2700`, with trust-chain flag `0x8`. The board had a
+valid epoch and roughly 77 KB internal free before connecting, while PSRAM had
+over 7 MB free. A PC verified the endpoint using the firmware's unchanged PEM
+CA bundle. The pinned SDK sets `CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC`.
+
+`src/core/tls_memory.cpp` installs the mbedTLS allocator once at boot, before
+network workers start: zeroed PSRAM allocations, checked internal fallback,
+overflow protection and matching `heap_caps_free`. After **only the memory
+policy and diagnostic changes**, the real board completed verified WSS/hello,
+recorder START/STOP ACK, 20,992 captured samples, 22 sent Opus frames with zero
+uplink drops, STT, TTS, first PCM, TTS STOP and I2S owner release. This confirms
+the observed connection failure was resolved in that turn without replacing
+the CA or weakening verification. It does not prove all cancellation/stress
+cases or acoustic quality. A preceding turn was explicitly canceled and ACKed.
+The user subsequently confirmed hearing the spoken answer. Further physical
+turns also reached STT/TTS without a reset, but one later PTT exposed a separate
+stale `CLEANUP_TIMEOUT` from the completed turn before its START command was
+consumed. `finalize_cleanup` now clears the phase/timing and recorder/cleanup
+metadata **before** publishing IDLE/admitting another generation. The native
+session regression replays the actual 64s cleanup / 176s next-press timing.
+The second change was then tested on the real board using the separate image
+`bb6c8d17f535+wtcdb42550feb5`. Five physical turns (generations 2, 3, 5, 6,
+7) reached first PCM, TTS STOP, DONE and I2S release. After generation 3's DONE
+at 169,380 ms, the warm socket closed at 229,611 ms and reconnected. A new PTT
+at 273,921 ms completed at 290,984 ms without the stale cleanup deadline.
+First-PCM latency was 449–640 ms across these five turns. No spontaneous reset,
+panic or TLS allocation failure appeared in that capture through 542 seconds.
+The user confirmed hearing the answer after this idle/reconnect. A sixth turn
+(generation 11) completed at 570,606 ms. App close occurred afterwards, so it
+does not verify cancellation during TTS. A later real turn (generation 14)
+reached first PCM at 997,121 ms. Touching the mic during SPEAKING logged
+`BARGE_IN` at 1,006,059 ms, `CANCEL_REQUESTED` at 1,006,069 ms and `CANCEL_ACK`
+at 1,006,079 ms, followed by I2S release and DONE at 1,006,092 ms. The user
+confirmed the speaker stopped immediately. The next PTT (generation 15)
+received recorder START/STOP ACK, STT and first PCM at 1,044,551 ms; the user
+confirmed hearing a normal reply. A second barge-in was ACKed at 1,052,962 ms,
+with I2S released and DONE at 1,052,976 ms. One in-flight audio packet returned
+failure during that cancellation; no terminal codec fault was logged. This
+verifies two real TTS cancellations and one next-turn recovery, not the
+100-cycle acceptance gate.
+
+The first TLS-repaired image identifies itself as `bb6c8d17f535+wtff864b48d55c`;
+the final cleanup fix uses `bb6c8d17f535+wtcdb42550feb5`.
+Workstation evidence is under
+`.pio/handoff/bb6c8d1/live-20261005/`: initial `xiaozhi-live.log`,
+`tls-diagnostic.log`, `tls-flags.log`, repaired `tls-psram.log/.elf/.bin`,
+and final `tls-session-fixed.log/.elf/.bin`.
+The directory is ignored by Git. Native TLS allocator testing passed with
+UBSan; all eleven existing native executables, simulator regression, nine
+backend tests and the ES3C28P build passed. The new allocator test is in CI
+with ASan/UBSan. Cloud CI itself was not run from this workstation.
+
+The acceptance gate below **still remains**; host allocation/transport loops
+must not be counted as actual board PTT cycles.
+
+### SD control discovery repair
+
+On the final cleanup image, the board detected a FAT32 SD with four actual MP3
+files in `/music`, but live Xiaozhi requests showed only MCP `initialize`, no
+`tools/list` or `self.music.play`. The transport detached to generation 0 after
+hello and rejected every idle inbound frame, so discovery requests could not
+reach the service. The only tool page also advertised an empty `nextCursor`.
+
+Idle transport now admits only bounded JSON MCP discovery/initialization;
+the service authenticates its session and dispatches it at idle. Pending
+read-only discovery survives hello/idle/PTT transitions, while old audio, TTS
+and side-effecting calls remain rejected. MCP dedup is scoped to a connection,
+not cleared after each warm voice turn. The final tool page omits `nextCursor`.
+The play schema explicitly documents empty arguments as SD selection, not a
+YouTube query. No SD driver, GPIO, filesystem or arbitrary-file access changed.
+All 13 native tests, behavioral regression, nine backend tests, pinned Opus
+and ES3C28P build passed. The new image `bb6c8d17f535+wt181a52049479` was flashed
+to the same COM10 board without erasing NVS. Idle notifications/initialized
+and tools/list were received at 40,675/40,687 ms, with ACK at 40,705 ms.
+At 44,379 ms the server invoked self.music.play; the real decoder then opened
+`/music/Người Dưng.mp3`. Three subsequent real PTT turns stopped the decoder,
+restored duplex for capture/TTS and restored the SD track after DONE. The user
+confirmed hearing music both before and after the answers. A later quick
+release during STARTING (generation 7) canceled before recording and returned
+ownership; it is not evidence for an MCP Stop command. Matching evidence:
+`mcp-idle-fixed.log/.elf/.bin` in the ignored handoff directory.
+
+The same image later received a real `self.music.stop` in generation 17 at
+741,239 ms, sent its async MCP ACK at 741,256 ms, received TTS stop at
+745,598 ms and completed cleanup at 745,812 ms. The voice output lease was
+released, with no later MUSIC acquire in that capture, including another
+normal spoken turn in generation 19. The user confirmed that the speaker
+was silent after Stop. This verifies one MCP Stop suppression case, not
+MCP Pause or the complete acceptance gate.
+
+The 900-second capture completed normally: nine physical Starts, eight
+STT/first-PCM turns, nine DONE events and one fast-STARTING Cancel ACK.
+All logged audio leases were released; no FAULT, panic, backtrace or TLS
+failure was observed. There were 22 physical Starts across the cleanup and
+MCP images, not 100 cycles on the final image. The matching final image is
+`bb6c8d17f535+wt181a52049479`.
+
+A separate bounded `mcp-wifi-followup.log` capture uses the same running
+image with `--no-reset`. The WiFi UI has no separate Disconnect button;
+Forget removes saved credentials and is not the reconnect test. Selecting
+the current network, entering its password on the device and pressing
+Connect invokes the worker's disconnect/connect sequence. No reconnect
+or post-reconnect voice success is yet verified in this follow-up. This UI
+test closes AI first, so even a successful result would not prove recovery
+from WiFi loss during an active capture/upload/TTS request.
+
 Record at least 100 actual PTT/Stop/Cancel cycles, including these cases:
 
 | Trigger | Required observation |

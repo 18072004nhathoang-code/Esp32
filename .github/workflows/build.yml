@@ -58,6 +58,7 @@ jobs:
 
       - name: Run native C++ firmware contract tests
         run: |
+          pio pkg install -e esp32-s3-es3c28p
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/native_contract_test.cpp -o /tmp/native_contract_test
           /tmp/native_contract_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/service_logic_test.cpp src/core/service_state_logic.cpp -o /tmp/service_logic_test
@@ -76,8 +77,12 @@ jobs:
           /tmp/xiaozhi_protocol_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/xiaozhi_session_logic_test.cpp -o /tmp/xiaozhi_session_logic_test
           /tmp/xiaozhi_session_logic_test
-          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -Itests/mocks/xiaozhi -Iinclude -Isrc/ai tests/xiaozhi_transport_test.cpp src/ai/xiaozhi_transport.cpp -o /tmp/xiaozhi_transport_test
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -Itests/mocks/xiaozhi -Iinclude -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src tests/xiaozhi_transport_test.cpp src/ai/xiaozhi_transport.cpp -o /tmp/xiaozhi_transport_test
           /tmp/xiaozhi_transport_test
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -Itests/mocks/xiaozhi -Iinclude -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src tests/xiaozhi_mcp_test.cpp src/ai/xiaozhi_mcp.cpp -o /tmp/xiaozhi_mcp_test
+          /tmp/xiaozhi_mcp_test
+          g++ -std=c++11 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -Itests/mocks/tls -Isrc/core tests/tls_memory_test.cpp src/core/tls_memory.cpp -o /tmp/tls_memory_test
+          /tmp/tls_memory_test
           g++ -std=c++11 -Wall -Wextra -Werror -Iinclude tests/system_defects_regression_test.cpp -o /tmp/system_defects_regression_test
           /tmp/system_defects_regression_test
 

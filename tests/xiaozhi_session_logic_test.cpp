@@ -224,6 +224,20 @@ int main()
     timing.reset();
     assert(timing.t_ptt_ms == 0 && timing.t_done_ms == 0);
 
+    // Real COM10 trace: previous DONE at 64s, idle preconnect, next PTT at
+    // 176s. The UI publishes STARTING before its command is consumed; the
+    // previous CLEANUP deadline must not fail this new generation.
+    tracker.start_connecting(56283);
+    tracker.start_cleanup(64125);
+    timing.t_done_ms = 64125;
+    tracker.finish_cleanup(timing);
+    assert(tracker.phase() == SessionPhase::IDLE);
+    assert(timing.t_done_ms == 0 && tracker.session_started_ms() == 0);
+    assert(!tracker.has_stt() && !tracker.has_tts() && !tracker.has_first_pcm());
+    assert(tracker.check_timeout(176689, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    tracker.start_connecting(176690);
+    assert(tracker.check_timeout(176691, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+
     // Minimum voice recording duration and sample count (is_too_short_recording)
     static_assert(kMinVoiceDurationMs == 500, "Min voice duration should be 500ms");
     static_assert(kMinVoiceSamples == 8000, "Min voice samples should be 8000 (0.5s at 16kHz)");

@@ -1,5 +1,6 @@
 #include "xiaozhi_transport.h"
 #include "xiaozhi_session_logic.h"
+#include "xiaozhi_mcp_control.h"
 
 #include <esp_heap_caps.h>
 #include <new>
@@ -274,7 +275,7 @@ void XiaozhiTransport::detachTurn()
 {
     if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
-    clearInbound();
+    retainControlForGeneration(0);
     resetInboundAssembly();
     generation_.store(0, std::memory_order_release);
     in_flight_started_ms_ = 0;
@@ -287,7 +288,7 @@ bool XiaozhiTransport::setTurnGeneration(uint32_t generation)
         generation == 0 || turnCancelled(generation)) return false;
     if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
-    clearInbound();
+    retainControlForGeneration(generation);
     resetInboundAssembly();
     generation_.store(generation, std::memory_order_release);
     dropped_uplink_ = 0;
@@ -357,9 +358,10 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     if (!inbound_queue_ || !data || size == 0 || size > xiaozhi::kMaxJsonMessageBytes)
         return false;
     const uint32_t gen = generation();
-    if (gen == 0 || turnCancelled(gen))
+    if ((gen == 0 && (kind != XiaozhiInboundKind::TEXT ||
+                     !xiaozhi::is_idle_mcp_control(data, size))) || turnCancelled(gen))
     {
-        // Detached or idle between turns; drop late callbacks to prevent polluting future turns
+        // Keep only read-only MCP discovery at idle; reject late TTS/actions.
         return false;
     }
     const size_t allocation = sizeof(InboundMessage) + size;
@@ -409,6 +411,27 @@ void XiaozhiTransport::clearInbound()
     if (!inbound_queue_) return;
     InboundMessage *message = nullptr;
     while (xQueueReceive(inbound_queue_, &message, 0) == pdTRUE) heap_caps_free(message);
+}
+
+void XiaozhiTransport::retainControlForGeneration(uint32_t generation)
+{
+    // Called under rx_mutex_: callbacks cannot add messages during this pass.
+    // Preserve pending discovery across hello->idle and idle->PTT, without
+    // retagging old audio, TTS, or side-effecting tools/call requests.
+    const size_t count = inboundPending();
+    for (size_t i = 0; i < count; ++i)
+    {
+        InboundMessage *message = nullptr;
+        if (xQueueReceive(inbound_queue_, &message, 0) != pdTRUE || !message) break;
+        if (message->kind == XiaozhiInboundKind::TEXT &&
+            xiaozhi::is_idle_mcp_control(message->data, message->size))
+        {
+            message->generation = generation;
+            if (xQueueSend(inbound_queue_, &message, 0) == pdTRUE) continue;
+            dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        }
+        heap_caps_free(message);
+    }
 }
 
 void XiaozhiTransport::eventHandler(void *arg, esp_event_base_t, int32_t event_id, void *event_data)

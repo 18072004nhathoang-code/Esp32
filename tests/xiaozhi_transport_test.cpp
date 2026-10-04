@@ -435,6 +435,38 @@ static void test_cancel_and_reconnect()
     }
 }
 
+static void test_idle_mcp_discovery()
+{
+    mock::reset_failures();
+    XiaozhiTransport transport;
+    assert(begin(transport, 20));
+    const char *list = "{\"type\":\"mcp\",\"session_id\":\"test\",\"payload\":{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}}";
+    const int length = static_cast<int>(std::strlen(list));
+    // tools/list arriving with hello must survive handoff to idle.
+    mock::frame(0x81, list, length, length);
+    mock::frame(0x81, "{\"type\":\"tts\",\"state\":\"start\"}", 30, 30);
+    transport.detachTurn();
+    assert(transport.inboundPending() == 1);
+    expect_message(transport, list, 0);
+    // Idle control is delivered while late audio, TTS and actions are gated.
+    mock::frame(0x81, list, length, length);
+    expect_message(transport, list, 0);
+    mock::frame(0x82, "audio", 5, 5);
+    const char *call = "{\"type\":\"mcp\",\"payload\":{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"id\":3,\"params\":{\"name\":\"self.music.play\"}}}";
+    mock::frame(0x81, call, static_cast<int>(std::strlen(call)), static_cast<int>(std::strlen(call)));
+    mock::frame(0x81, "{\"type\":\"tts\"}", 14, 14);
+    mock::frame(0x81, "{invalid", 8, 8);
+    assert(transport.inboundPending() == 0);
+    // A PTT arriving before the next worker pass must not lose discovery.
+    mock::frame(0x81, list, length, length);
+    assert(transport.setTurnGeneration(21));
+    expect_message(transport, list, 21);
+    transport.cancelTurn(21);
+    mock::frame(0x81, list, length, length);
+    assert(transport.inboundPending() == 0);
+    transport.close();
+}
+
 int main(int argc, char **argv)
 {
     mock::reset_failures();
@@ -449,6 +481,7 @@ int main(int argc, char **argv)
         test_fragmentation_and_queue_limits();
         test_large_backlog_and_send_failures();
         test_cancel_and_reconnect();
+        test_idle_mcp_discovery();
     }
     assert(mock::queues == 0 && mock::mutexes == 0 && mock::live_sockets == 0);
     assert(mock::heap.empty());
