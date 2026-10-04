@@ -2,6 +2,7 @@
 #include "xiaozhi_session_logic.h"
 
 #include <esp_heap_caps.h>
+#include <new>
 
 namespace
 {
@@ -34,7 +35,7 @@ bool parse_wss_url(const char *url, String &host, uint16_t &port, String &path)
 XiaozhiTransport::XiaozhiTransport()
     : websocket_(nullptr), uplink_queue_(nullptr), inbound_queue_(nullptr), rx_mutex_(nullptr),
       fragment_storage_(nullptr), fragment_assembler_(nullptr), connected_(false), closing_(true),
-      connection_epoch_(0), generation_(0), dropped_uplink_(0), dropped_downlink_(0),
+      connection_epoch_(0), generation_(0), cancelled_through_(0), dropped_uplink_(0), dropped_downlink_(0),
       frames_sent_(0), bytes_sent_(0), last_audio_sent_ms_(0)
 {
     rx_mutex_ = xSemaphoreCreateMutex();
@@ -43,11 +44,32 @@ XiaozhiTransport::XiaozhiTransport()
 XiaozhiTransport::~XiaozhiTransport()
 {
     close();
+    releaseBuffers();
+    if (rx_mutex_) vSemaphoreDelete(rx_mutex_);
+}
+
+void XiaozhiTransport::resetInboundAssembly()
+{
+    if (fragment_assembler_) fragment_assembler_->reset();
+    rx_frame_active_ = false;
+    rx_frame_total_ = 0;
+    rx_frame_next_ = 0;
+    rx_frame_opcode_ = 0;
+}
+
+void XiaozhiTransport::releaseBuffers()
+{
+    // The owner calls this only after close() has joined the SDK worker/callbacks.
+    clearInbound();
     if (uplink_queue_) vQueueDelete(uplink_queue_);
     if (inbound_queue_) vQueueDelete(inbound_queue_);
+    uplink_queue_ = nullptr;
+    inbound_queue_ = nullptr;
     delete fragment_assembler_;
-    free(fragment_storage_);
-    if (rx_mutex_) vSemaphoreDelete(rx_mutex_);
+    fragment_assembler_ = nullptr;
+    heap_caps_free(fragment_storage_);
+    fragment_storage_ = nullptr;
+    resetInboundAssembly();
 }
 
 bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
@@ -55,6 +77,11 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
                              const char *client_id, uint32_t generation,
                              char *error, size_t error_size)
 {
+    if (turnCancelled(generation))
+    {
+        if (error && error_size) strlcpy(error, "Phiên Xiaozhi đã bị hủy", error_size);
+        return false;
+    }
     if (connected() && websocket_ && uri_ == config.url && generation != 0)
     {
         if (setGeneration(generation))
@@ -63,9 +90,17 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
         }
     }
     close();
+    if (!rx_mutex_) rx_mutex_ = xSemaphoreCreateMutex();
+    if (!rx_mutex_)
+    {
+        releaseBuffers();
+        if (error && error_size) strlcpy(error, "Thiếu RAM cho mutex WebSocket Xiaozhi", error_size);
+        return false;
+    }
     if (!xiaozhi::valid_websocket_config(config) || !ca_cert || !*ca_cert ||
         !device_id || !*device_id || !client_id || !*client_id || generation == 0)
     {
+        releaseBuffers();
         if (error && error_size) strlcpy(error, "Cấu hình WSS Xiaozhi không hợp lệ", error_size);
         return false;
     }
@@ -75,12 +110,14 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
         fragment_storage_ = static_cast<uint8_t *>(heap_caps_malloc(
             xiaozhi::kMaxJsonMessageBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     if (!fragment_storage_)
-        fragment_storage_ = static_cast<uint8_t *>(malloc(xiaozhi::kMaxJsonMessageBytes));
+        fragment_storage_ = static_cast<uint8_t *>(heap_caps_malloc(
+            xiaozhi::kMaxJsonMessageBytes, MALLOC_CAP_8BIT));
     if (!fragment_assembler_ && fragment_storage_)
-        fragment_assembler_ = new xiaozhi::FragmentAssembler(
+        fragment_assembler_ = new (std::nothrow) xiaozhi::FragmentAssembler(
             fragment_storage_, xiaozhi::kMaxJsonMessageBytes);
     if (!uplink_queue_ || !inbound_queue_ || !fragment_storage_ || !fragment_assembler_)
     {
+        releaseBuffers();
         if (error && error_size) strlcpy(error, "Thiếu RAM cho queue WebSocket Xiaozhi", error_size);
         return false;
     }
@@ -90,6 +127,7 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
     uint16_t port = 443;
     if (!parse_wss_url(config.url, host, port, path))
     {
+        releaseBuffers();
         if (error && error_size) strlcpy(error, "URL WSS Xiaozhi không hợp lệ", error_size);
         return false;
     }
@@ -125,6 +163,8 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
         connected_.store(false, std::memory_order_release);
         if (websocket_) esp_websocket_client_destroy(websocket_);
         websocket_ = nullptr;
+        generation_ = 0;
+        releaseBuffers();
         if (error && error_size) strlcpy(error, "Không khởi động được esp_websocket_client", error_size);
         return false;
     }
@@ -133,7 +173,7 @@ bool XiaozhiTransport::begin(const xiaozhi::ProvisionedWebsocket &config,
 
 void XiaozhiTransport::loop()
 {
-    if (closing_.load(std::memory_order_acquire) || !connected() ||
+    if (closing_.load(std::memory_order_acquire) || turnCancelled(generation()) || !connected() ||
         !uplink_queue_ || !websocket_) return;
     AudioPacket packet = {};
     const size_t budget = xiaozhi::bounded_service_batch(uplinkPending(), 2);
@@ -141,6 +181,8 @@ void XiaozhiTransport::loop()
     while (processed < budget && xQueuePeek(uplink_queue_, &packet, 0) == pdTRUE)
     {
         const uint32_t active_gen = generation();
+        if (closing_.load(std::memory_order_acquire) || !connected() ||
+            turnCancelled(active_gen)) break;
         if (packet.generation != active_gen || active_gen == 0)
         {
             xQueueReceive(uplink_queue_, &packet, 0);
@@ -202,7 +244,7 @@ void XiaozhiTransport::close()
     if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     if (uplink_queue_) xQueueReset(uplink_queue_);
     clearInbound();
-    if (fragment_assembler_) fragment_assembler_->reset();
+    resetInboundAssembly();
     generation_ = 0;
     in_flight_started_ms_ = 0;
     resetAudioCounters();
@@ -215,12 +257,25 @@ void XiaozhiTransport::purgeUplink()
     in_flight_started_ms_ = 0;
 }
 
+bool XiaozhiTransport::turnCancelled(uint32_t generation) const
+{
+    return xiaozhi::cancellation_applies(
+        generation, cancelled_through_.load(std::memory_order_acquire));
+}
+
+void XiaozhiTransport::cancelTurn(uint32_t generation)
+{
+    uint32_t cancelled = cancelled_through_.load(std::memory_order_acquire);
+    while (generation > cancelled && !cancelled_through_.compare_exchange_weak(
+        cancelled, generation, std::memory_order_acq_rel, std::memory_order_acquire)) {}
+}
+
 void XiaozhiTransport::detachTurn()
 {
     if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
     clearInbound();
-    if (fragment_assembler_) fragment_assembler_->reset();
+    resetInboundAssembly();
     generation_.store(0, std::memory_order_release);
     in_flight_started_ms_ = 0;
     if (rx_mutex_) xSemaphoreGive(rx_mutex_);
@@ -228,11 +283,12 @@ void XiaozhiTransport::detachTurn()
 
 bool XiaozhiTransport::setTurnGeneration(uint32_t generation)
 {
-    if (!connected() || !websocket_ || generation == 0) return false;
+    if (closing_.load(std::memory_order_acquire) || !connected() || !websocket_ ||
+        generation == 0 || turnCancelled(generation)) return false;
     if (rx_mutex_) (void)xSemaphoreTake(rx_mutex_, portMAX_DELAY);
     purgeUplink();
     clearInbound();
-    if (fragment_assembler_) fragment_assembler_->reset();
+    resetInboundAssembly();
     generation_.store(generation, std::memory_order_release);
     dropped_uplink_ = 0;
     dropped_downlink_ = 0;
@@ -266,7 +322,8 @@ bool XiaozhiTransport::queueAudio(const uint8_t *data, size_t size, uint32_t gen
 {
     if (closing_.load(std::memory_order_acquire) || !connected() ||
         !uplink_queue_ || !data || size == 0 ||
-        size > sizeof(AudioPacket::data) || generation != this->generation()) return false;
+        size > sizeof(AudioPacket::data) || generation == 0 ||
+        generation != this->generation() || turnCancelled(generation)) return false;
     AudioPacket packet = {};
     packet.generation = generation;
     packet.size = static_cast<uint16_t>(size);
@@ -290,6 +347,7 @@ bool XiaozhiTransport::audioQueueHasCapacity(uint32_t generation) const
 {
     return !closing_.load(std::memory_order_acquire) && connected() && uplink_queue_ &&
            generation != 0 && generation == this->generation() &&
+           !turnCancelled(generation) &&
            uxQueueSpacesAvailable(uplink_queue_) > 0;
 }
 
@@ -299,7 +357,7 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     if (!inbound_queue_ || !data || size == 0 || size > xiaozhi::kMaxJsonMessageBytes)
         return false;
     const uint32_t gen = generation();
-    if (gen == 0)
+    if (gen == 0 || turnCancelled(gen))
     {
         // Detached or idle between turns; drop late callbacks to prevent polluting future turns
         return false;
@@ -307,7 +365,8 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     const size_t allocation = sizeof(InboundMessage) + size;
     InboundMessage *message = static_cast<InboundMessage *>(heap_caps_malloc(
         allocation, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-    if (!message) message = static_cast<InboundMessage *>(malloc(allocation));
+    if (!message) message = static_cast<InboundMessage *>(heap_caps_malloc(
+        allocation, MALLOC_CAP_8BIT));
     if (!message)
     {
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
@@ -319,7 +378,7 @@ bool XiaozhiTransport::enqueueInbound(XiaozhiInboundKind kind,
     memcpy(message->data, data, size);
     if (xQueueSend(inbound_queue_, &message, 0) != pdTRUE)
     {
-        free(message);
+        heap_caps_free(message);
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
@@ -341,7 +400,7 @@ bool XiaozhiTransport::receive(XiaozhiInboundKind *kind, uint8_t *data,
         memcpy(data, message->data, message->size);
     }
     else dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
-    free(message);
+    heap_caps_free(message);
     return fits;
 }
 
@@ -349,7 +408,7 @@ void XiaozhiTransport::clearInbound()
 {
     if (!inbound_queue_) return;
     InboundMessage *message = nullptr;
-    while (xQueueReceive(inbound_queue_, &message, 0) == pdTRUE) free(message);
+    while (xQueueReceive(inbound_queue_, &message, 0) == pdTRUE) heap_caps_free(message);
 }
 
 void XiaozhiTransport::eventHandler(void *arg, esp_event_base_t, int32_t event_id, void *event_data)
@@ -400,7 +459,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     {
         if (rx_mutex_ && xSemaphoreTake(rx_mutex_, pdMS_TO_TICKS(50)) == pdTRUE)
         {
-            if (fragment_assembler_) fragment_assembler_->reset();
+            resetInboundAssembly();
             xSemaphoreGive(rx_mutex_);
         }
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
@@ -428,11 +487,38 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     const size_t length = static_cast<size_t>(event->data_len);
     if (total > xiaozhi::kMaxJsonMessageBytes || offset > total || length > total - offset)
     {
-        fragment_assembler_->reset();
+        resetInboundAssembly();
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         xSemaphoreGive(rx_mutex_);
         return;
     }
+
+    // SDK chunks must cover exactly one frame in order. Bounds alone allow
+    // missing, repeated or mixed-frame chunks to be accepted as complete data.
+    if (offset == 0)
+    {
+        if (rx_frame_active_ || (pure_op != 0x00 && fragment_assembler_->isActive()))
+        {
+            resetInboundAssembly();
+            dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+            xSemaphoreGive(rx_mutex_);
+            return;
+        }
+        rx_frame_total_ = total;
+        rx_frame_next_ = 0;
+        rx_frame_opcode_ = raw_op;
+        rx_frame_active_ = true;
+    }
+    if (!rx_frame_active_ || rx_frame_total_ != total ||
+        rx_frame_next_ != offset || rx_frame_opcode_ != raw_op)
+    {
+        resetInboundAssembly();
+        dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
+        xSemaphoreGive(rx_mutex_);
+        return;
+    }
+    rx_frame_next_ += length;
+    if (rx_frame_next_ == total) rx_frame_active_ = false;
 
     const bool is_frame_end = (total == 0) || (offset + length >= total);
     const bool is_message_end = is_frame_end && is_fin;
@@ -456,7 +542,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
             ? xiaozhi::FragmentAssembler::Kind::BINARY : xiaozhi::FragmentAssembler::Kind::TEXT;
         if (!fragment_assembler_->begin(kind, payload, length))
         {
-            fragment_assembler_->reset();
+            resetInboundAssembly();
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         }
         else if (is_message_end)
@@ -469,7 +555,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
                 (void)enqueueInbound(finished_kind == xiaozhi::FragmentAssembler::Kind::TEXT
                     ? XiaozhiInboundKind::TEXT : XiaozhiInboundKind::BINARY, message, size);
             }
-            fragment_assembler_->reset();
+            resetInboundAssembly();
         }
         xSemaphoreGive(rx_mutex_);
         return;
@@ -479,7 +565,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
     if (!fragment_assembler_->isActive())
     {
         // Continuation received without active initial frame
-        fragment_assembler_->reset();
+        resetInboundAssembly();
         dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         xSemaphoreGive(rx_mutex_);
         return;
@@ -490,7 +576,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         // Intermediate SDK buffer chunk within frame or non-final continuation frame
         if (length > 0 && !fragment_assembler_->append(payload, length))
         {
-            fragment_assembler_->reset();
+            resetInboundAssembly();
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -509,7 +595,7 @@ void XiaozhiTransport::onEvent(int32_t event_id, esp_websocket_event_data_t *eve
         {
             dropped_downlink_.fetch_add(1, std::memory_order_relaxed);
         }
-        fragment_assembler_->reset();
+        resetInboundAssembly();
     }
 
     xSemaphoreGive(rx_mutex_);

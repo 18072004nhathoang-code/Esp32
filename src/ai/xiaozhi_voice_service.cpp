@@ -706,6 +706,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
 void cancel_session(uint32_t generation)
 {
     if (!active_generation_matches(generation)) return;
+    s_transport.cancelTurn(generation);
     log_i("Xiaozhi: [CANCEL_ACK] gen=%u", static_cast<unsigned>(generation));
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
@@ -1775,8 +1776,10 @@ static bool do_preconnect()
     }
 
     log_i("Xiaozhi: [PRECONNECT] Connecting WebSocket in background...");
+    if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return false;
     uint32_t preconnect_gen = ++s_next_generation;
     if (preconnect_gen == 0) preconnect_gen = ++s_next_generation;
+    xSemaphoreGive(s_mutex);
     s_preconnect_generation = preconnect_gen;
 
     char error[128] = {};
@@ -2285,6 +2288,7 @@ bool ai_voice_stop_and_process(AiVoiceStopReason reason)
     xSemaphoreGive(s_mutex);
     if (starting)
     {
+        s_transport.cancelTurn(generation);
         log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s (released during STARTING)",
               static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
         (void)queue_command(CommandType::CANCEL, generation, reason);
@@ -2297,6 +2301,7 @@ bool ai_voice_stop_and_process(AiVoiceStopReason reason)
     {
         if (allowed)
         {
+            s_transport.cancelTurn(generation);
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 if (generation > s_cancelled_through) s_cancelled_through = generation;
@@ -2322,6 +2327,7 @@ void ai_voice_cancel(AiVoiceStopReason reason)
     xSemaphoreGive(s_mutex);
     if (generation)
     {
+        s_transport.cancelTurn(generation);
         log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s",
               static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
         // The mutex-protected cancellation watermark is authoritative. The

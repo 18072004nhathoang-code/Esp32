@@ -15,6 +15,8 @@
 *.bin
 *.elf
 *.hex
+__pycache__/
+*.py[cod]
 
 # OS generated files
 .DS_Store
