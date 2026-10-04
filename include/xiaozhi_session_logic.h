@@ -6,6 +6,37 @@
 
 namespace xiaozhi
 {
+// Caller owns synchronization. A voice-suspended decoder is gone; Pause
+// must retain its source/position separately from transient turn cleanup.
+template <typename Snapshot>
+class PausedMusicBookmark
+{
+public:
+    void remember(const Snapshot &snapshot, uint32_t control_revision)
+    {
+        if (!snapshot.valid) return;
+        saved_ = snapshot;
+        saved_.resume_after_voice = false;
+        revision_ = control_revision;
+    }
+
+    bool for_resume(const Snapshot &current, uint32_t control_revision,
+                    Snapshot &out) const
+    {
+        if (current.valid) out = current;
+        else if (saved_.valid && revision_ == control_revision) out = saved_;
+        else return false;
+        out.resume_after_voice = true;
+        return true;
+    }
+
+    void clear() { saved_ = Snapshot{}; }
+
+private:
+    Snapshot saved_{};
+    uint32_t revision_ = 0;
+};
+
 enum class BackpressureDecision : uint8_t
 {
     READY = 0,
@@ -79,6 +110,12 @@ inline size_t bounded_frame_budget(size_t available_samples,
     if (frame_samples == 0 || max_frames == 0) return 0;
     const size_t frames = (available_samples + frame_samples - 1U) / frame_samples;
     return frames < max_frames ? frames : max_frames;
+}
+
+inline size_t bounded_service_batch(size_t pending, size_t max_per_pass)
+{
+    if (max_per_pass == 0) return 0;
+    return pending < max_per_pass ? pending : max_per_pass;
 }
 
 inline bool snapshot_lease_matches(uint32_t expected_gen, uint32_t snapshot_gen)
@@ -253,6 +290,14 @@ public:
         phase_started_ms_ = now_ms;
         stage_started_ms_ = now_ms;
         last_progress_ms_ = now_ms;
+    }
+
+    // Complete this before publishing IDLE/new-generation admission to the UI.
+    // A new START can be observed between queue polling and deadline checking.
+    void finish_cleanup(SessionTiming &timing)
+    {
+        reset();
+        timing.reset();
     }
 
     void record_progress(uint32_t now_ms)

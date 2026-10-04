@@ -6,6 +6,7 @@
 #include <esp_websocket_client.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/semphr.h>
 #include "xiaozhi_protocol_logic.h"
 
 enum class XiaozhiInboundKind : uint8_t { TEXT = 1, BINARY = 2 };
@@ -22,6 +23,9 @@ public:
     void loop();
     void close();
     void purgeUplink();
+    // Cross-core cancellation only closes the audio gate; the owner still
+    // performs purge/abort/close and joins the SDK worker.
+    void cancelTurn(uint32_t generation);
     bool connected() const { return connected_.load(std::memory_order_acquire); }
     bool sendText(const char *text);
     bool queueAudio(const uint8_t *data, size_t size, uint32_t generation);
@@ -78,8 +82,10 @@ private:
     uint8_t *fragment_storage_;
     xiaozhi::FragmentAssembler *fragment_assembler_;
     std::atomic<bool> connected_;
+    std::atomic<bool> closing_;
     std::atomic<uint32_t> connection_epoch_;
     std::atomic<uint32_t> generation_;
+    std::atomic<uint32_t> cancelled_through_;
     std::atomic<uint32_t> dropped_uplink_;
     std::atomic<uint32_t> dropped_downlink_;
     std::atomic<uint32_t> stale_downlink_;
@@ -87,8 +93,11 @@ private:
     std::atomic<uint32_t> bytes_sent_;
     std::atomic<uint32_t> last_audio_sent_ms_;
     std::atomic<size_t> inbound_bytes_;
-    std::atomic<bool> closing_;
     uint32_t in_flight_started_ms_ = 0;
+    bool rx_frame_active_ = false;
+    size_t rx_frame_total_ = 0;
+    size_t rx_frame_next_ = 0;
+    uint8_t rx_frame_opcode_ = 0;
 
     static constexpr size_t kInboundQueueCapacity = 8;
     static constexpr size_t kInboundByteBudget = 128U * 1024U;
@@ -97,4 +106,8 @@ private:
     void onEvent(int32_t event_id, esp_websocket_event_data_t *event);
     bool enqueueInbound(XiaozhiInboundKind kind, const uint8_t *data, size_t size);
     void clearInbound();
+    void retainControlForGeneration(uint32_t generation);
+    void resetInboundAssembly();
+    void releaseBuffers();
+    bool turnCancelled(uint32_t generation) const;
 };

@@ -5,6 +5,35 @@
 
 int main()
 {
+    struct MusicSnapshot
+    {
+        bool valid;
+        bool resume_after_voice;
+        int track_index;
+        unsigned position_sec;
+    };
+    xiaozhi::PausedMusicBookmark<MusicSnapshot> bookmark;
+    MusicSnapshot held = {true, true, 2, 37};
+    MusicSnapshot empty = {}, resumed = {};
+    // Board gen29 Pause -> cleanup destroys turn snapshot -> gen30 question
+    // -> gen31 Resume: source and position must survive, without auto-play.
+    bookmark.remember(held, 4);
+    bookmark.remember(empty, 4); // later turns must not erase a valid Pause
+    assert(bookmark.for_resume(empty, 4, resumed));
+    assert(resumed.valid && resumed.resume_after_voice);
+    assert(resumed.track_index == 2 && resumed.position_sec == 37);
+    // No acknowledged restore: bookmark survives while controls are unchanged.
+    assert(bookmark.for_resume(empty, 4, resumed));
+    // Accepted Stop/new source invalidates it, even if that operation fails.
+    assert(!bookmark.for_resume(empty, 6, resumed)); // external Stop/new source
+    MusicSnapshot newer = {true, false, 3, 91};
+    assert(bookmark.for_resume(newer, 6, resumed));
+    assert(resumed.track_index == 3 && resumed.position_sec == 91);
+    bookmark.clear();
+    assert(!bookmark.for_resume(empty, 4, resumed));
+    assert(bookmark.for_resume(held, 7, held)); // production in-place selection
+    assert(held.resume_after_voice && held.position_sec == 37);
+
     using namespace xiaozhi;
 
     BackpressureWindow pressure;
@@ -18,6 +47,13 @@ int main()
     assert(bounded_frame_budget(960U * 20U, 960, 2) == 2);
     assert(bounded_frame_budget(1, 960, 2) == 1);
     assert(bounded_frame_budget(0, 960, 2) == 0);
+
+    // Network and TTS work are both bounded per worker pass so cancellation,
+    // recorder ACKs and heartbeats cannot wait behind an entire full queue.
+    assert(bounded_service_batch(20, 2) == 2);
+    assert(bounded_service_batch(1, 2) == 1);
+    assert(bounded_service_batch(0, 2) == 0);
+    assert(bounded_service_batch(8, 0) == 0);
 
     // Cancel remains authoritative even when a command queue cannot accept it.
     assert(cancellation_applies(7, 7));
@@ -216,6 +252,20 @@ int main()
     timing.t_done_ms = 456;
     timing.reset();
     assert(timing.t_ptt_ms == 0 && timing.t_done_ms == 0);
+
+    // Real COM10 trace: previous DONE at 64s, idle preconnect, next PTT at
+    // 176s. The UI publishes STARTING before its command is consumed; the
+    // previous CLEANUP deadline must not fail this new generation.
+    tracker.start_connecting(56283);
+    tracker.start_cleanup(64125);
+    timing.t_done_ms = 64125;
+    tracker.finish_cleanup(timing);
+    assert(tracker.phase() == SessionPhase::IDLE);
+    assert(timing.t_done_ms == 0 && tracker.session_started_ms() == 0);
+    assert(!tracker.has_stt() && !tracker.has_tts() && !tracker.has_first_pcm());
+    assert(tracker.check_timeout(176689, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
+    tracker.start_connecting(176690);
+    assert(tracker.check_timeout(176691, deadlines) == SessionPhaseTracker::TimeoutReason::NONE);
 
     // Minimum voice recording duration and sample count (is_too_short_recording)
     static_assert(kMinVoiceDurationMs == 500, "Min voice duration should be 500ms");

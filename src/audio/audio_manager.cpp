@@ -74,6 +74,7 @@ static size_t waveform_head = 0;
 // FreeRTOS Task & Mutex
 static TaskHandle_t audio_task_handle = nullptr;
 static SemaphoreHandle_t audio_i2s_tx_mutex = nullptr; // Mutex độc quyền đường truyền TX i2s_write
+static SemaphoreHandle_t audio_voice_tx_mutex = nullptr; // Protects mono filter state + static expansion buffer
 static SemaphoreHandle_t audio_codec_mutex = nullptr;
 // Protects recorder/playback state, the shared PSRAM buffer and waveform telemetry
 // across the audio worker (core 0) and LVGL/application tasks (core 1).
@@ -183,6 +184,9 @@ static constexpr size_t AUDIO_DMA_FRAME_COUNT = 256;
 alignas(4) static uint8_t audio_dma_bytes[AUDIO_DMA_FRAME_COUNT * 2 * sizeof(int16_t)] = {};
 alignas(4) static uint8_t audio_rx_bytes[sizeof(audio_dma_bytes) + 4] = {};
 alignas(4) static int16_t audio_tx_frames[AUDIO_DMA_FRAME_COUNT * 2] = {};
+// Voice/TTS writes run on the provider worker stack. Keep the stereo expansion
+// buffer in static storage so Opus' USE_ALLOCA scratch retains measured headroom.
+alignas(4) static int16_t audio_voice_tx_frames[AUDIO_DMA_FRAME_COUNT * 2] = {};
 
 static uint32_t next_command_generation(uint32_t &generation, uint32_t *previous = nullptr)
 {
@@ -302,6 +306,7 @@ static AudioControlMailbox take_audio_controls()
 
 static void post_recording_cancel_urgent(uint32_t request_id, uint32_t cancel_through)
 {
+    uint32_t displaced_request = 0;
     portENTER_CRITICAL(&audio_command_mux);
     if (recording_control_count <
         sizeof(recording_control_queue) / sizeof(recording_control_queue[0]))
@@ -317,7 +322,9 @@ static void post_recording_cancel_urgent(uint32_t request_id, uint32_t cancel_th
         if (audio_control_mailbox.recording_pending && audio_control_mailbox.recording_request_id != 0 &&
             audio_control_mailbox.recording_request_id != request_id)
         {
-            acknowledge_recording_command(audio_control_mailbox.recording_request_id, false);
+            displaced_request = audio_control_mailbox.recording_request_id;
+            if (audio_control_mailbox.recording_cancel_through > cancel_through)
+                cancel_through = audio_control_mailbox.recording_cancel_through;
         }
         audio_control_mailbox.recording_pending = true;
         audio_control_mailbox.recording_type = RECORD_CONTROL_CANCEL;
@@ -325,6 +332,7 @@ static void post_recording_cancel_urgent(uint32_t request_id, uint32_t cancel_th
         audio_control_mailbox.recording_request_id = request_id;
     }
     portEXIT_CRITICAL(&audio_command_mux);
+    if (displaced_request) acknowledge_recording_command(displaced_request, false);
     if (audio_task_handle) xTaskNotifyGive(audio_task_handle);
 }
 
@@ -1365,8 +1373,7 @@ static void audio_background_task(void *pvParameters)
         {
             last_stack_report_ms = now_ms;
             Serial.printf("[AUDIO][STACK] Audio_Task high-water=%u bytes\n",
-                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) *
-                                                sizeof(StackType_t)));
+                          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
         }
         AudioControlMailbox controls;
         while ((controls = take_audio_controls()).recording_pending || controls.playback_stop_pending)
@@ -1658,11 +1665,12 @@ bool audio_manager_init(void)
 
     if (audio_owner_mutex == nullptr) audio_owner_mutex = xSemaphoreCreateMutex();
     if (audio_i2s_tx_mutex == nullptr) audio_i2s_tx_mutex = xSemaphoreCreateMutex();
+    if (audio_voice_tx_mutex == nullptr) audio_voice_tx_mutex = xSemaphoreCreateMutex();
     if (audio_state_mutex == nullptr) audio_state_mutex = xSemaphoreCreateMutex();
     if (audio_codec_mutex == nullptr) audio_codec_mutex = xSemaphoreCreateMutex();
     if (audio_task_ack_sem == nullptr) audio_task_ack_sem = xSemaphoreCreateBinary();
     if (audio_command_queue == nullptr) audio_command_queue = xQueueCreate(8, sizeof(AudioAsyncCommand));
-    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_state_mutex ||
+    if (!audio_owner_mutex || !audio_i2s_tx_mutex || !audio_voice_tx_mutex || !audio_state_mutex ||
         !audio_codec_mutex || !audio_task_ack_sem || !audio_command_queue)
     {
         Serial.println("[AUDIO] ❌ Degraded: cannot create mutex/semaphore/command queue");
@@ -2225,6 +2233,7 @@ bool audio_cancel_recording_request_async(uint32_t expected_request_id,
 {
     if (!audio_task_handle || expected_request_id == 0) return false;
     uint32_t issued = 0;
+    uint32_t displaced_request = 0;
     portENTER_CRITICAL(&audio_command_mux);
     const bool matches = (expected_request_id == active_recording_command_generation ||
                           expected_request_id == recording_command_generation);
@@ -2247,7 +2256,9 @@ bool audio_cancel_recording_request_async(uint32_t expected_request_id,
             if (audio_control_mailbox.recording_pending && audio_control_mailbox.recording_request_id != 0 &&
                 audio_control_mailbox.recording_request_id != issued)
             {
-                acknowledge_recording_command(audio_control_mailbox.recording_request_id, false);
+                displaced_request = audio_control_mailbox.recording_request_id;
+                if (audio_control_mailbox.recording_cancel_through > expected_request_id)
+                    expected_request_id = audio_control_mailbox.recording_cancel_through;
             }
             audio_control_mailbox.recording_pending = true;
             audio_control_mailbox.recording_type = RECORD_CONTROL_CANCEL;
@@ -2256,6 +2267,7 @@ bool audio_cancel_recording_request_async(uint32_t expected_request_id,
         }
     }
     portEXIT_CRITICAL(&audio_command_mux);
+    if (displaced_request) acknowledge_recording_command(displaced_request, false);
     if (!issued) return false;
     if (request_id) *request_id = issued;
     xTaskNotifyGive(audio_task_handle);
@@ -2692,9 +2704,11 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
     if (!samples || count == 0 || !audio_is_driver_installed() ||
         audio_get_current_owner() == AUDIO_OWNER_NONE)
         return false;
+    if (!audio_voice_tx_mutex ||
+        xSemaphoreTake(audio_voice_tx_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+        return false;
 
     bool ok = true;
-    int16_t stereo[512];
     size_t offset = 0;
     while (offset < count)
     {
@@ -2703,16 +2717,17 @@ bool audio_write_pcm16_mono(const int16_t *samples, size_t count, uint32_t timeo
         for (size_t i = 0; i < chunk; ++i)
         {
             const int16_t out_s = voice_pcm_filter_sample(samples[offset + i], &s_voice_filter);
-            stereo[i * 2] = out_s;
-            stereo[i * 2 + 1] = out_s;
+            audio_voice_tx_frames[i * 2] = out_s;
+            audio_voice_tx_frames[i * 2 + 1] = out_s;
         }
-        if (!write_stereo_frames(stereo, chunk, timeout_ms))
+        if (!write_stereo_frames(audio_voice_tx_frames, chunk, timeout_ms))
         {
             ok = false;
             break;
         }
         offset += chunk;
     }
+    xSemaphoreGive(audio_voice_tx_mutex);
     return ok;
 }
 

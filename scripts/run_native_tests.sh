@@ -22,4 +22,8 @@ compile_and_run xiaozhi_protocol tests/xiaozhi_protocol_test.cpp
 compile_and_run xiaozhi_session_logic tests/xiaozhi_session_logic_test.cpp
 compile_and_run system_defects_regression tests/system_defects_regression_test.cpp
 
+compile_and_run xiaozhi_transport -Itests/mocks/xiaozhi -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src -fsanitize=address,undefined -fno-sanitize-recover=all tests/xiaozhi_transport_test.cpp src/ai/xiaozhi_transport.cpp
+compile_and_run xiaozhi_mcp -Itests/mocks/xiaozhi -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src -fsanitize=address,undefined -fno-sanitize-recover=all tests/xiaozhi_mcp_test.cpp src/ai/xiaozhi_mcp.cpp
+compile_and_run tls_memory -Itests/mocks/tls -Isrc/core -fsanitize=address,undefined -fno-sanitize-recover=all tests/tls_memory_test.cpp src/core/tls_memory.cpp
+
 echo "All native firmware tests passed."

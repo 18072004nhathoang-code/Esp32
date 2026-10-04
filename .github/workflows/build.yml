@@ -49,7 +49,9 @@ jobs:
           npm test --prefix backend
 
       - name: Run native C++ firmware contract tests
-        run: bash scripts/run_native_tests.sh
+        run: |
+          pio pkg install -e esp32-s3-es3c28p
+          bash scripts/run_native_tests.sh
 
       - name: Validate partition contract
         run: python scripts/validate_partitions.py partitions.csv
@@ -77,6 +79,9 @@ jobs:
           set -o pipefail
           pio run -e esp32-s3-es3c28p 2>&1 | tee /tmp/build-release.log
           python scripts/check_build_warnings.py /tmp/build-release.log
+
+      - name: Run pinned Opus encode/decode round-trip
+        run: python scripts/run_pinned_opus_test.py --env esp32-s3-es3c28p
 
       - name: Enforce release firmware size budgets
         run: python scripts/verify_size.py /tmp/build-release.log --max-ram 120000 --max-flash 3000000

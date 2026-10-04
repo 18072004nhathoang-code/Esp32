@@ -29,6 +29,8 @@
 #include <freertos/task.h>
 #include <atomic>
 #include <cmath>
+#include <time.h>
+#include "xiaozhi_mcp_control.h"
 
 #ifndef XIAOZHI_WSS_CA_CERT
 #define XIAOZHI_WSS_CA_CERT ""
@@ -74,6 +76,8 @@ static char s_activation_code[32] = {};
 static char s_activation_message[160] = {};
 static bool s_activation_cancelled = false;
 static std::atomic<bool> s_configured{false};
+enum class CodecHealth : uint8_t { PENDING = 0, READY, FAILED };
+static std::atomic<CodecHealth> s_codec_health{CodecHealth::PENDING};
 static xiaozhi::ProvisionedWebsocket s_ws_config = {};
 static uint32_t s_next_generation = 0;
 static uint32_t s_active_generation = 0;
@@ -116,6 +120,7 @@ struct PendingMusicAction
     uint32_t revision;
 };
 static MusicVoiceHandoff s_suspended_music = {};
+static xiaozhi::PausedMusicBookmark<MusicVoiceHandoff> s_paused_music;
 static PendingMusicAction s_pending_music_action = {};
 static uint32_t s_music_handoff_revision = 0;
 static bool s_music_resume_suppressed = false;
@@ -148,6 +153,8 @@ static const uint32_t kCleanupTimeoutMs = 5000;
 static const size_t kCaptureFrameSamples = 960;
 static const size_t kCaptureChunkSamples = 256;
 static const size_t kFramesPerWorkerPass = 2;
+static const uint32_t kWorkerStackBytes = 40U * 1024U;
+static const size_t kMinCodecStackHeadroomBytes = 4096U;
 
 enum class EncodeResult : uint8_t { QUEUED, BACKPRESSURE, TIMEOUT, ERROR, CANCELLED };
 enum class PumpResult : uint8_t { PROGRESS, IDLE, COMPLETE, BACKPRESSURE, TIMEOUT, ERROR, HANDLED_ERROR, CANCELLED };
@@ -174,7 +181,8 @@ void log_session_fault(const char *reason, uint32_t generation)
     const uint32_t last_prog_ms = s_phase_tracker.last_progress_ms() ? (now - s_phase_tracker.last_progress_ms()) : 0;
     const size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr)) * sizeof(StackType_t);
+    // ESP-IDF's FreeRTOS fork returns bytes here (unlike vanilla FreeRTOS).
+    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr));
     log_e("Xiaozhi FAULT [%s] FW=%s gen=%u session=%s phase=%u elapsed=%ums last_prog=%ums up_q=%u down_q=%u drops=%u/%u stack=%uB int=%uB psram=%uB",
           reason ? reason : "Unknown", FW_GIT_SHA,
           static_cast<unsigned>(generation),
@@ -265,6 +273,7 @@ void mcp_worker(void *)
                                 ? AI_MUSIC_ACTION_PLAY : AI_MUSIC_ACTION_RESUME;
                             s_pending_music_action.revision = ++s_music_handoff_revision;
                             s_music_resume_suppressed = false;
+                            if (job.tool == xiaozhi::McpTool::MUSIC_PLAY) s_paused_music.clear();
                             xSemaphoreGive(s_mutex);
                         }
                         res.is_error = false;
@@ -275,6 +284,9 @@ void mcp_worker(void *)
                         if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
                         {
                             s_music_resume_suppressed = true;
+                            if (job.tool == xiaozhi::McpTool::MUSIC_PAUSE)
+                                s_paused_music.remember(s_suspended_music, music_player_get_control_revision());
+                            else s_paused_music.clear();
                             s_pending_music_action.valid = false;
                             s_suspended_music.resume_after_voice = false;
                             s_pending_music_action.revision = ++s_music_handoff_revision;
@@ -444,6 +456,8 @@ void resume_music_if_needed()
         suspended = s_suspended_music;
         resume_suppressed = s_music_resume_suppressed;
         current_rev = s_music_handoff_revision;
+        if (pending.valid && pending.action.type == AI_MUSIC_ACTION_RESUME)
+            (void)s_paused_music.for_resume(suspended, music_player_get_control_revision(), suspended);
         xSemaphoreGive(s_mutex);
     }
 
@@ -495,6 +509,9 @@ void resume_music_if_needed()
         {
             add_message(false, error[0] ? error : "Không thể thực thi lệnh nhạc hoãn lại");
         }
+        log_i("Xiaozhi: [MUSIC_DEFERRED_RESULT] action=%u success=%u bookmark=%u",
+              static_cast<unsigned>(pending.action.type), success ? 1U : 0U,
+              suspended.valid ? 1U : 0U);
     }
     else if (suspended.valid && suspended.resume_after_voice)
     {
@@ -523,6 +540,12 @@ void resume_music_if_needed()
     {
         if (s_music_handoff_revision == current_rev)
         {
+            if (pending.valid && pending.action.type == AI_MUSIC_ACTION_RESUME)
+            {
+                if (success) s_paused_music.clear();
+                // Failure must not re-stamp an old bookmark after a concurrent
+                // external Stop/source change. Leave its original revision.
+            }
             memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
             memset(&s_suspended_music, 0, sizeof(s_suspended_music));
             s_music_resume_suppressed = false;
@@ -560,6 +583,15 @@ void finalize_cleanup(uint32_t generation)
             xSemaphoreGive(s_mutex);
         }
     }
+    s_phase_tracker.finish_cleanup(s_timing);
+    s_cleanup_pending = false;
+    s_cleanup_generation = 0;
+    s_cleanup_recorder_request = 0;
+    s_record_control_request = 0;
+    s_cleanup_timeout_reported = false;
+    s_cleanup_retries = 0;
+    // Publish admission last: no caller can start a new turn while old phase
+    // deadlines or recorder/cleanup IDs still describe the previous turn.
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
         if (xiaozhi::cleanup_may_mutate(generation, s_active_generation))
@@ -571,12 +603,6 @@ void finalize_cleanup(uint32_t generation)
         }
         xSemaphoreGive(s_mutex);
     }
-    s_cleanup_pending = false;
-    s_cleanup_generation = 0;
-    s_cleanup_recorder_request = 0;
-    s_record_control_request = 0;
-    s_cleanup_timeout_reported = false;
-    s_cleanup_retries = 0;
 }
 
 void service_cleanup()
@@ -683,7 +709,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
         s_session_id[0] = '\0';
 #endif
         s_codec.end();
-        s_mcp.resetSession();
+        if (!s_transport.connected()) s_mcp.resetSession();
         s_capture_offset = 0;
         s_capture_frame_fill = 0;
         s_total_frames_sent = 0;
@@ -700,6 +726,7 @@ void begin_cleanup(uint32_t generation, bool resume_music, bool drain_output = t
 void cancel_session(uint32_t generation)
 {
     if (!active_generation_matches(generation)) return;
+    s_transport.cancelTurn(generation);
     log_i("Xiaozhi: [CANCEL_ACK] gen=%u", static_cast<unsigned>(generation));
     if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
     {
@@ -788,6 +815,9 @@ void handle_music_handoff(const char *tool_name)
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
             s_music_resume_suppressed = true;
+            if (strcmp(tool_name, "self.music.pause") == 0)
+                s_paused_music.remember(s_suspended_music, music_player_get_control_revision());
+            else s_paused_music.clear();
             s_pending_music_action.valid = false;
             s_suspended_music.resume_after_voice = false;
             ++s_music_handoff_revision;
@@ -800,6 +830,7 @@ void handle_music_handoff(const char *tool_name)
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
             s_music_resume_suppressed = false;
+            if (strcmp(tool_name, "self.music.play") == 0) s_paused_music.clear();
             ++s_music_handoff_revision;
             xSemaphoreGive(s_mutex);
         }
@@ -808,7 +839,10 @@ void handle_music_handoff(const char *tool_name)
 
 bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
 {
-    if (!current_generation(generation) || !data || size == 0) return false;
+    const bool idle_control = generation == 0 && s_app_open && s_warm_connected &&
+                              s_server_hello && !s_cleanup_pending &&
+                              active_generation_snapshot() == 0;
+    if ((!idle_control && !current_generation(generation)) || !data || size == 0) return false;
     if (size > xiaozhi::kMaxJsonMessageBytes)
     {
         log_w("Xiaozhi: JSON text message exceeds capacity (%u > %u)",
@@ -831,6 +865,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         return false;
     }
     JsonObjectConst root = document.as<JsonObjectConst>();
+    if (idle_control && !xiaozhi::is_idle_mcp_control(root)) return false;
     const char *type = root["type"] | "";
     if (strcmp(type, "hello") == 0)
     {
@@ -952,7 +987,6 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         }
         else if (disp == McpDispatchResult::DISPATCH_ASYNC)
         {
-            if (strstr(tool_name, "self.music.") == tool_name) handle_music_handoff(tool_name);
             job.generation = generation;
             if (!s_mcp_jobs || xQueueSend(s_mcp_jobs, &job, pdMS_TO_TICKS(50)) != pdTRUE)
             {
@@ -964,6 +998,8 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
                     s_mcp.remember(job.id, err_resp);
                 }
             }
+            else if (strstr(tool_name, "self.music.") == tool_name)
+                handle_music_handoff(tool_name);
         }
         else if (disp == McpDispatchResult::ERROR_OR_REJECTED)
         {
@@ -986,7 +1022,7 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
 
 bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
 {
-    if (!current_generation(generation)) return false;
+    if (!current_generation(generation) || cancellation_requested(generation)) return false;
     const AIVoiceState current_state = ai_voice_get_state();
     if (current_state != AI_STATE_SPEAKING)
     {
@@ -1011,16 +1047,18 @@ bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
     const uint8_t *opus = nullptr;
     size_t opus_size = 0;
     uint32_t timestamp = 0;
-    if (!xiaozhi::unwrap_opus_packet(s_ws_config.version, data, size,
-                                      &opus, &opus_size, &timestamp))
-    {
-        if (!xiaozhi::unwrap_opus_packet(1, data, size, &opus, &opus_size, &timestamp))
-            return false;
-    }
+    if (!xiaozhi::unwrap_negotiated_opus_packet(
+            s_ws_config.version, data, size, &opus, &opus_size, &timestamp))
+        return false;
     (void)timestamp;
     const int decoded = s_codec.decode(opus, opus_size, s_decoded, kDecodedCapacity);
     if (decoded <= 0) return false;
-    if (audio_write_pcm16_mono(s_decoded, static_cast<size_t>(decoded), 250))
+    if (cancellation_requested(generation) ||
+        audio_get_current_owner() != AUDIO_OWNER_AI_VOICE ||
+        s_audio_output_session == 0 ||
+        audio_get_owner_session(AUDIO_OWNER_AI_VOICE) != s_audio_output_session)
+        return false;
+    if (audio_write_pcm16_mono(s_decoded, static_cast<size_t>(decoded), 120))
     {
         const uint32_t now = millis();
         if (s_timing.t_first_pcm_ms == 0)
@@ -1039,18 +1077,23 @@ bool handle_audio_message(const uint8_t *data, size_t size, uint32_t generation)
 
 void process_inbound()
 {
-    static const size_t kMaxMessagesPerPass = 16;
+    static const size_t kMaxMessagesPerPass = 2;
     static uint8_t s_consecutive_audio_errors = 0;
     size_t processed = 0;
     XiaozhiInboundKind kind = XiaozhiInboundKind::TEXT;
     size_t size = 0;
     uint32_t generation = 0;
-    while (processed < kMaxMessagesPerPass &&
+    const size_t budget = xiaozhi::bounded_service_batch(
+        s_transport.inboundPending(), kMaxMessagesPerPass);
+    while (processed < budget &&
            s_transport.receive(&kind, s_inbound, xiaozhi::kMaxJsonMessageBytes,
                                &size, &generation))
     {
         ++processed;
-        if (!current_generation(generation))
+        const bool idle_control = generation == 0 && kind == XiaozhiInboundKind::TEXT &&
+                                  s_app_open && s_warm_connected && s_server_hello &&
+                                  !s_cleanup_pending && active_generation_snapshot() == 0;
+        if (!idle_control && (!current_generation(generation) || cancellation_requested(generation)))
         {
             s_transport.recordStaleDownlink();
             continue;
@@ -1170,6 +1213,7 @@ bool connect_session(uint32_t generation)
 
     for (uint8_t attempt = 0; attempt < 3 && current_generation(generation) && !xiaozhi::deadline_reached(millis(), connect_budget_deadline); ++attempt)
     {
+        s_mcp.resetSession();
         char error[128] = {};
         if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
                                s_device_id, s_client_id, generation,
@@ -1631,7 +1675,8 @@ void run_provisioning(uint32_t &next_poll_ms, uint32_t &backoff_ms)
                 s_configured = true;
                 s_activation_code[0] = '\0';
                 s_activation_message[0] = '\0';
-                s_state = AI_STATE_IDLE;
+                s_state = s_codec_health.load(std::memory_order_acquire) == CodecHealth::READY
+                    ? AI_STATE_IDLE : AI_STATE_ERROR;
                 last_logged_activation_code[0] = '\0';
                 log_i("Xiaozhi WSS provisioned: protocol=%u MCP=enabled",
                       static_cast<unsigned>(s_ws_config.version));
@@ -1677,28 +1722,29 @@ void log_runtime_diagnostics(uint32_t generation)
     const size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t psram_min = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     const size_t psram_largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr)) *
-                              sizeof(StackType_t);
-    (void)internal_free;
-    (void)internal_min;
-    (void)internal_largest;
-    (void)psram_free;
-    (void)psram_min;
-    (void)psram_largest;
-    (void)stack_free;
-    log_i("Xiaozhi diag state=%u gen=%u recorder=%u owner=%u cmdq=%u upq=%u/8 drops=%u/%u stack_free=%uB int=%u/%u/%u psram=%u/%u/%u cleanup=%u",
+    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr));
+    const size_t mcp_stack_free = s_mcp_task
+        ? static_cast<size_t>(uxTaskGetStackHighWaterMark(s_mcp_task)) : 0;
+    const AudioRecorderStatus recorder_status = audio_get_recorder_status(s_record_control_request);
+    (void)internal_free; (void)internal_min; (void)internal_largest;
+    (void)psram_free; (void)psram_min; (void)psram_largest;
+    (void)stack_free; (void)mcp_stack_free; (void)recorder_status;
+    log_i("Xiaozhi diag state=%u gen=%u recorder=%u/%u owner=%u cmdq=%u upq=%u/8 drops=%u/%u stack=%uB mcp_stack=%uB int=%u/%u/%u psram=%u/%u/%u cleanup=%u codec=%u",
           static_cast<unsigned>(ai_voice_get_state()), static_cast<unsigned>(generation),
           static_cast<unsigned>(s_record_control_request),
+          static_cast<unsigned>(recorder_status),
           static_cast<unsigned>(audio_get_current_owner()),
           static_cast<unsigned>(s_commands ? uxQueueMessagesWaiting(s_commands) : 0),
           static_cast<unsigned>(s_transport.uplinkPending()),
           static_cast<unsigned>(s_transport.droppedUplink()),
           static_cast<unsigned>(s_transport.droppedDownlink()),
           static_cast<unsigned>(stack_free),
+          static_cast<unsigned>(mcp_stack_free),
           static_cast<unsigned>(internal_free), static_cast<unsigned>(internal_min),
           static_cast<unsigned>(internal_largest), static_cast<unsigned>(psram_free),
           static_cast<unsigned>(psram_min), static_cast<unsigned>(psram_largest),
-          s_cleanup_pending ? 1U : 0U);
+          s_cleanup_pending ? 1U : 0U,
+          static_cast<unsigned>(s_codec_health.load(std::memory_order_acquire)));
 }
 
 bool handle_pump_fault(PumpResult result, uint32_t generation, const char *context)
@@ -1726,7 +1772,13 @@ bool handle_pump_fault(PumpResult result, uint32_t generation, const char *conte
 
 bool run_codec_self_test()
 {
-    memset(s_capture_frame, 0, kCaptureFrameSamples * sizeof(int16_t));
+    uint32_t pattern = 0x13579BDFU;
+    for (size_t i = 0; i < kCaptureFrameSamples; ++i)
+    {
+        pattern = pattern * 1664525U + 1013904223U;
+        s_capture_frame[i] = static_cast<int16_t>(
+            static_cast<int32_t>((pattern >> 20) & 0x0FFFU) - 2048);
+    }
     char error[96] = {};
     if (!s_codec.begin(16000, error, sizeof(error)))
     {
@@ -1740,16 +1792,24 @@ bool run_codec_self_test()
                          s_decoded, kDecodedCapacity)
         : encoded;
     s_codec.end();
-    const bool ok = encoded > 0 && decoded == static_cast<int>(kCaptureFrameSamples);
-    log_i("Xiaozhi Opus self-test=%s encoded=%d decoded=%d stack_free=%uB",
+    const size_t stack_free = static_cast<size_t>(uxTaskGetStackHighWaterMark(nullptr));
+    const bool codec_ok = encoded > 0 && decoded == static_cast<int>(kCaptureFrameSamples);
+    const bool ok = codec_ok && stack_free >= kMinCodecStackHeadroomBytes;
+    log_i("Xiaozhi Opus self-test=%s encoded=%d decoded=%d stack_free=%uB minimum=%uB",
           ok ? "PASS" : "FAIL", encoded, decoded,
-          static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr) * sizeof(StackType_t)));
+          static_cast<unsigned>(stack_free),
+          static_cast<unsigned>(kMinCodecStackHeadroomBytes));
+    if (codec_ok && !ok)
+        log_e("Xiaozhi Opus stack headroom is unsafe: %uB < %uB",
+              static_cast<unsigned>(stack_free),
+              static_cast<unsigned>(kMinCodecStackHeadroomBytes));
     return ok;
 }
 
 static bool do_preconnect()
 {
-    if (!s_configured || !wifi_manager_is_connected() || active_generation_snapshot() != 0)
+    if (!s_configured || s_codec_health.load(std::memory_order_acquire) != CodecHealth::READY ||
+        !wifi_manager_is_connected() || active_generation_snapshot() != 0)
         return false;
 
     if (s_warm_connected && s_transport.connected() && s_server_hello && s_session_id[0] != '\0')
@@ -1759,10 +1819,18 @@ static bool do_preconnect()
     }
 
     log_i("Xiaozhi: [PRECONNECT] Connecting WebSocket in background...");
+    log_i("Xiaozhi: [TLS_DIAG] epoch=%lld internal_free=%u largest=%u psram_free=%u",
+          static_cast<long long>(time(nullptr)),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+          static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)));
+    if (!s_mutex || xSemaphoreTake(s_mutex, portMAX_DELAY) != pdTRUE) return false;
     uint32_t preconnect_gen = ++s_next_generation;
     if (preconnect_gen == 0) preconnect_gen = ++s_next_generation;
+    xSemaphoreGive(s_mutex);
     s_preconnect_generation = preconnect_gen;
 
+    s_mcp.resetSession();
     char error[128] = {};
     if (!s_transport.begin(s_ws_config, get_wss_ca_cert(),
                            s_device_id, s_client_id, preconnect_gen,
@@ -1885,7 +1953,10 @@ void worker(void *)
 {
     uint32_t next_poll_ms = 0;
     uint32_t backoff_ms = 3000;
-    if (!run_codec_self_test()) set_error("Opus encode/decode self-test thất bại");
+    const bool codec_ok = run_codec_self_test();
+    s_codec_health.store(codec_ok ? CodecHealth::READY : CodecHealth::FAILED,
+                         std::memory_order_release);
+    if (!codec_ok) set_error("Opus encode/decode self-test thất bại");
     while (true)
     {
         runtime_health_heartbeat(RUNTIME_TASK_XIAOZHI);
@@ -1992,7 +2063,9 @@ void worker(void *)
         }
 
         // Auto-preconnect in background when app is open, WiFi connected, Xiaozhi configured, but not warm-connected
-        if (s_app_open && s_configured && wifi_manager_is_connected() &&
+        if (s_app_open && s_configured &&
+            s_codec_health.load(std::memory_order_acquire) == CodecHealth::READY &&
+            wifi_manager_is_connected() &&
             (!s_warm_connected || !s_transport.connected() || !s_server_hello) &&
             generation == 0 && !s_cleanup_pending)
         {
@@ -2015,6 +2088,9 @@ void worker(void *)
                 continue;
             }
         }
+
+        if (generation == 0 && s_app_open && s_warm_connected && s_server_hello && !s_cleanup_pending)
+            process_inbound();
 
         if (generation && !s_cleanup_pending)
         {
@@ -2130,6 +2206,7 @@ void release_service_allocations()
 bool ai_voice_init(void)
 {
     if (s_task) return true;
+    s_codec_health.store(CodecHealth::PENDING, std::memory_order_release);
     s_mutex = xSemaphoreCreateMutex();
     s_commands = xQueueCreate(8, sizeof(Command));
     s_mcp_jobs = xQueueCreate(4, sizeof(McpAsyncJob));
@@ -2178,7 +2255,7 @@ bool ai_voice_init(void)
         release_service_allocations();
         return false;
     }
-    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", 32768, nullptr, 3,
+    if (xTaskCreatePinnedToCore(worker, "XiaozhiVoice", kWorkerStackBytes, nullptr, 3,
                                 &s_task, 0) != pdPASS)
     {
         s_task = nullptr;
@@ -2213,10 +2290,16 @@ bool ai_voice_copy_last_error(char *out, size_t out_size)
 
 bool ai_voice_start_recording(void)
 {
-    if (!s_task || !s_configured || !wifi_manager_is_connected())
+    const CodecHealth codec_health = s_codec_health.load(std::memory_order_acquire);
+    if (!s_task || codec_health != CodecHealth::READY ||
+        !s_configured || !wifi_manager_is_connected())
     {
         if (!s_task)
             set_error("Xiaozhi service chưa khởi động");
+        else if (codec_health == CodecHealth::PENDING)
+            set_error("Đang kiểm tra bộ mã hóa Opus");
+        else if (codec_health == CodecHealth::FAILED)
+            set_error("Bộ mã hóa Opus không hoạt động");
         else if (!s_configured)
             set_error(s_activation_code[0] ? "Cần kích hoạt Xiaozhi trước" : "Xiaozhi chưa kích hoạt — Cần kết nối WiFi để đăng ký");
         else
@@ -2267,6 +2350,7 @@ bool ai_voice_stop_and_process(AiVoiceStopReason reason)
     xSemaphoreGive(s_mutex);
     if (starting)
     {
+        s_transport.cancelTurn(generation);
         log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s (released during STARTING)",
               static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
         (void)queue_command(CommandType::CANCEL, generation, reason);
@@ -2279,6 +2363,7 @@ bool ai_voice_stop_and_process(AiVoiceStopReason reason)
     {
         if (allowed)
         {
+            s_transport.cancelTurn(generation);
             if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
             {
                 if (generation > s_cancelled_through) s_cancelled_through = generation;
@@ -2304,6 +2389,7 @@ void ai_voice_cancel(AiVoiceStopReason reason)
     xSemaphoreGive(s_mutex);
     if (generation)
     {
+        s_transport.cancelTurn(generation);
         log_i("Xiaozhi: [CANCEL_REQUESTED] gen=%u reason=%s",
               static_cast<unsigned>(generation), ai_voice_stop_reason_str(reason));
         // The mutex-protected cancellation watermark is authoritative. The

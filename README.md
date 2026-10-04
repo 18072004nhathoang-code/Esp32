@@ -116,7 +116,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. Đóng app hủy generation ngay, giải phóng khoảng 435 KB buffer worker và yêu cầu nguồn điện thoại giải phóng thêm tối đa 128 KB PSRAM. |
 | **PhoneMapHTTP** | **Core 0** | **1** | Trang companion LAN trên cổng 8080; nhận JPEG tối đa 128 KB vào PSRAM, xác thực mã ghép nối/generation và nhường mạng cho Xiaozhi/nhạc. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
-| **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, queue uplink/downlink hữu hạn, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. |
+| **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, uplink/downlink xử lý theo batch hữu hạn có backpressure, framing đúng version đã provision, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. Stack 40KB được chọn từ high-water đo bằng byte của ESP-IDF và self-test khóa PTT nếu headroom dưới 4KB. |
 
 ---
 
@@ -144,6 +144,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 5. **Bảo mật mật khẩu Camera IP**: Firmware không lưu plaintext password vào NVS Flash. Sau reboot, profile có username nhưng thiếu password chuyển sang `PASSWORD_REQUIRED`. HTTPS xác thực bằng `CAMERA_TLS_CA_CERT` là mặc định và fail-closed nếu chưa cấu hình CA. HTTPS bỏ xác thực và HTTP plaintext chỉ hoạt động khi người dùng chọn rõ trong UI; không có downgrade tự động. URL/credential không được ghi plaintext vào log.
 6. **Giới hạn TLS của toolchain**: Platform Espressif32 6.8.1 dùng Arduino-ESP32 2.0.17 với `CONFIG_MBEDTLS_HAVE_TIME_DATE` tắt trong SDK prebuilt cho ESP32-S3. CA chain và hostname vẫn được kiểm tra, nhưng thời hạn not-before/not-after của chứng chỉ không được kiểm tra bởi build này. Firmware log rõ giới hạn khi boot và không gọi đây là full certificate validation. Bản production cần framework/SDK tự build có X.509 time validation và chỉ mở kết nối sau khi SNTP đã cung cấp thời gian hợp lệ.
 7. **Giới hạn bảo vệ secret trên thiết bị**: `.gitignore` chỉ ngăn commit file secret, không bảo vệ dữ liệu khỏi flash dump. Build PlatformIO thông thường không provision Secure Boot, Flash Encryption hoặc encrypted NVS. Xem `docs/PRODUCTION_SECURITY.md` trước khi phân phối thiết bị.
+8. **RAM cho TLS**: Trước khi khởi động các worker mạng, firmware cài allocator mbedTLS ưu tiên PSRAM, kiểm tra overflow/cấp phát và fallback Internal SRAM. Không đổi allocator khi đang có phiên TLS; không thay CA hay bỏ kiểm tra hostname. Điều này tránh các buffer TLS/RSA tranh SRAM với stack/audio trên SDK pinned vốn chỉ cấp phát TLS vào Internal RAM. Log `TLS_DIAG` và `TLS failure` không chứa token. Native test `tests/tls_memory_test.cpp` chạy implementation thật và kiểm tra zeroing, fallback, OOM, overflow cùng 100 vòng cấp phát/giải phóng.
 
 ---
 
@@ -239,7 +240,31 @@ triển khai OTA và chưa mount SPIFFS. Quy trình gate/release nằm trong
 
 Status bar dùng giờ SNTP thật theo UTC+7 (`--:--` trước khi đồng bộ); uptime vẫn hiển thị riêng trong System Monitor. SNTP được yêu cầu bất đồng bộ sau khi WiFi có IP và đồng bộ lại khi reconnect, không ghi NVS mỗi giây.
 
-Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan adapter/time service state-machine test, decoder lifecycle và Xiaozhi protocol test. WiFi scan test bao phủ cấu hình zero-init, completion sớm, timeout, stop/drain, event cũ, recovery, OOM/0 AP/cancel, deadline wraparound và scan sau connect sai mật khẩu. Xiaozhi test bao phủ config activation chỉ chấp nhận WSS, activation polling clamp/expiry deadline, hello timeout, disconnect, framing v1/v2/v3, malformed length, WebSocket fragment/overflow, bounded queue, stale/cancel generation, music handoff, MCP allowlist/volume và ACK failure.
+Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan adapter/time service state-machine test, decoder lifecycle và Xiaozhi protocol test. WiFi scan test bao phủ cấu hình zero-init, completion sớm, timeout, stop/drain, event cũ, recovery, OOM/0 AP/cancel, deadline wraparound và scan sau connect sai mật khẩu. Xiaozhi test bao phủ config activation chỉ chấp nhận WSS, activation polling clamp/expiry deadline, hello timeout, disconnect, framing v1/v2/v3 không fallback raw, malformed length, WebSocket fragment/overflow, batch/backpressure hữu hạn, stale/cancel generation, music handoff, MCP allowlist/volume và ACK failure. CI còn encode/decode PCM 60 ms bằng đúng checkout Opus commit đã pin; firmware lặp lại self-test Opus khi task Xiaozhi khởi động và khóa PTT nếu self-test lỗi.
+
+`tests/xiaozhi_transport_test.cpp` biên dịch trực tiếp `src/ai/xiaozhi_transport.cpp` với mock FreeRTOS/SDK: kiểm tra rollback khi tạo mutex/queue/buffer/WebSocket thất bại, backlog 100 frame với mạng chậm, retry/partial-send, cancel giữa batch, queue đầy, SDK chunk thiếu/lặp/sai opcode, WebSocket continuation/control frame và 100 lần reconnect không tăng tài nguyên. CI chạy test này với ASan/UBSan. Cancel từ UI đóng audio gate bằng atomic ngay lập tức; worker vẫn sở hữu purge/abort/close và cleanup. Music Pause giữ MUSIC lease trong khi decoder và driver I2S còn sống; Voice handoff vẫn Stop/ACK và hủy decoder trước khi xin I2S.
+
+Hướng dẫn lấy panic/backtrace, kết quả đã đo và ma trận test board còn lại: [docs/xiaozhi-reset-verification.md](docs/xiaozhi-reset-verification.md). Build hoặc mock tests PASS không xác nhận đã hết reset Xiaozhi trên phần cứng.
+
+MCP discovery (`initialize`, `tools/list`) vẫn được xử lý khi WSS đang idle;
+audio, TTS và `tools/call` cũ không được thực thi ở trạng thái này. Danh sách
+công cụ chỉ có một trang và không trả `nextCursor`. `self.music.play` với
+`arguments: {}` phát bài đang chọn hoặc bài đầu tiên trong `/music` trên SD;
+`query` chỉ dành cho tìm YouTube, `source_id` chỉ dành cho nguồn mạng đã cấu hình.
+Xiaozhi không được truy cập tùy ý mọi file trên SD. Trình phát hiện tại không
+có công cụ duyệt SD hoặc chọn bài SD theo tên; không nói đã hỗ trợ hai việc đó.
+Test `tests/xiaozhi_mcp_test.cpp` liên kết trực tiếp dispatcher production với
+ArduinoJson 6.21.5 đã pin, kiểm tra discovery, schema SD, ACK thất bại/thành công,
+dedup và từ chối URL tùy ý; transport test kiểm tra idle/handoff và loại TTS cũ.
+
+Xiaozhi Pause giữ bookmark nguồn/vị trí trong RAM sau khi decoder đã trả I2S,
+qua các lượt hỏi tiếp theo. Resume rõ ràng dùng bookmark để dựng lại decoder;
+không tự phát lại khi chỉ hỏi chuyện. Stop/Play MCP xóa bookmark; revision của
+lệnh đổi nguồn/Stop từ Music vô hiệu hóa bookmark cũ. Volume không đổi revision.
+Bookmark không lưu NVS. Test C++ dùng cùng logic production kiểm tra Pause →
+cleanup → hỏi tiếp → Resume, Stop/đổi nguồn và lựa chọn snapshot hiện tại.
+Kết quả phần cứng cụ thể và các gate chưa đạt nằm trong
+`docs/xiaozhi-reset-verification.md`; compile PASS không chứng minh hết reset.
 
 Build ES3C28P dùng Arduino ESP32 `3.20017.241212+sha.dcc1105b` (core 2.0.17). Script `scripts/framework_wifi_patch.py` kiểm tra version và SHA-256 của `WiFiScan.cpp`, `WiFiScan.h`, `WiFiGeneric.cpp`, sau đó build bản sao được quản lý trong `.pio/build`; source package dùng chung trong `.platformio` không bị sửa. Build sẽ dừng rõ ràng nếu framework không còn khớp bản đã audit.
 

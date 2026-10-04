@@ -24,6 +24,7 @@
 #include "esp_transport_internal.h"
 #include "errno.h"
 #include "esp_tls_crypto.h"
+#include "esp_tls.h"
 
 static const char *TAG = "TRANSPORT_WS";
 
@@ -144,6 +145,12 @@ static int ws_connect(esp_transport_handle_t t, const char *host, int port, int 
     transport_ws_t *ws = esp_transport_get_context_data(t);
     if (esp_transport_connect(ws->parent, host, port, timeout_ms) < 0) {
         ESP_LOGE(TAG, "Error connecting to host %s:%d", host, port);
+        int tls_code = 0;
+        int verify_flags = 0;
+        esp_err_t transport_error = esp_tls_get_and_clear_last_error(
+            esp_transport_get_error_handle(ws->parent), &tls_code, &verify_flags);
+        ESP_LOGE(TAG, "TLS failure: transport=0x%x code=%d verify_flags=0x%x",
+                 transport_error, tls_code, verify_flags);
         return -1;
     }
 

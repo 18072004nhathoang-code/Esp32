@@ -178,7 +178,7 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                                    "self.music.stop", "self.music.set_volume", "self.camera.open",
                                    "self.camera.start", "self.camera.stop", "self.camera.refresh",
                                    "self.camera.get_status", "self.clock.get_time"};
-            const char *descriptions[] = {"Phát nhạc từ YouTube hoặc thẻ SD. Truyền tên bài hát cần phát vào trường query.",
+            const char *descriptions[] = {"Phát nhạc thẻ SD: arguments {} để phát bài đang chọn hoặc đầu tiên. Chỉ dùng query để tìm YouTube; source_id cho nguồn mạng đã cấu hình.",
                 "Tạm dừng nhạc", "Tiếp tục nhạc", "Dừng nhạc", "Đặt âm lượng nhạc 0-100",
                 "Mở ứng dụng Camera trên màn hình", "Khởi động dịch vụ Camera đã cấu hình",
                 "Dừng dịch vụ Camera", "Kết nối lại Camera đã cấu hình",
@@ -213,7 +213,8 @@ McpDispatchResult XiaozhiMcpServer::dispatch(JsonObjectConst request, const char
                 }
                 schema["additionalProperties"] = false;
             }
-            result["nextCursor"] = "";
+            // This is the final/only page. Omit nextCursor, as upstream Xiaozhi
+            // does; even an empty cursor can cause another tools/list request.
             outer_response = "";
             serializeJson(response, outer_response);
         }

@@ -29,6 +29,7 @@
 #include "os/runtime_health.h"
 #include "firmware_regression.h"
 #include "service_state_logic.h"
+#include "core/tls_memory.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -134,6 +135,9 @@ void setup()
     Serial.printf("[BOOT] Framework: Arduino-ESP32 %u.%u.%u | ESP-IDF %s\n",
                   ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR,
                   ESP_ARDUINO_VERSION_PATCH, esp_get_idf_version());
+    Serial.printf("[TLS] Allocation policy: %s\n",
+                  tls_memory_init() ? "PSRAM preferred, checked internal fallback"
+                                    : "DEGRADED: SDK internal allocator retained");
 #if defined(CONFIG_MBEDTLS_HAVE_TIME_DATE) && CONFIG_MBEDTLS_HAVE_TIME_DATE
     Serial.println("[SECURITY] TLS certificate chain/hostname/date validation: ENABLED");
 #else
