@@ -179,6 +179,11 @@ static bool acquire_music_audio(void)
 static bool release_music_audio(void)
 {
     if (!music_owns_audio) return true;
+    if (!music_owner_release_ready(decoder_lifecycle.phase(), audio != nullptr))
+    {
+        Serial.println("[MUSIC_AUDIO] Refusing to release MUSIC while decoder/I2S is still active");
+        return false;
+    }
     const uint32_t session = music_owner_session;
     if (!audio_release_ownership_session(AUDIO_OWNER_MUSIC, session))
     {
@@ -465,7 +470,6 @@ static void music_audio_task(void *pvParameters)
 
                 case MUSIC_CMD_PAUSE:
                 {
-                    bool release_after_pause = false;
                     if (audio_mutex && xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(100)) == pdTRUE)
                     {
                         if (audio && player_state.is_playing && player_state.is_paused)
@@ -476,14 +480,12 @@ static void music_audio_task(void *pvParameters)
                             {
                                 player_state.is_paused = true;
                                 audio_set_pa_for_session(AUDIO_OWNER_MUSIC, music_owner_session, false);
-                                release_after_pause = true;
                                 command_ok = true;
-                                Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng phát nhạc");
+                                Serial.println("[MUSIC_AUDIO] ⏸ Đã tạm dừng; giữ MUSIC lease đến decoder shutdown ACK");
                             }
                         }
                         xSemaphoreGive(audio_mutex);
                     }
-                    if (release_after_pause) command_ok = release_music_audio();
                 }
                 break;
 

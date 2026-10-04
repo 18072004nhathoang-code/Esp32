@@ -101,3 +101,11 @@ private:
     MusicDecoderPhase phase_ = MusicDecoderPhase::EMPTY;
     uint32_t generation_ = 0;
 };
+
+// ESP32-audioI2S keeps its I2S driver/task alive while merely paused. MUSIC
+// ownership may only be published as released after the decoder acknowledged
+// shutdown and was destroyed.
+inline bool music_owner_release_ready(MusicDecoderPhase phase, bool decoder_exists)
+{
+    return phase == MusicDecoderPhase::EMPTY && !decoder_exists;
+}

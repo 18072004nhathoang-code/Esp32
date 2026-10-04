@@ -31,6 +31,11 @@ struct MockDecoder
 
 int main()
 {
+    assert(!music_owner_release_ready(MusicDecoderPhase::PLAYING, true));
+    assert(!music_owner_release_ready(MusicDecoderPhase::EMPTY, true));
+    assert(!music_owner_release_ready(MusicDecoderPhase::STOPPING, false));
+    assert(music_owner_release_ready(MusicDecoderPhase::EMPTY, false));
+
     MusicWorkerExitTracker worker_exit;
     const uint32_t worker_generation = worker_exit.begin();
     assert(!worker_exit.confirmed(worker_generation)); // handle=null alone is not completion
