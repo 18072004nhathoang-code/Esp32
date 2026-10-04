@@ -118,6 +118,12 @@ uint8_t music_player_get_volume(void);
  */
 bool music_player_is_playing(void);
 bool music_player_is_paused(void);
+/** Atomic, checked snapshot; never substitutes zero values for a lock failure. */
+bool music_player_copy_state(MusicPlayerState *out);
+/** SD-only playback through the existing command/decoder ACK path. */
+bool music_player_play_index_wait(int index, uint32_t timeout_ms);
+/** Revision of accepted source-changing/Stop commands; volume does not change it. */
+uint32_t music_player_get_control_revision(void);
 
 /** Execute an allowlisted AI action and wait for the decoder task ACK. */
 bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,

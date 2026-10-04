@@ -251,6 +251,44 @@ or post-reconnect voice success is yet verified in this follow-up. This UI
 test closes AI first, so even a successful result would not prove recovery
 from WiFi loss during an active capture/upload/TTS request.
 
+### Resumed test: WiFi recovery, active close and Pause/Resume
+
+On the already running `bb6c8d17f535+wt181a52049479` image, a fresh
+`wifi-ready-20261005-030315.log` records UI reconnect generation 3 with IP,
+credential-save success and SNTP request. Voice generation 21 then completed
+STT/TTS/PCM/DONE with both recorder and output leases released. The user
+confirmed hearing the answer. This does not prove in-flight network loss.
+
+Generation 23 was closed via Home during TTS: APP_CLOSE, Cancel ACK, output
+release and DONE were followed by socket disconnect. Reopening created a
+new session; generation 25 replied and released all leases. The user confirmed
+the speaker stopped at close and the new answer was audible.
+
+SD play and music/voice handoff succeeded. Actual `self.music.pause` in
+generation 29 suppressed Music restoration, including the next voice turn.
+The user confirmed silence. However `self.music.resume` in generation 31
+failed: MUSIC was acquired then immediately released with no decoder/file
+open, and the user heard no music. Inspection proved Pause cleanup erased
+the turn's source/position snapshot after the decoder had been destroyed.
+This is a confirmed functional bug, not a confirmed cause of the original
+reported reset.
+
+The local repair retains a revision-tagged paused bookmark across voice
+turns and uses it only on explicit Resume. Stop/Play clears it; accepted
+source-changing/Stop commands invalidate stale bookmarks, while volume
+does not. State remains mutex-protected; no I2S acquisition is added to
+Pause. A full MCP job queue no longer changes handoff state for a rejected
+request. Native tests exercise the production bookmark logic. Repaired
+After all 13 native tests, regression, 9 backend tests, pinned Opus and the
+ES3C28P build passed, the repaired image was uploaded to the same COM10
+without erasing NVS. A fresh `resume-fixed-20261005.log` records actual
+Pause in generation 6, another answered question in generation 7 without
+restoring Music, then Resume in generation 8. The existing restore path
+opened the SD file and reported `action=3 success=1 bookmark=1` at 178224 ms.
+The user confirmed hearing music again. This proves one repaired SD
+Pause/question/Resume sequence, not 100 physical cycles, stream Resume,
+in-flight WiFi loss recovery, or the original reset's root cause.
+
 Record at least 100 actual PTT/Stop/Cancel cycles, including these cases:
 
 | Trigger | Required observation |

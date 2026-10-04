@@ -6,6 +6,37 @@
 
 namespace xiaozhi
 {
+// Caller owns synchronization. A voice-suspended decoder is gone; Pause
+// must retain its source/position separately from transient turn cleanup.
+template <typename Snapshot>
+class PausedMusicBookmark
+{
+public:
+    void remember(const Snapshot &snapshot, uint32_t control_revision)
+    {
+        if (!snapshot.valid) return;
+        saved_ = snapshot;
+        saved_.resume_after_voice = false;
+        revision_ = control_revision;
+    }
+
+    bool for_resume(const Snapshot &current, uint32_t control_revision,
+                    Snapshot &out) const
+    {
+        if (current.valid) out = current;
+        else if (saved_.valid && revision_ == control_revision) out = saved_;
+        else return false;
+        out.resume_after_voice = true;
+        return true;
+    }
+
+    void clear() { saved_ = Snapshot{}; }
+
+private:
+    Snapshot saved_{};
+    uint32_t revision_ = 0;
+};
+
 enum class BackpressureDecision : uint8_t
 {
     READY = 0,

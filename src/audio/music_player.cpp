@@ -11,6 +11,7 @@
 #include <Audio.h>
 #include <FS.h>
 #include <new>
+#include <atomic>
 #include <ArduinoJson.h>
 #include "service_state_logic.h"
 #include "music_decoder_lifecycle.h"
@@ -91,6 +92,7 @@ static size_t stream_source_count = 0;
 static char current_stream_source_id[32] = {};
 static char current_stream_url[256] = {};
 static uint32_t next_music_request_id = 0;
+static std::atomic<uint32_t> music_control_revision{0};
 static bool music_owns_audio = false;
 static uint32_t music_owner_session = 0;
 static uint32_t codec_sample_rate = 0;
@@ -159,7 +161,15 @@ static bool enqueue_music_command(const MusicCommand &cmd)
         Serial.println("[MUSIC_PLAYER] ❌ Hàng đợi lệnh không sẵn sàng hoặc đã đầy");
         return false;
     }
+    if (cmd.type == MUSIC_CMD_PLAY_INDEX || cmd.type == MUSIC_CMD_PLAY_STREAM ||
+        cmd.type == MUSIC_CMD_STOP)
+        music_control_revision.fetch_add(1, std::memory_order_acq_rel);
     return true;
+}
+
+uint32_t music_player_get_control_revision(void)
+{
+    return music_control_revision.load(std::memory_order_acquire);
 }
 
 static bool acquire_music_audio(void)
@@ -969,6 +979,7 @@ bool music_player_stop(void)
     music_stop_session = session;
     music_stop_generation = decoder_lifecycle.generation();
     music_stop_pending = true;
+    music_control_revision.fetch_add(1, std::memory_order_acq_rel);
     portEXIT_CRITICAL(&music_control_mux);
     xTaskNotify(audio_task_handle, 0, eNoAction);
     Serial.println("[MUSIC_PLAYER] ⏹ Gửi lệnh dừng phát nhạc");
@@ -1073,6 +1084,15 @@ bool music_player_is_paused(void)
     return value;
 }
 
+bool music_player_copy_state(MusicPlayerState *out)
+{
+    if (!out || !audio_mutex || xSemaphoreTake(audio_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+    *out = player_state;
+    xSemaphoreGive(audio_mutex);
+    return true;
+}
+
 static bool execute_music_command_wait_locked(MusicCommand &cmd, uint32_t timeout_ms)
 {
     cmd.request_id = ++next_music_request_id;
@@ -1088,6 +1108,20 @@ static bool execute_music_command_wait_locked(MusicCommand &cmd, uint32_t timeou
             return false;
         if (ack.request_id == cmd.request_id) return ack.ok;
     }
+}
+
+bool music_player_play_index_wait(int index, uint32_t timeout_ms)
+{
+    if (index < 0 || index >= total_tracks_found || !music_ai_action_mutex ||
+        xSemaphoreTake(music_ai_action_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+        return false;
+    MusicCommand cmd = {};
+    cmd.type = MUSIC_CMD_PLAY_INDEX;
+    cmd.track_idx = index;
+    strlcpy(cmd.filepath, playlist[index].filepath, sizeof(cmd.filepath));
+    const bool ok = execute_music_command_wait_locked(cmd, timeout_ms);
+    xSemaphoreGive(music_ai_action_mutex);
+    return ok;
 }
 
 bool music_player_execute_ai_action(const AiMusicAction *action, uint32_t timeout_ms,

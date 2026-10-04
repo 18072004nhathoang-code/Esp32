@@ -5,6 +5,35 @@
 
 int main()
 {
+    struct MusicSnapshot
+    {
+        bool valid;
+        bool resume_after_voice;
+        int track_index;
+        unsigned position_sec;
+    };
+    xiaozhi::PausedMusicBookmark<MusicSnapshot> bookmark;
+    MusicSnapshot held = {true, true, 2, 37};
+    MusicSnapshot empty = {}, resumed = {};
+    // Board gen29 Pause -> cleanup destroys turn snapshot -> gen30 question
+    // -> gen31 Resume: source and position must survive, without auto-play.
+    bookmark.remember(held, 4);
+    bookmark.remember(empty, 4); // later turns must not erase a valid Pause
+    assert(bookmark.for_resume(empty, 4, resumed));
+    assert(resumed.valid && resumed.resume_after_voice);
+    assert(resumed.track_index == 2 && resumed.position_sec == 37);
+    // No acknowledged restore: bookmark survives while controls are unchanged.
+    assert(bookmark.for_resume(empty, 4, resumed));
+    // Accepted Stop/new source invalidates it, even if that operation fails.
+    assert(!bookmark.for_resume(empty, 6, resumed)); // external Stop/new source
+    MusicSnapshot newer = {true, false, 3, 91};
+    assert(bookmark.for_resume(newer, 6, resumed));
+    assert(resumed.track_index == 3 && resumed.position_sec == 91);
+    bookmark.clear();
+    assert(!bookmark.for_resume(empty, 4, resumed));
+    assert(bookmark.for_resume(held, 7, held)); // production in-place selection
+    assert(held.resume_after_voice && held.position_sec == 37);
+
     using namespace xiaozhi;
 
     BackpressureWindow pressure;

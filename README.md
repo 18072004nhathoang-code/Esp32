@@ -209,6 +209,15 @@ Test `tests/xiaozhi_mcp_test.cpp` liên kết trực tiếp dispatcher productio
 ArduinoJson 6.21.5 đã pin, kiểm tra discovery, schema SD, ACK thất bại/thành công,
 dedup và từ chối URL tùy ý; transport test kiểm tra idle/handoff và loại TTS cũ.
 
+Xiaozhi Pause giữ bookmark nguồn/vị trí trong RAM sau khi decoder đã trả I2S,
+qua các lượt hỏi tiếp theo. Resume rõ ràng dùng bookmark để dựng lại decoder;
+không tự phát lại khi chỉ hỏi chuyện. Stop/Play MCP xóa bookmark; revision của
+lệnh đổi nguồn/Stop từ Music vô hiệu hóa bookmark cũ. Volume không đổi revision.
+Bookmark không lưu NVS. Test C++ dùng cùng logic production kiểm tra Pause →
+cleanup → hỏi tiếp → Resume, Stop/đổi nguồn và lựa chọn snapshot hiện tại.
+Kết quả phần cứng cụ thể và các gate chưa đạt nằm trong
+`docs/xiaozhi-reset-verification.md`; compile PASS không chứng minh hết reset.
+
 Build ES3C28P dùng Arduino ESP32 `3.20017.241212+sha.dcc1105b` (core 2.0.17). Script `scripts/framework_wifi_patch.py` kiểm tra version và SHA-256 của `WiFiScan.cpp`, `WiFiScan.h`, `WiFiGeneric.cpp`, sau đó build bản sao được quản lý trong `.pio/build`; source package dùng chung trong `.platformio` không bị sửa. Build sẽ dừng rõ ràng nếu framework không còn khớp bản đã audit.
 
 Tích hợp được đối chiếu với upstream Xiaozhi commit [`5d54beb743ff49c4e8db81bbef9413bdd6e2ba17`](https://github.com/78/xiaozhi-esp32/commit/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17), tài liệu [`docs/websocket.md`](https://github.com/78/xiaozhi-esp32/blob/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17/docs/websocket.md) và [`docs/mcp-protocol.md`](https://github.com/78/xiaozhi-esp32/blob/5d54beb743ff49c4e8db81bbef9413bdd6e2ba17/docs/mcp-protocol.md). Project giữ Arduino-ESP32/ESP-IDF hiện tại; không nhập boot/UI/OTA của upstream.

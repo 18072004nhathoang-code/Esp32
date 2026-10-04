@@ -117,6 +117,7 @@ struct PendingMusicAction
     uint32_t revision;
 };
 static MusicVoiceHandoff s_suspended_music = {};
+static xiaozhi::PausedMusicBookmark<MusicVoiceHandoff> s_paused_music;
 static PendingMusicAction s_pending_music_action = {};
 static uint32_t s_music_handoff_revision = 0;
 static bool s_music_resume_suppressed = false;
@@ -272,6 +273,7 @@ void mcp_worker(void *)
                                 ? AI_MUSIC_ACTION_PLAY : AI_MUSIC_ACTION_RESUME;
                             s_pending_music_action.revision = ++s_music_handoff_revision;
                             s_music_resume_suppressed = false;
+                            if (job.tool == xiaozhi::McpTool::MUSIC_PLAY) s_paused_music.clear();
                             xSemaphoreGive(s_mutex);
                         }
                         res.is_error = false;
@@ -282,6 +284,9 @@ void mcp_worker(void *)
                         if (s_mutex && xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE)
                         {
                             s_music_resume_suppressed = true;
+                            if (job.tool == xiaozhi::McpTool::MUSIC_PAUSE)
+                                s_paused_music.remember(s_suspended_music, music_player_get_control_revision());
+                            else s_paused_music.clear();
                             s_pending_music_action.valid = false;
                             s_suspended_music.resume_after_voice = false;
                             s_pending_music_action.revision = ++s_music_handoff_revision;
@@ -460,6 +465,8 @@ void resume_music_if_needed()
         suspended = s_suspended_music;
         resume_suppressed = s_music_resume_suppressed;
         current_rev = s_music_handoff_revision;
+        if (pending.valid && pending.action.type == AI_MUSIC_ACTION_RESUME)
+            (void)s_paused_music.for_resume(suspended, music_player_get_control_revision(), suspended);
         xSemaphoreGive(s_mutex);
     }
 
@@ -511,6 +518,9 @@ void resume_music_if_needed()
         {
             add_message(false, error[0] ? error : "Không thể thực thi lệnh nhạc hoãn lại");
         }
+        log_i("Xiaozhi: [MUSIC_DEFERRED_RESULT] action=%u success=%u bookmark=%u",
+              static_cast<unsigned>(pending.action.type), success ? 1U : 0U,
+              suspended.valid ? 1U : 0U);
     }
     else if (suspended.valid && suspended.resume_after_voice)
     {
@@ -539,6 +549,12 @@ void resume_music_if_needed()
     {
         if (s_music_handoff_revision == current_rev)
         {
+            if (pending.valid && pending.action.type == AI_MUSIC_ACTION_RESUME)
+            {
+                if (success) s_paused_music.clear();
+                // Failure must not re-stamp an old bookmark after a concurrent
+                // external Stop/source change. Leave its original revision.
+            }
             memset(&s_pending_music_action, 0, sizeof(s_pending_music_action));
             memset(&s_suspended_music, 0, sizeof(s_suspended_music));
             s_music_resume_suppressed = false;
@@ -800,6 +816,9 @@ void handle_music_handoff(const char *tool_name)
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
             s_music_resume_suppressed = true;
+            if (strcmp(tool_name, "self.music.pause") == 0)
+                s_paused_music.remember(s_suspended_music, music_player_get_control_revision());
+            else s_paused_music.clear();
             s_pending_music_action.valid = false;
             s_suspended_music.resume_after_voice = false;
             ++s_music_handoff_revision;
@@ -812,6 +831,7 @@ void handle_music_handoff(const char *tool_name)
         if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) == pdTRUE)
         {
             s_music_resume_suppressed = false;
+            if (strcmp(tool_name, "self.music.play") == 0) s_paused_music.clear();
             ++s_music_handoff_revision;
             xSemaphoreGive(s_mutex);
         }
@@ -968,7 +988,6 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
         }
         else if (disp == McpDispatchResult::DISPATCH_ASYNC)
         {
-            if (strstr(tool_name, "self.music.") == tool_name) handle_music_handoff(tool_name);
             job.generation = generation;
             if (!s_mcp_jobs || xQueueSend(s_mcp_jobs, &job, pdMS_TO_TICKS(50)) != pdTRUE)
             {
@@ -980,6 +999,8 @@ bool handle_text_message(const uint8_t *data, size_t size, uint32_t generation)
                     s_mcp.remember(job.id, err_resp);
                 }
             }
+            else if (strstr(tool_name, "self.music.") == tool_name)
+                handle_music_handoff(tool_name);
         }
         else if (disp == McpDispatchResult::ERROR_OR_REJECTED)
         {
