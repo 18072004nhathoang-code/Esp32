@@ -42,6 +42,10 @@ int main()
     uint32_t timestamp = 0;
     assert(!xiaozhi::unwrap_opus_packet(3, malformed_v3, sizeof(malformed_v3),
                                         &decoded, &decoded_size, &timestamp));
+    assert(!xiaozhi::unwrap_negotiated_opus_packet(
+        3, opus, sizeof(opus), &decoded, &decoded_size, &timestamp));
+    assert(xiaozhi::unwrap_negotiated_opus_packet(
+        1, opus, sizeof(opus), &decoded, &decoded_size, &timestamp));
 
     uint8_t fragment_buffer[16] = {};
     xiaozhi::FragmentAssembler fragments(fragment_buffer, sizeof(fragment_buffer));

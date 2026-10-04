@@ -138,13 +138,13 @@ static void log_scan_driver_event(uint32_t request_id, const char *event, esp_er
 {
     wifi_mode_t mode = WIFI_MODE_NULL;
     const esp_err_t mode_error = esp_wifi_get_mode(&mode);
-    const UBaseType_t stack_words = uxTaskGetStackHighWaterMark(nullptr);
+    const UBaseType_t stack_bytes = uxTaskGetStackHighWaterMark(nullptr);
     log_i("WiFi scan request=%u driver=%s err=%d/%s mode=%d mode_err=%d status=%d heap=%u largest=%u stack_free=%uB stale=%u",
           request_id, event, static_cast<int>(error), esp_err_to_name(error),
           static_cast<int>(mode), static_cast<int>(mode_error), static_cast<int>(WiFi.status()),
           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)),
-          static_cast<unsigned>(stack_words * sizeof(StackType_t)),
+          static_cast<unsigned>(stack_bytes),
           static_cast<unsigned>(scan_driver.stale_event_count()));
 }
 

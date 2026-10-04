@@ -116,7 +116,7 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 | **WiFi_Manager** | **Core 0** | **2** | Một worker sở hữu radio/NVS; scan có request ID và trạng thái `QUEUED/WAITING_FOR_RADIO/RUNNING/DONE/FAILED/CANCELED`, driver có `STARTING/STOPPING/DRAINING/RECOVERING`, snapshot revision nguyên tử, deadline/retry hữu hạn và loại completion cũ; Disconnect/Forget dùng control mailbox độc lập queue thường. |
 | **Map_Worker** | **Core 0** | **2** | Worker duy nhất tra cache SD/tải HTTPS/giải mã JPEG ping-pong; callback LVGL chỉ gửi request và đọc snapshot trạng thái. |
 | **NetCamWorker** | **Core 0** | **2** | Tải HTTP JPEG Snapshot qua ping-pong double buffer PSRAM, trích xuất metadata thật từ JPEG SOF header. |
-| **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, queue uplink/downlink hữu hạn, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. |
+| **XiaozhiVoice** | **Core 0** | **3** | Kích hoạt bất đồng bộ, WSS session generation, PCM16→Opus 60ms, uplink/downlink xử lý theo batch hữu hạn có backpressure, framing đúng version đã provision, Opus→PCM16 và MCP allowlist; callback mạng không gọi LVGL. Stack 40KB được chọn từ high-water đo bằng byte của ESP-IDF và self-test khóa PTT nếu headroom dưới 4KB. |
 
 ---
 
@@ -191,7 +191,7 @@ hỗ trợ, hủy `yt-dlp`/fetch khi client ESP32 ngắt kết nối và có tim
 
 Status bar dùng giờ SNTP thật theo UTC+7 (`--:--` trước khi đồng bộ); uptime vẫn hiển thị riêng trong System Monitor. SNTP được yêu cầu bất đồng bộ sau khi WiFi có IP và đồng bộ lại khi reconnect, không ghi NVS mỗi giây.
 
-Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan adapter/time service state-machine test, decoder lifecycle và Xiaozhi protocol test. WiFi scan test bao phủ cấu hình zero-init, completion sớm, timeout, stop/drain, event cũ, recovery, OOM/0 AP/cancel, deadline wraparound và scan sau connect sai mật khẩu. Xiaozhi test bao phủ config activation chỉ chấp nhận WSS, activation polling clamp/expiry deadline, hello timeout, disconnect, framing v1/v2/v3, malformed length, WebSocket fragment/overflow, bounded queue, stale/cancel generation, music handoff, MCP allowlist/volume và ACK failure.
+Regression gồm behavioral test, native C++ contract test dùng chung implementation với firmware, fault-injection transaction test, WiFi scan adapter/time service state-machine test, decoder lifecycle và Xiaozhi protocol test. WiFi scan test bao phủ cấu hình zero-init, completion sớm, timeout, stop/drain, event cũ, recovery, OOM/0 AP/cancel, deadline wraparound và scan sau connect sai mật khẩu. Xiaozhi test bao phủ config activation chỉ chấp nhận WSS, activation polling clamp/expiry deadline, hello timeout, disconnect, framing v1/v2/v3 không fallback raw, malformed length, WebSocket fragment/overflow, batch/backpressure hữu hạn, stale/cancel generation, music handoff, MCP allowlist/volume và ACK failure. CI còn encode/decode PCM 60 ms bằng đúng checkout Opus commit đã pin; firmware lặp lại self-test Opus khi task Xiaozhi khởi động và khóa PTT nếu self-test lỗi.
 
 Build ES3C28P dùng Arduino ESP32 `3.20017.241212+sha.dcc1105b` (core 2.0.17). Script `scripts/framework_wifi_patch.py` kiểm tra version và SHA-256 của `WiFiScan.cpp`, `WiFiScan.h`, `WiFiGeneric.cpp`, sau đó build bản sao được quản lý trong `.pio/build`; source package dùng chung trong `.platformio` không bị sửa. Build sẽ dừng rõ ràng nếu framework không còn khớp bản đã audit.
 

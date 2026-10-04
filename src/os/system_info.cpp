@@ -40,7 +40,7 @@ void system_info_update(void)
 
     stats.cpu_freq_mhz = getCpuFrequencyMhz();
     stats.task_count = uxTaskGetNumberOfTasks();
-    stats.loop_stack_free_words = uxTaskGetStackHighWaterMark(nullptr);
+    stats.loop_stack_free_bytes = uxTaskGetStackHighWaterMark(nullptr);
 
     const uint64_t now_us = esp_timer_get_time();
     const uint64_t elapsed_us = now_us - s_last_cpu_sample_us;

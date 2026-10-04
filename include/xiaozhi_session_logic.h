@@ -81,6 +81,12 @@ inline size_t bounded_frame_budget(size_t available_samples,
     return frames < max_frames ? frames : max_frames;
 }
 
+inline size_t bounded_service_batch(size_t pending, size_t max_per_pass)
+{
+    if (max_per_pass == 0) return 0;
+    return pending < max_per_pass ? pending : max_per_pass;
+}
+
 inline bool snapshot_lease_matches(uint32_t expected_gen, uint32_t snapshot_gen)
 {
     return expected_gen == 0 || (snapshot_gen != 0 && snapshot_gen == expected_gen);

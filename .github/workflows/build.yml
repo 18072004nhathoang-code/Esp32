@@ -81,3 +81,6 @@ jobs:
 
       - name: Compile ESP32-S3 Firmware
         run: pio run -e esp32-s3-es3c28p
+
+      - name: Run pinned Opus encode/decode round-trip
+        run: python scripts/run_pinned_opus_test.py --env esp32-s3-es3c28p

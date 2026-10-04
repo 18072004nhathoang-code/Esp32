@@ -187,6 +187,19 @@ inline bool unwrap_opus_packet(uint8_t version, const uint8_t *packet,
     return false;
 }
 
+// A provisioned transport version is authoritative. Falling back to raw v1
+// after a malformed v2/v3 header can turn corrupt framing bytes into audio.
+inline bool unwrap_negotiated_opus_packet(uint8_t negotiated_version,
+                                          const uint8_t *packet,
+                                          size_t packet_size,
+                                          const uint8_t **opus,
+                                          size_t *opus_size,
+                                          uint32_t *timestamp_ms)
+{
+    return unwrap_opus_packet(negotiated_version, packet, packet_size,
+                              opus, opus_size, timestamp_ms);
+}
+
 class FragmentAssembler
 {
 public:

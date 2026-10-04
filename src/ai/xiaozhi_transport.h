@@ -76,6 +76,7 @@ private:
     uint8_t *fragment_storage_;
     xiaozhi::FragmentAssembler *fragment_assembler_;
     std::atomic<bool> connected_;
+    std::atomic<bool> closing_;
     std::atomic<uint32_t> connection_epoch_;
     std::atomic<uint32_t> generation_;
     std::atomic<uint32_t> dropped_uplink_;

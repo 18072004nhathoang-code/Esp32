@@ -19,6 +19,13 @@ int main()
     assert(bounded_frame_budget(1, 960, 2) == 1);
     assert(bounded_frame_budget(0, 960, 2) == 0);
 
+    // Network and TTS work are both bounded per worker pass so cancellation,
+    // recorder ACKs and heartbeats cannot wait behind an entire full queue.
+    assert(bounded_service_batch(20, 2) == 2);
+    assert(bounded_service_batch(1, 2) == 1);
+    assert(bounded_service_batch(0, 2) == 0);
+    assert(bounded_service_batch(8, 0) == 0);
+
     // Cancel remains authoritative even when a command queue cannot accept it.
     assert(cancellation_applies(7, 7));
     assert(cancellation_applies(7, 9));

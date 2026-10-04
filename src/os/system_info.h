@@ -13,7 +13,7 @@ struct SystemStats {
     bool     cpu_usage_available;
     bool     cpu_usage_estimated;
     uint32_t task_count;
-    uint32_t loop_stack_free_words;
+    uint32_t loop_stack_free_bytes;
     uint32_t free_heap;
     uint32_t total_heap;
     uint8_t  heap_usage_percent;
