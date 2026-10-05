@@ -1,4 +1,19 @@
 # ESP32-S3 ES3C28P Touch Display Mini OS Pro Max
+
+## Giao diện trên ESP32: ios-dark-v1
+
+Phong cách tối từ bản thiết kế iPhone được chuyển sang LVGL, không nạp HTML.
+Home có tiêu đề MiniOS, lưới app cuộn và dock có nhãn Music / AI Voice / Settings.
+Lưới hiện có System, WiFi, Map, Camera, Power. Voice Lab, Sensors, Health, About,
+Display và Touch được ẩn khỏi Home; shortcut Display trong Settings cũng ẩn.
+Code/service vẫn được giữ, không xóa chức năng phần cứng. Toàn bộ nút launcher và đóng app có vùng
+chạm tối thiểu 44×44 pixel của LCD. Header 44px chừa vùng nội dung 254px;
+Music và AI Voice dùng kích thước mới, không chồng nội dung lên điều khiển.
+Giữ Be Vietnam Pro, resolution 240×320, rotation 2, typed RGB565, driver/pinout,
+service và cấu hình NVS. Không có dữ liệu minh họa iPhone trong firmware.
+Test production shell bằng LVGL 8.3.11 và font thật trong
+`tests/ui_shell_layout_test.cpp`, chạy qua `scripts/run_lvgl_layout_test.py`.
+Boot log có nhãn `[GUI] UI: ios-dark-v1` để xác nhận đúng bản đã nạp.
 **Kiến trúc:** ES3C28P Hardware Profile • FreeRTOS Multi-tasking • LVGL 8.3.11 • LovyanGFX 1.1.16 DMA • ESP32-audioI2S commit-pinned • SDMMC Storage • XiaoZhi AI Voice
 
 [![Build Status](https://github.com/18072004nhathoang-code/Esp32/actions/workflows/build.yml/badge.svg)](https://github.com/18072004nhathoang-code/Esp32/actions)
@@ -8,6 +23,13 @@
 ---
 
 ## 🚀 1. Tổng quan hệ thống
+
+Điều khiển nhạc SD từ điện thoại qua **Bluetooth BLE** được bật thủ công trong
+Settings, có mã ghép đôi Secure Connections/MITM, giữ nguyên WiFi/hotspot.
+Phát/Pause/Resume/Stop/âm lượng dùng ACK của Music Player, không A2DP. Trang
+điều khiển nằm ở `/ble/` trên backend HTTPS (trình duyệt có Web Bluetooth), hoặc
+dùng app BLE GATT Android/iPhone. [Cấu hình, giao thức và giới hạn](docs/ble-remote.md).
+BLE mặc định tắt sau boot; không tự ghi bonding/NVS hoặc đổi cấu hình WiFi.
 
 Dự án firmware Mini OS Pro Max chỉ hỗ trợ bo mạch ESP32-S3 ES3C28P 2.8" IPS HMI. `esp32-s3-es3c28p` là bản release; các môi trường `music-stress` và `diagnostic` dùng cho kiểm thử.
 
@@ -149,6 +171,13 @@ có SHA-256 `bd8e27eb02720b9d91e59e4f10a90878643219f25ce6a8d9a4f06a8a88d3bb71`
 ---
 
 ## 🛠️ 6. Biên dịch và Nạp Firmware
+
+Trên Windows, `scripts/windows_compile_paths.py` rút gọn tiền tố include của
+framework bằng `-iprefix` / `-iwithprefixbefore` để tránh giới hạn command line
+khi GCC gọi `cc1/cc1plus`. Thứ tự include, cảnh báo, dependency scanner và SDK
+được giữ nguyên; không đổi package, tạo junction hoặc cần tắt antivirus.
+Hook không thay đổi lệnh trên Linux. Kiểm thử helper nằm trong
+`tests/test_windows_include_flags.py` và chạy cùng release-tool tests của CI.
 
 ```bash
 # Biên dịch firmware cho bo mạch ES3C28P 2.8" IPS HMI (Shopee / Xiaozhi)

@@ -14,6 +14,14 @@
 #include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 #include <Preferences.h>
+#include "home_gesture.h"
+#include "ui_performance.h"
+static ui_performance::Histogram perf_touch,perf_wait,perf_render,perf_flush,perf_frame,perf_response;
+static uint32_t last_frame_us=0,press_us=0;
+static bool was_pressed=false;
+static HomeGesture home_gesture;
+static bool home_requested=false;
+bool lvgl_port_take_home_gesture() {bool v=home_requested;home_requested=false;return v;}
 
 // Khởi tạo đối tượng LovyanGFX toàn cục
 LGFX gfx;
@@ -57,6 +65,7 @@ static bool software_red_blue_swap_required(void)
 /* Callback đẩy dữ liệu pixel từ LVGL sang màn hình bằng DMA qua LovyanGFX */
 static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p)
 {
+    const uint32_t flush_start=micros();
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
@@ -84,6 +93,12 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
         }
     }
     gfx.endWrite();
+    const uint32_t finished=micros();perf_flush.add(finished-flush_start);
+    if(lv_disp_flush_is_last(disp)) {
+        if(last_frame_us && finished-last_frame_us<250000)perf_frame.add(finished-last_frame_us);
+        last_frame_us=finished;
+        if(press_us){perf_response.add(finished-press_us);press_us=0;}
+    }
 
     // Báo cho LVGL biết hoàn tất lượt flush
     lv_disp_flush_ready(disp);
@@ -93,7 +108,11 @@ static void disp_flush_cb(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t
 static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
 {
     uint16_t touchX = 0, touchY = 0;
+    const uint32_t read_start=micros();
     bool touched = shared_i2c_touch_read(&touchX, &touchY);
+    perf_touch.add(micros()-read_start);
+    if(touched && !was_pressed)press_us=micros();
+    was_pressed=touched;
 
     SharedTouchSnapshot snap = {};
     const bool has_snap = shared_i2c_touch_get_snapshot(&snap);
@@ -127,6 +146,7 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
         {
             // Đánh thức màn hình sáng trở lại 100% ngay tức thì
             power_manager_wake();
+            home_gesture.reset();
 
             // Chặn sự kiện chạm này để không kích hoạt nút bấm bên dưới
             data->state = LV_INDEV_STATE_REL;
@@ -136,12 +156,14 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
         // 2. Nếu đang trong trạng thái chặn sau khi vừa đánh thức và người dùng chưa nhấc tay ra
         if (power_manager_should_suppress_touch())
         {
+            home_gesture.reset();
             data->state = LV_INDEV_STATE_REL;
             return;
         }
 
         // 3. Trạng thái bình thường (ACTIVE): Reset Inactivity Timer và gửi sự kiện nhấn
         power_manager_feed_activity();
+        if(home_gesture.sample(true,touchX,touchY)) {data->state=LV_INDEV_STATE_REL;return;}
         data->state = LV_INDEV_STATE_PR;
         data->point.x = touchX;
         data->point.y = touchY;
@@ -150,6 +172,8 @@ static void touchpad_read_cb(lv_indev_drv_t *indev, lv_indev_data_t *data)
     {
         // Người dùng đã nhấc ngón tay ra khỏi màn hình -> giải phóng cờ chặn
         power_manager_clear_touch_suppression();
+        home_gesture.sample(false,0,0);
+        if(home_gesture.fired) home_requested=true;
         data->state = LV_INDEV_STATE_REL;
     }
 }
@@ -189,11 +213,22 @@ static void lvgl_render_task(void *pvParameters)
             continue;
         }
 
+        const uint32_t wait_started=micros();
         if (lvgl_port_lock(20))
         {
+            perf_wait.add(micros()-wait_started);
+            const uint32_t render_started=micros();
             if (lvgl_owner_hook) lvgl_owner_hook();
             // lv_timer_handler tính toán animations, vẽ lại các widget cần cập nhật
             lv_timer_handler();
+            perf_render.add(micros()-render_started);
+            static uint32_t report_ms=0;
+            if(millis()-report_ms>=10000) {
+                report_ms=millis();
+                Serial.printf("[UI_PERF] cumulative_ms_p95 touch=%u lock=%u render=%u flush=%u active_frame=%u press_next_flush=%u frames=%u presses=%u render_max_us=%u stalls=%u heap=%u largest=%u\n",
+                    perf_touch.p95_ms(),perf_wait.p95_ms(),perf_render.p95_ms(),perf_flush.p95_ms(),perf_frame.p95_ms(),perf_response.p95_ms(),perf_frame.count,perf_response.count,perf_render.max_us,perf_render.over_200ms,
+                    heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT));
+            }
             lvgl_port_unlock();
         }
         
@@ -284,7 +319,9 @@ bool lvgl_port_init(void)
     }
 
     // Flush waits for DMA completion, so a second buffer only consumes internal RAM.
-    size_t buffer_size = DISP_HOR_RES * DISP_BUF_LINES * sizeof(lv_color_t);
+    static_assert(DISP_BUF_LINES > 0 && DISP_BUF_LINES <= DISP_VER_RES,
+                  "DMA strip must fit the unchanged display geometry");
+    const size_t buffer_size = display_dma::bytes(DISP_HOR_RES, DISP_BUF_LINES, sizeof(lv_color_t));
     disp_buf1 = (lv_color_t *)heap_caps_malloc(buffer_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
     if (!disp_buf1)
@@ -296,6 +333,8 @@ bool lvgl_port_init(void)
     }
 
     lv_disp_draw_buf_init(&draw_buf, disp_buf1, nullptr, DISP_HOR_RES * DISP_BUF_LINES);
+    Serial.printf("[LCD] DMA strip: %u lines, %u internal bytes\n",
+                  static_cast<unsigned>(DISP_BUF_LINES), static_cast<unsigned>(buffer_size));
 
     // Cấu hình Display Driver (Giữ đầu ra RGB565, không bật screen_transp trên display driver)
     lv_disp_drv_init(&disp_drv);
@@ -311,8 +350,8 @@ bool lvgl_port_init(void)
     // Be Vietnam Pro is the default UI font. Its descriptor falls back to
     // Montserrat only for LVGL symbols absent from the Vietnamese font.
     lv_theme_t *theme = lv_theme_default_init(display,
-                                               lv_palette_main(LV_PALETTE_CYAN),
-                                               lv_palette_main(LV_PALETTE_BLUE),
+                                               lv_color_hex(COLOR_ACCENT_BLUE),
+                                               lv_color_hex(COLOR_ACCENT_PURPLE),
                                                true,
                                                UI_FONT_BODY);
     lv_disp_set_theme(display, theme);

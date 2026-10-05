@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mini OS — Điều khiển BLE</title>
+<style>
+:root{color-scheme:dark;--bg:#0a0d14;--card:#141a26;--text:#fff;--secondary:#cbd5e1;--accent:#00f2fe;--error:#ff889c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+main{max-width:480px;margin:auto;padding:24px 16px 40px}h1{font-size:24px;margin:0 0 8px}h2{font-size:18px}
+p{color:var(--secondary)}section{background:var(--card);border:1px solid #334155;border-radius:16px;padding:16px;margin:16px 0}
+button,input{font:inherit}button{min-height:48px;padding:10px 12px;border:1px solid #475569;border-radius:10px;background:#1e2638;color:var(--text);cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:3px}button:disabled{opacity:.5;cursor:default}
+button.primary{color:#061014;background:var(--accent);border-color:var(--accent)}button.stop{border-color:var(--error)}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0}label{display:block;margin:12px 0 6px}
+input[type=number]{width:100%;min-height:48px;border:1px solid #475569;border-radius:8px;padding:8px;background:var(--bg);color:var(--text)}
+input[type=range]{width:100%;height:44px;accent-color:var(--accent)}dl{display:grid;grid-template-columns:100px 1fr;gap:8px;margin:0}dt{color:var(--secondary)}dd{margin:0;overflow-wrap:anywhere}
+#feedback{min-height:48px;overflow-wrap:anywhere}.error{color:var(--error)}small{color:var(--secondary)}
+</style>
+<main>
+<h1>Mini OS · Bluetooth BLE</h1>
+<p>Điều khiển nhạc thẻ SD. WiFi/hotspot giữ nguyên; đây không phải loa A2DP.</p>
+<section>
+<p>Mở <strong>Settings → Điều khiển nhạc qua BLE</strong> trên ESP32 rồi bật BLE. Khi điện thoại hỏi mã, nhập 6 chữ số hiển thị trên ESP32.</p>
+<div class="row"><button class="primary" id="connect">Kết nối ESP32</button><button id="disconnect" disabled>Ngắt kết nối</button></div>
+<div id="feedback" role="status" aria-live="polite">Chưa kết nối.</div>
+</section>
+<section>
+<h2>Trạng thái từ thiết bị</h2>
+<dl><dt>Nhạc</dt><dd id="music">—</dd><dt>Bài SD</dt><dd id="track">—</dd><dt>Thời gian</dt><dd id="time">—</dd><dt>Âm lượng</dt><dd id="volumeState">—</dd><dt>WiFi</dt><dd id="wifi">—</dd><dt>AI</dt><dd id="ai">—</dd></dl>
+<button id="refresh" disabled style="width:100%;margin-top:16px">Đọc lại trạng thái</button>
+</section>
+<section id="controls" aria-busy="false">
+<h2>Nhạc thẻ SD</h2>
+<label for="index">Bài số (bắt đầu từ 1)</label><input id="index" type="number" min="1" step="1" value="1" disabled>
+<div class="row"><button data-op="play" disabled>Phát bài SD</button><button data-op="pause" disabled>Tạm dừng</button></div>
+<div class="row"><button data-op="resume" disabled>Tiếp tục</button><button data-op="stop" class="stop" disabled>Dừng nhạc</button></div>
+<div class="row"><button data-op="previous" disabled>Bài trước</button><button data-op="next" disabled>Bài tiếp</button></div>
+<label for="volume">Âm lượng: <output id="volumeValue">50%</output></label>
+<input id="volume" type="range" min="0" max="100" value="50" disabled>
+<button data-op="volume" disabled style="width:100%">Áp dụng âm lượng</button>
+<p><small>Lệnh chỉ thành công sau ACK của trình phát. Khi AI đang hỏi/đáp, chờ lượt thoại hoàn tất. Không tự gửi lại lệnh sau timeout.</small></p>
+</section>
+<p>Web Bluetooth cần HTTPS và trình duyệt có hỗ trợ (ví dụ Chrome Android). Nếu không có Web Bluetooth, dùng ứng dụng BLE GATT theo <a href="./guide.txt" style="color:var(--accent)">hướng dẫn giao thức</a>. Không có âm thanh điện thoại truyền qua trang này.</p>
+</main>
+<script type="module">
+import {Remote,OP,resultMessage} from './remote.mjs';
+const $=id=>document.getElementById(id);
+let connected=false,busy=false,deviceBusy=false,available=false,tracks=0;
+const supported=!!navigator.bluetooth&&window.isSecureContext;
+function message(text,error=false){$('feedback').textContent=text;$('feedback').classList.toggle('error',error)}
+function updateControls(){
+ $('connect').disabled=busy||connected||!supported;$('disconnect').disabled=!connected;
+ $('refresh').disabled=!connected||busy;
+ document.querySelectorAll('#controls button,#controls input').forEach(el=>el.disabled=!connected||busy||deviceBusy||!available);
+ $('controls').setAttribute('aria-busy',String(busy));
+}
+function receive(s){
+ deviceBusy=s.busy;available=s.available;tracks=s.tracks;
+ $('music').textContent=!s.available?'Không khả dụng':s.paused?'Tạm dừng':s.playing?'Đang phát':'Đã dừng';
+ $('track').textContent=s.sd?`${s.track<0?'Nguồn Internet':s.track+1} / ${s.tracks} bài`:'Thẻ SD không khả dụng';
+ $('index').max=String(Math.max(1,s.tracks));
+ $('time').textContent=`${s.position}s / ${s.duration ? s.duration+'s' : 'chưa xác định'}`;
+ $('volumeState').textContent=s.available?s.volume+'%':'Không khả dụng';
+ $('wifi').textContent=s.wifi?'Đã nối':'Chưa nối';
+ $('ai').textContent=s.busy?'Đang dùng âm thanh':'Không giữ phiên âm thanh';updateControls();
+}
+const remote=new Remote(receive,()=>{connected=false;deviceBusy=false;message('Mất kết nối BLE. Bấm kết nối lại.',true);updateControls()});
+async function run(action){busy=true;updateControls();try{await action()}catch(e){message(e.message,true)}finally{busy=false;updateControls()}}
+$('connect').onclick=()=>run(async()=>{
+ if(!window.isSecureContext)throw new Error('Cần mở trang qua HTTPS. Không dùng HTTP IP điện thoại.');
+ message('Chọn MiniOS; nhập mã ghép đôi trên màn hình ESP32 khi được hỏi.');
+ await remote.connect(navigator.bluetooth);connected=true;message('Đã kết nối BLE.');
+});
+$('disconnect').onclick=()=>{remote.disconnect();connected=false;deviceBusy=false;message('Đã ngắt BLE; nhạc không tự dừng.');updateControls()};
+$('refresh').onclick=()=>run(async()=>{const s=await remote.refresh();message(resultMessage[s.result])});
+$('volume').oninput=()=>{$('volumeValue').textContent=$('volume').value+'%'};
+document.querySelectorAll('[data-op]').forEach(button=>button.onclick=()=>run(async()=>{
+ const op=button.dataset.op;
+ let value=op==='play'?Number($('index').value)-1:op==='volume'?Number($('volume').value):0;
+ if(op==='play'&&(!Number.isInteger(value)||value<0||value>=tracks))throw new Error('Chọn một bài SD trong danh sách thiết bị.');
+ message('Đang chờ thiết bị thực hiện...');
+ const s=await remote.send(OP[op],value);message(resultMessage[s.result]);
+}));
+window.addEventListener('pagehide',()=>remote.disconnect());
+if(!navigator.bluetooth||!window.isSecureContext){$('connect').disabled=true;message('Trang cần HTTPS và trình duyệt Web Bluetooth. Dùng ứng dụng BLE GATT nếu điện thoại không hỗ trợ.',true)}
+</script>
+</html>

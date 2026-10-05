@@ -50,8 +50,13 @@ shipped by LovyanGFX and TJpg_Decoder.
 
 - `src/ai/transport_ws.c` is an Apache-2.0 Espressif WebSocket transport source
   retained locally for the Arduino-ESP32 2.0.17 transport API. The audited file
-  SHA-256 is `34cd86f0f17c771861c1aefc651b9e89c65bb22799b5f45f0b791bf201b02770`;
+  SHA-256 (canonical LF text) is `fee2c84ffddc40281b0f28a0d1a94f3b8cca22b20d0f6c9249b47720db1ba714`;
   its copyright and license header are preserved in the file.
+  The HEAD merge's allocation-failure guard destroys the newly allocated
+  transport if `calloc(transport_ws_t)` fails, before callbacks/context or the
+  parent foundation are attached. That three-line cleanup change was reviewed;
+  the transport source is not modified by the BLE feature. CRLF checkout changes
+  alone are canonicalized by the verifier; any code/whitespace change still fails.
 - `scripts/framework_wifi_patch.py` generates build-directory-only adaptations
   from Arduino-ESP32 package `3.20017.241212+sha.dcc1105b`. It verifies exact
   SHA-256 values for `WiFiScan.cpp`, `WiFiScan.h` and `WiFiGeneric.cpp` before

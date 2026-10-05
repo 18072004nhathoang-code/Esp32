@@ -12,6 +12,7 @@ compile_and_run() {
 }
 
 compile_and_run native_contract tests/native_contract_test.cpp
+compile_and_run navigation tests/navigation_test.cpp
 compile_and_run service_logic tests/service_logic_test.cpp src/core/service_state_logic.cpp
 compile_and_run fault_injection tests/fault_injection_test.cpp src/core/service_state_logic.cpp
 compile_and_run music_decoder_lifecycle tests/music_decoder_lifecycle_test.cpp
@@ -21,9 +22,13 @@ compile_and_run wifi_scan_adapter tests/wifi_scan_adapter_test.cpp
 compile_and_run xiaozhi_protocol tests/xiaozhi_protocol_test.cpp
 compile_and_run xiaozhi_session_logic tests/xiaozhi_session_logic_test.cpp
 compile_and_run system_defects_regression tests/system_defects_regression_test.cpp
+compile_and_run ble_remote tests/ble_remote_test.cpp src/connectivity/ble_remote_logic.cpp
 
 compile_and_run xiaozhi_transport -Itests/mocks/xiaozhi -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src -fsanitize=address,undefined -fno-sanitize-recover=all tests/xiaozhi_transport_test.cpp src/ai/xiaozhi_transport.cpp
 compile_and_run xiaozhi_mcp -Itests/mocks/xiaozhi -Isrc/ai -I.pio/libdeps/esp32-s3-es3c28p/ArduinoJson/src -fsanitize=address,undefined -fno-sanitize-recover=all tests/xiaozhi_mcp_test.cpp src/ai/xiaozhi_mcp.cpp
 compile_and_run tls_memory -Itests/mocks/tls -Isrc/core -fsanitize=address,undefined -fno-sanitize-recover=all tests/tls_memory_test.cpp src/core/tls_memory.cpp
+
+# Actual pinned LVGL and production fonts/layout, not a geometry JS model.
+python3 scripts/run_lvgl_layout_test.py
 
 echo "All native firmware tests passed."

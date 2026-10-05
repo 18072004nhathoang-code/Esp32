@@ -169,7 +169,7 @@ static bool enqueue_music_command(const MusicCommand &cmd)
         return false;
     }
     if (cmd.type == MUSIC_CMD_PLAY_INDEX || cmd.type == MUSIC_CMD_PLAY_STREAM ||
-        cmd.type == MUSIC_CMD_STOP)
+        cmd.type == MUSIC_CMD_STOP || cmd.type == MUSIC_CMD_PAUSE)
         music_control_revision.fetch_add(1, std::memory_order_acq_rel);
     return true;
 }

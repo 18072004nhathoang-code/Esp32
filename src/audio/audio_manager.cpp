@@ -1492,7 +1492,7 @@ static void audio_background_task(void *pvParameters)
 
         // 0b. Nếu I2S đang được Music Player hoặc AI Voice sử dụng hoặc driver chưa cài đặt, nhường bus hoàn toàn
         const AudioOwner current_owner = audio_get_current_owner();
-        if (current_owner == AUDIO_OWNER_MUSIC || current_owner == AUDIO_OWNER_AI_VOICE || !audio_is_driver_installed())
+        if (current_owner == AUDIO_OWNER_MUSIC || current_owner == AUDIO_OWNER_AI_VOICE || current_owner == AUDIO_OWNER_NAVIGATION || !audio_is_driver_installed())
         {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;

@@ -270,7 +270,7 @@ void ai_voice_app_open(lv_obj_t *parent)
     // 1. KHUNG HỘI THOẠI BONG BÓNG CHAT
     // =========================================================================
     lv_coord_t b_bar_h = (DISP_VER_RES <= 240) ? 52 : 64;
-    lv_coord_t chat_h = (DISP_VER_RES - 54) - b_bar_h;
+    lv_coord_t chat_h = APP_CONTENT_HEIGHT - b_bar_h;
 
     chat_container = lv_obj_create(main_container);
     lv_obj_set_size(chat_container, DISP_HOR_RES, chat_h);

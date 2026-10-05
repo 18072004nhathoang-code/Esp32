@@ -7,6 +7,12 @@
 namespace ble_remote {
 constexpr size_t kCommandBytes = 6;
 constexpr size_t kStatusBytes = 20;
+constexpr bool startup_ram_ok(size_t free_bytes, size_t largest) {
+    return free_bytes >= 72U * 1024U && largest >= 32U * 1024U;
+}
+constexpr bool runtime_ram_ok(size_t free_bytes, size_t largest) {
+    return free_bytes >= 32U * 1024U && largest >= 12U * 1024U;
+}
 enum class Op : uint8_t { Play = 1, Pause, Resume, Stop, Volume, Status, Next, Previous };
 enum class Result : uint8_t { Status = 0, Applied, Invalid, Busy, NotConfirmed, Unavailable };
 struct Command { Op op; uint16_t id; uint16_t value; };
@@ -22,8 +28,7 @@ struct State {
     uint16_t tracks = 0;
     uint32_t position = 0;
     uint32_t duration = 0;
-    uint8_t ai = 0;
-    int8_t rssi = 0;
+    uint32_t session = 0; // wire generation: rejects stale notifications after reconnect
 };
 bool decode(const uint8_t *data, size_t length, Command &out);
 void encode(const State &state, uint16_t id, Result result, uint8_t out[kStatusBytes]);

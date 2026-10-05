@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <lvgl.h>
 #include "LGFX_Config.hpp"
+#include "display_dma_policy.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -24,7 +25,7 @@
 // Số dòng cho mỗi DMA Buffer (Internal SRAM)
 #ifndef DISP_BUF_LINES
 #if (DISP_HOR_RES <= 320)
-#define DISP_BUF_LINES 40   // 320 * 40 * 2 = 25.6 KB
+#define DISP_BUF_LINES display_dma::kPortraitLines
 #else
 #define DISP_BUF_LINES 30   // 480 * 30 * 2 = 28.8 KB
 #endif
@@ -57,6 +58,7 @@ bool lvgl_port_init(void);
 /** Called by the LVGL owner task before lv_timer_handler(). */
 typedef void (*LvglOwnerHook)(void);
 void lvgl_port_set_owner_hook(LvglOwnerHook hook);
+bool lvgl_port_take_home_gesture();
 
 /** Snapshot LVGL's fixed pool without exposing LVGL internals to apps. */
 bool lvgl_port_get_memory_stats(uint32_t *free_bytes, uint32_t *largest_free_bytes,

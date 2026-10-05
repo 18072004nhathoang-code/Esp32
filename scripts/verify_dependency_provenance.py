@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRANSPORT_SHA256 = "34cd86f0f17c771861c1aefc651b9e89c65bb22799b5f45f0b791bf201b02770"
+TRANSPORT_SHA256 = "fee2c84ffddc40281b0f28a0d1a94f3b8cca22b20d0f6c9249b47720db1ba714"
 AUDIO_UPSTREAM_COMMIT = "928c420d49fce2a09fa91f490b9fcabed6447c67"
 AUDIO_PATCH_VERSION = "2.0.0-mini-os.1"
 
@@ -19,9 +19,15 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(message)
 
 
+def canonical_source_sha256(data: bytes) -> str:
+    # Git may check out a text source as CRLF on Windows. Only canonicalize
+    # that exact newline encoding: never strip whitespace or normalize code.
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def main() -> int:
     transport = ROOT / "src/ai/transport_ws.c"
-    transport_hash = hashlib.sha256(transport.read_bytes()).hexdigest()
+    transport_hash = canonical_source_sha256(transport.read_bytes())
     require(transport_hash == TRANSPORT_SHA256,
             "transport_ws.c changed; audit it and update its recorded SHA-256")
 

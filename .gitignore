@@ -38,3 +38,7 @@ backend/node_modules/
 # Backup files
 *.bak
 *.backup
+android-companion/.gradle/
+android-companion/**/build/
+android-companion/**/.cxx/
+android-companion/local.properties

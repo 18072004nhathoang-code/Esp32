@@ -1,12 +1,15 @@
 /**
  * @file ui_manager.cpp
  * @brief Giao diện hệ điều hành Mini OS responsive, tối ưu 240x320 portrait.
- * Phong cách TikTok / Modern Mobile OS: Dynamic Status Bar, Grid 3 cột, Floating Bottom Dock,
- * Card bo góc Squircle, Dark Mode Obsidian và chuyển cảnh mượt mà.
+ * iPhone-inspired dark surfaces, Vietnamese text and labeled launchers.
  */
 
 #include "ui_manager.h"
 #include "ui_theme.h"
+#include "ui_shell.h"
+#include "ui_app_catalog.h"
+#include "navigation_view.h"
+#include "ble_settings_layout.h"
 #include "color_test.h"
 #include "touch_debug.h"
 #include "../display/lvgl_port.h"
@@ -24,6 +27,7 @@
 #include "../os/time_service.h"
 #include "../os/power_manager.h"
 #include "../os/settings_service.h"
+#include "../connectivity/ble_remote_service.h"
 #include "../storage/storage_manager.h"
 #include "shared_i2c_bus.h"
 #include "../camera/camera_service.h"
@@ -67,6 +71,41 @@ static lv_obj_t *slider_brightness = nullptr;
 static lv_obj_t *lbl_brightness_val = nullptr;
 static lv_obj_t *lbl_settings_status = nullptr;
 static lv_obj_t *sw_wifi_reconnect = nullptr;
+static lv_obj_t *lbl_ble_status = nullptr;
+static lv_obj_t *btn_ble_toggle = nullptr;
+static lv_obj_t *lbl_ble_toggle = nullptr;
+
+static void update_ble_settings()
+{
+    if (!lbl_ble_status || !btn_ble_toggle || !lbl_ble_toggle) return;
+    const BleRemoteSnapshot ble = ble_remote_snapshot();
+    const char *state = "Đã tắt";
+    switch (ble.phase) {
+        case BleRemotePhase::Off: break;
+        case BleRemotePhase::Starting: state = "Đang bật..."; break;
+        case BleRemotePhase::Advertising: state = "Sẵn sàng ghép đôi"; break;
+        case BleRemotePhase::Pairing: state = "Ghép đôi trên điện thoại"; break;
+        case BleRemotePhase::Connected: state = "Đã kết nối bảo mật"; break;
+        case BleRemotePhase::Stopping: state = "Đang tắt..."; break;
+        case BleRemotePhase::Error: state = ble.error; break;
+    }
+    if (ble.passkey_visible)
+        lv_label_set_text_fmt(lbl_ble_status, "%s\n%s\nMã: %06lu", ble.name, state,
+                              static_cast<unsigned long>(ble.passkey));
+    else
+        lv_label_set_text_fmt(lbl_ble_status, "%s\n%s", ble.name, state);
+    lv_obj_set_style_text_color(lbl_ble_status,
+        lv_color_hex(ble.phase == BleRemotePhase::Error ? COLOR_ACCENT_RED : COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(lbl_ble_toggle, ble.requested ? "Tắt Bluetooth BLE" : "Bật Bluetooth BLE");
+    if (ble.phase == BleRemotePhase::Stopping) lv_obj_add_state(btn_ble_toggle, LV_STATE_DISABLED);
+    else lv_obj_clear_state(btn_ble_toggle, LV_STATE_DISABLED);
+}
+
+static void ble_toggle_event(lv_event_t *)
+{
+    ble_remote_set_enabled(!ble_remote_snapshot().requested);
+    update_ble_settings();
+}
 
 // Widget của Power Manager App
 static lv_obj_t *lbl_power_state = nullptr;
@@ -86,23 +125,6 @@ static QueueHandle_t app_open_ack_queue = nullptr;
 static SemaphoreHandle_t app_open_rpc_mutex = nullptr;
 static uint32_t next_app_open_request_id = 0;
 
-enum AppID : uintptr_t {
-    APP_NONE = 0,
-    APP_SYSTEM = 1,
-    APP_SETTINGS = 2,
-    APP_WIFI = 3,
-    APP_ABOUT = 4,
-    APP_MAP = 5,
-    APP_TOOLS = 6,
-    APP_AUDIO = 7,
-    APP_MUSIC = 8,
-    APP_AI_VOICE = 9,
-    APP_CAMERA = 10,
-    APP_POWER = 11,
-    APP_HEALTH = 12,
-    APP_COLOR_TEST = 13,
-    APP_TOUCH_DEBUG = 14
-};
 struct AppOpenRequest
 {
     AppID app;
@@ -112,6 +134,9 @@ struct AppOpenRequest
 struct AppOpenAck { uint32_t request_id; bool opened; };
 static AppID active_app = APP_NONE;
 static bool wifi_app_ever_opened = false;
+static navigation_ui::View navigation_view;
+static bool show_navigation=false;
+static uint32_t navigation_opened_session=0;
 
 // Khai báo trước các hàm mở app
 static void open_system_monitor_app(void);
@@ -158,8 +183,8 @@ static bool request_app_open(AppID app, uint32_t timeout_ms)
 
 static void apply_accent_theme(void)
 {
-    if (dock_bar) lv_obj_set_style_border_color(dock_bar, theme_accent, 0);
-    if (app_title_lbl) lv_obj_set_style_text_color(app_title_lbl, theme_accent, 0);
+    if (dock_bar) lv_obj_set_style_border_color(dock_bar, lv_color_hex(COLOR_DOCK_BORDER), 0);
+    if (app_title_lbl) lv_obj_set_style_text_color(app_title_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
     if (lbl_wifi_icon && wifi_manager_is_connected())
         lv_obj_set_style_text_color(lbl_wifi_icon, theme_accent, 0);
 }
@@ -333,16 +358,16 @@ static void create_status_bar(void)
     lv_obj_set_style_radius(status_bar, 0, 0);
     lv_obj_set_style_border_width(status_bar, 1, 0);
     lv_obj_set_style_border_side(status_bar, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_set_style_border_color(status_bar, lv_color_hex(0x1F293D), 0);
-    lv_obj_set_style_bg_color(status_bar, lv_color_hex(0x0C101A), 0);
-    lv_obj_set_style_bg_grad_color(status_bar, lv_color_hex(0x06080E), 0);
-    lv_obj_set_style_bg_grad_dir(status_bar, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_border_color(status_bar, lv_color_hex(COLOR_CARD_BORDER), 0);
+    lv_obj_set_style_bg_color(status_bar, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_grad_dir(status_bar, LV_GRAD_DIR_NONE, 0);
     lv_obj_clear_flag(status_bar, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_hor(status_bar, 6, 0);
     lv_obj_set_style_pad_ver(status_bar, 1, 0);
 
     // Live status dot
     lv_obj_t *dot = lv_obj_create(status_bar);
+    lv_obj_add_flag(dot,LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_size(dot, 6, 6);
     lv_obj_set_style_radius(dot, 3, 0);
     lv_obj_set_style_bg_color(dot, lv_color_hex(COLOR_ACCENT_CYAN), 0);
@@ -361,6 +386,7 @@ static void create_status_bar(void)
     lv_obj_align(lbl_clock, LV_ALIGN_LEFT_MID, 12, 0);
 
     lbl_ram_pill = lv_label_create(status_bar);
+    lv_obj_add_flag(lbl_ram_pill,LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(lbl_ram_pill, "RAM --K");
     lv_obj_set_style_text_color(lbl_ram_pill, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_ram_pill, UI_FONT_SMALL, 0);
@@ -411,129 +437,16 @@ static void create_status_bar(void)
     }
 }
 
-/* =========================================================================
- * 2. TẠO APP ICON SQUIRCLE CHO GRID 3 CỘT PORTRAIT
- * ========================================================================= */
-static void create_grid_app_icon(lv_obj_t *parent, const char *symbol, const char *title, lv_color_t accent, uintptr_t app_id, int col, int row)
-{
-    int col_width = SCREEN_WIDTH / 3;
-    int x = col * col_width + (col_width - 66) / 2;
-    int y = 6 + row * 64;
-
-    lv_obj_t *container = lv_obj_create(parent);
-    lv_obj_set_size(container, 66, 62);
-    lv_obj_set_pos(container, x, y);
-    lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(container, 0, 0);
-    lv_obj_set_style_pad_all(container, 0, 0);
-    lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *btn = lv_btn_create(container);
-    lv_obj_set_size(btn, APP_ICON_BOX_SIZE, APP_ICON_BOX_SIZE);
-    lv_obj_align(btn, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_radius(btn, APP_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(0x182030), LV_OPA_20), 0);
-    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x0C101A), 0);
-    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(btn, accent, 0);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
-    lv_obj_set_style_shadow_width(btn, 8, 0);
-    lv_obj_set_style_shadow_color(btn, accent, 0);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
-    lv_obj_add_event_cb(btn, app_icon_event_cb, LV_EVENT_CLICKED, (void *)app_id);
-
-    lv_obj_t *lbl_sym = lv_label_create(btn);
-    lv_label_set_text(lbl_sym, symbol);
-    lv_obj_set_style_text_color(lbl_sym, accent, 0);
-    lv_obj_set_style_text_font(lbl_sym, UI_FONT_14, 0);
-    lv_obj_center(lbl_sym);
-
-    lv_obj_t *lbl_title = lv_label_create(container);
-    lv_label_set_text(lbl_title, title);
-    lv_obj_set_style_text_color(lbl_title, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(lbl_title, UI_FONT_12, 0);
-    lv_obj_align(lbl_title, LV_ALIGN_BOTTOM_MID, 0, 0);
-}
-
-/* =========================================================================
- * 3. TẠO ICON CHO FLOATING DOCK
- * ========================================================================= */
-static void create_dock_icon(lv_obj_t *parent, const char *symbol, lv_color_t accent, uintptr_t app_id, int x_pos)
-{
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_size(btn, DOCK_ICON_BOX_SIZE, DOCK_ICON_BOX_SIZE);
-    lv_obj_set_pos(btn, x_pos, 4);
-    lv_obj_set_style_radius(btn, DOCK_ICON_RADIUS, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_mix(accent, lv_color_hex(COLOR_DOCK_BG), LV_OPA_20), 0);
-    lv_obj_set_style_bg_grad_color(btn, lv_color_hex(0x0A0D14), 0);
-    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(btn, accent, 0);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_opa(btn, LV_OPA_70, 0);
-    lv_obj_set_style_shadow_width(btn, 6, 0);
-    lv_obj_set_style_shadow_color(btn, accent, 0);
-    lv_obj_set_style_shadow_opa(btn, LV_OPA_30, 0);
-    lv_obj_add_event_cb(btn, app_icon_event_cb, LV_EVENT_CLICKED, (void *)app_id);
-
-    lv_obj_t *lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, symbol);
-    lv_obj_set_style_text_color(lbl, accent, 0);
-    lv_obj_set_style_text_font(lbl, UI_FONT_14, 0);
-    lv_obj_center(lbl);
-}
-
-/* =========================================================================
- * 4. TẠO MÀN HÌNH HOME PORTRAIT VÀ DOCK NỔI
- * ========================================================================= */
+/* Compact launcher; hidden apps retain their implementation and stable IDs. */
 static void create_desktop(void)
 {
-    desktop_view = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(desktop_view, SCREEN_WIDTH, SCREEN_HEIGHT - STATUS_BAR_HEIGHT);
-    lv_obj_align(desktop_view, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_radius(desktop_view, 0, 0);
-    lv_obj_set_style_border_width(desktop_view, 0, 0);
-    lv_obj_set_style_bg_color(desktop_view, lv_color_hex(0x131A29), 0);
-    lv_obj_set_style_bg_grad_color(desktop_view, lv_color_hex(0x06080E), 0);
-    lv_obj_set_style_bg_grad_dir(desktop_view, LV_GRAD_DIR_VER, 0);
-    lv_obj_clear_flag(desktop_view, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_pad_all(desktop_view, 0, 0);
-
-    // Lưới 3 cột x 3 hàng cân đối 9 icon (hoàn chỉnh, không khuyết ô)
-    create_grid_app_icon(desktop_view, LV_SYMBOL_CHARGE,   "System",    lv_color_hex(COLOR_ACCENT_CYAN),   APP_SYSTEM,      0, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_AUDIO,    "AI Voice",  lv_color_hex(COLOR_ACCENT_CYAN),   APP_AI_VOICE,    1, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_PLAY,     "Voice Lab", lv_color_hex(COLOR_ACCENT_BLUE),   APP_AUDIO,       2, 0);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_SETTINGS, "Settings",  lv_color_hex(COLOR_ACCENT_AMBER),  APP_SETTINGS,    0, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_POWER,    "Power",     lv_color_hex(COLOR_ACCENT_GREEN),  APP_POWER,       1, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EYE_OPEN, "Sensors",   lv_color_hex(COLOR_ACCENT_PURPLE), APP_TOOLS,       2, 1);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_LIST,     "About",     lv_color_hex(COLOR_TEXT_SECONDARY),APP_ABOUT,       0, 2);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_IMAGE,    "Display",   lv_color_hex(COLOR_ACCENT_RED),    APP_COLOR_TEST,  1, 2);
-    create_grid_app_icon(desktop_view, LV_SYMBOL_EDIT,     "Touch",     lv_color_hex(COLOR_ACCENT_CYAN),   APP_TOUCH_DEBUG, 2, 2);
-
-    // 5. FLOATING BOTTOM DOCK (5 app thường dùng, hit target 36x36px)
-    dock_bar = lv_obj_create(desktop_view);
-    const int dock_width = SCREEN_WIDTH - 12;
-    lv_obj_set_size(dock_bar, dock_width, 44);
-    lv_obj_align(dock_bar, LV_ALIGN_BOTTOM_MID, 0, -4);
-    lv_obj_set_style_radius(dock_bar, 22, 0);
-    lv_obj_set_style_bg_color(dock_bar, lv_color_hex(COLOR_DOCK_BG), 0);
-    lv_obj_set_style_bg_grad_color(dock_bar, lv_color_hex(0x0B0E16), 0);
-    lv_obj_set_style_bg_grad_dir(dock_bar, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(dock_bar, lv_color_hex(COLOR_DOCK_BORDER), 0);
-    lv_obj_set_style_border_width(dock_bar, 1, 0);
-    lv_obj_set_style_shadow_width(dock_bar, 12, 0);
-    lv_obj_set_style_shadow_color(dock_bar, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_shadow_opa(dock_bar, LV_OPA_50, 0);
-    lv_obj_set_style_pad_all(dock_bar, 0, 0);
-    lv_obj_clear_flag(dock_bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    const int dock_count = 5;
-    const int dock_gap = (dock_width - dock_count * DOCK_ICON_BOX_SIZE) / (dock_count + 1);
-    create_dock_icon(dock_bar, LV_SYMBOL_WIFI,    lv_color_hex(COLOR_ACCENT_GREEN),  APP_WIFI,   dock_gap);
-    create_dock_icon(dock_bar, LV_SYMBOL_AUDIO,   lv_color_hex(COLOR_ACCENT_PURPLE), APP_MUSIC,  dock_gap * 2 + DOCK_ICON_BOX_SIZE);
-    create_dock_icon(dock_bar, LV_SYMBOL_GPS,     lv_color_hex(COLOR_ACCENT_RED),    APP_MAP,    dock_gap * 3 + DOCK_ICON_BOX_SIZE * 2);
-    create_dock_icon(dock_bar, LV_SYMBOL_IMAGE,   lv_color_hex(0xFF006E),            APP_CAMERA, dock_gap * 4 + DOCK_ICON_BOX_SIZE * 3);
-    create_dock_icon(dock_bar, LV_SYMBOL_REFRESH, lv_color_hex(COLOR_ACCENT_CYAN),   APP_HEALTH, dock_gap * 5 + DOCK_ICON_BOX_SIZE * 4);
+    const auto &apps = minios_catalog::home_apps();
+    const auto &shortcuts = minios_catalog::dock_apps();
+    const minios_shell::Home home = minios_shell::create_home(lv_scr_act(), apps,
+        sizeof(apps) / sizeof(apps[0]), shortcuts, app_icon_event_cb);
+    desktop_view = home.root;
+    dock_bar = home.dock;
+    log_i("Home: 5 grid apps + 3 dock apps; Voice Lab/Sensors/Health/About/Display/Touch hidden");
 }
 
 /* =========================================================================
@@ -548,68 +461,32 @@ static void ensure_app_window(void)
     lv_obj_align(app_window, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(app_window, 0, 0);
     lv_obj_set_style_border_width(app_window, 0, 0);
-    lv_obj_set_style_bg_color(app_window, lv_color_hex(0x131A29), 0);
-    lv_obj_set_style_bg_grad_color(app_window, lv_color_hex(0x06080E), 0);
-    lv_obj_set_style_bg_grad_dir(app_window, LV_GRAD_DIR_VER, 0);
+    lv_obj_set_style_bg_color(app_window, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_grad_dir(app_window, LV_GRAD_DIR_NONE, 0);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(app_window, 0, 0);
 
-    // Thanh tiêu đề App phong cách kính mờ
-    lv_obj_t *header = lv_obj_create(app_window);
-    lv_obj_set_size(header, SCREEN_WIDTH, APP_HEADER_HEIGHT);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_radius(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x121827), 0);
-    lv_obj_set_style_bg_grad_color(header, lv_color_hex(0x0A0E17), 0);
-    lv_obj_set_style_bg_grad_dir(header, LV_GRAD_DIR_VER, 0);
-    lv_obj_set_style_border_color(header, lv_color_hex(COLOR_CARD_BORDER), 0);
-    lv_obj_set_style_border_width(header, 1, 0);
-    lv_obj_set_style_border_side(header, LV_BORDER_SIDE_BOTTOM, 0);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    minios_shell::create_header(app_window, &app_title_lbl, close_btn_event_cb);
 
-    app_title_lbl = lv_label_create(header);
-    lv_label_set_text(app_title_lbl, "App");
-    lv_obj_align(app_title_lbl, LV_ALIGN_LEFT_MID, 8, 0);
-    lv_obj_set_style_text_color(app_title_lbl, lv_color_hex(COLOR_TEXT_WHITE), 0);
-    lv_obj_set_style_text_font(app_title_lbl, UI_FONT_TITLE, 0);
-    lv_obj_set_width(app_title_lbl, SCREEN_WIDTH - 58);
-    lv_label_set_long_mode(app_title_lbl, LV_LABEL_LONG_DOT);
-
-    // Nút đóng app (X) tối thiểu >=32x32 hit area với viền đỏ neon
-    lv_obj_t *close_btn = lv_btn_create(header);
-    lv_obj_set_size(close_btn, 32, 24);
-    lv_obj_align(close_btn, LV_ALIGN_RIGHT_MID, -6, 0);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x231418), 0);
-    lv_obj_set_style_border_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_border_width(close_btn, 1, 0);
-    lv_obj_set_style_radius(close_btn, 6, 0);
-    lv_obj_set_style_shadow_width(close_btn, 4, 0);
-    lv_obj_set_style_shadow_color(close_btn, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_shadow_opa(close_btn, LV_OPA_30, 0);
-    lv_obj_set_ext_click_area(close_btn, 6);
-    lv_obj_add_event_cb(close_btn, close_btn_event_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *close_lbl = lv_label_create(close_btn);
-    lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_color(close_lbl, lv_color_hex(COLOR_ACCENT_RED), 0);
-    lv_obj_set_style_text_font(close_lbl, UI_FONT_12, 0);
-    lv_obj_center(close_lbl);
-
-    // Khung chứa nội dung ứng dụng, tính từ logical screen và header 30 px.
+    // Touch remains full-screen; content starts below the 44px header.
     app_content_container = lv_obj_create(app_window);
     lv_obj_set_size(app_content_container, SCREEN_WIDTH, APP_CONTENT_HEIGHT);
-    lv_obj_align(app_content_container, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(app_content_container, lv_color_hex(0x0C101A), 0);
-    lv_obj_set_style_bg_grad_color(app_content_container, lv_color_hex(0x06080E), 0);
-    lv_obj_set_style_bg_grad_dir(app_content_container, LV_GRAD_DIR_VER, 0);
+    lv_obj_align(app_content_container, LV_ALIGN_TOP_MID, 0, APP_HEADER_HEIGHT);
+    lv_obj_set_style_bg_color(app_content_container, lv_color_hex(COLOR_OS_BG), 0);
+    lv_obj_set_style_bg_grad_dir(app_content_container, LV_GRAD_DIR_NONE, 0);
     lv_obj_set_style_border_width(app_content_container, 0, 0);
     lv_obj_set_style_pad_all(app_content_container, 0, 0);
+    lv_obj_t *home_bar=lv_obj_create(app_window);
+    minios_shell::flat(home_bar,COLOR_TEXT_WHITE,2);
+    lv_obj_set_size(home_bar,64,4);lv_obj_align(home_bar,LV_ALIGN_BOTTOM_MID,0,-5);
+    lv_obj_clear_flag(home_bar,LV_OBJ_FLAG_CLICKABLE);
 
     lv_obj_add_flag(app_window, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void invalidate_active_app_widgets(void)
 {
+    navigation_view=navigation_ui::View{};
     switch (active_app)
     {
         case APP_MAP: map_app_close(); break;
@@ -639,6 +516,9 @@ static void invalidate_active_app_widgets(void)
     lbl_brightness_val = nullptr;
     lbl_settings_status = nullptr;
     sw_wifi_reconnect = nullptr;
+    lbl_ble_status = nullptr;
+    btn_ble_toggle = nullptr;
+    lbl_ble_toggle = nullptr;
     lbl_power_state = nullptr;
     lbl_power_details = nullptr;
     lbl_power_timeouts = nullptr;
@@ -673,6 +553,7 @@ static void prepare_app_window(const char *title, AppID app_id)
     lv_obj_add_flag(desktop_view, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(app_window, LV_OBJ_FLAG_HIDDEN);
     active_app = app_id;
+    lv_obj_fade_in(app_window,140,0);
 }
 
 static void close_current_app(void)
@@ -908,42 +789,49 @@ static void open_settings_app(void)
     if (cfg.wifi_auto_reconnect) lv_obj_add_state(sw_wifi_reconnect, LV_STATE_CHECKED);
     lv_obj_add_event_cb(sw_wifi_reconnect, wifi_reconnect_event_cb, LV_EVENT_VALUE_CHANGED, nullptr);
 
-    // Card 4: Chẩn đoán màu màn hình
-    lv_obj_t *card_diag = lv_obj_create(app_content_container);
-    lv_obj_set_size(card_diag, SCREEN_WIDTH - 16, 75);
-    lv_obj_align(card_diag, LV_ALIGN_TOP_MID, 0, 226);
-    lv_obj_set_style_radius(card_diag, 10, 0);
-    lv_obj_set_style_bg_color(card_diag, lv_color_hex(COLOR_CARD_BG), 0);
-    lv_obj_set_style_border_color(card_diag, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_border_width(card_diag, 1, 0);
-    lv_obj_clear_flag(card_diag, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *lbl_diag_t = lv_label_create(card_diag);
-    lv_label_set_text(lbl_diag_t, "Chẩn Đoán Màn Hình");
-    lv_obj_set_style_text_color(lbl_diag_t, lv_color_hex(COLOR_ACCENT_CYAN), 0);
-    lv_obj_set_style_text_font(lbl_diag_t, UI_FONT_12, 0);
-    lv_obj_align(lbl_diag_t, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    lv_obj_t *btn_color_test = lv_btn_create(card_diag);
-    lv_obj_set_size(btn_color_test, SCREEN_WIDTH - 32, 34);
-    lv_obj_align(btn_color_test, LV_ALIGN_BOTTOM_MID, 0, -2);
-    lv_obj_set_style_radius(btn_color_test, 6, 0);
-    lv_obj_set_style_bg_color(btn_color_test, lv_color_hex(0x1F2A38), 0);
-    lv_obj_set_style_border_color(btn_color_test, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_border_width(btn_color_test, 1, 0);
-    lv_obj_add_event_cb(btn_color_test, color_test_btn_cb, LV_EVENT_CLICKED, nullptr);
-
-    lv_obj_t *lbl_ct = lv_label_create(btn_color_test);
-    lv_label_set_text(lbl_ct, LV_SYMBOL_IMAGE " Test Màu");
-    lv_obj_set_style_text_color(lbl_ct, lv_color_hex(COLOR_ACCENT_PURPLE), 0);
-    lv_obj_set_style_text_font(lbl_ct, UI_FONT_BUTTON, 0);
-    lv_obj_center(lbl_ct);
+    // Display is hidden from Settings as well as Home; diagnostics code remains.
 
     lbl_settings_status = lv_label_create(app_content_container);
     lv_label_set_text(lbl_settings_status, "Cấu hình được lưu trong NVS");
     lv_obj_set_style_text_color(lbl_settings_status, lv_color_hex(COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(lbl_settings_status, UI_FONT_SMALL, 0);
-    lv_obj_align(lbl_settings_status, LV_ALIGN_TOP_LEFT, 8, 306);
+    lv_obj_align(lbl_settings_status, LV_ALIGN_TOP_LEFT, 8, 226);
+
+    lv_obj_t *card_ble = lv_obj_create(app_content_container);
+    if (!card_ble) {
+        if (lbl_settings_status) lv_label_set_text(lbl_settings_status, "Thiếu bộ nhớ cho giao diện BLE");
+        return;
+    }
+    const auto fail_ble_ui = [card_ble]() {
+        lbl_ble_status = lbl_ble_toggle = btn_ble_toggle = nullptr;
+        lv_obj_del(card_ble);
+        if (lbl_settings_status) lv_label_set_text(lbl_settings_status, "Thiếu bộ nhớ cho giao diện BLE");
+    };
+    lv_obj_align(card_ble, LV_ALIGN_TOP_MID, 0, 256);
+    lv_obj_set_style_radius(card_ble, 10, 0);
+    lv_obj_set_style_bg_color(card_ble, lv_color_hex(COLOR_CARD_BG), 0);
+    lv_obj_set_style_border_color(card_ble, lv_color_hex(COLOR_CARD_BORDER), 0);
+    lv_obj_t *title_ble = lv_label_create(card_ble);
+    if (!title_ble) { fail_ble_ui(); return; }
+    lv_label_set_text(title_ble, "Điều khiển nhạc qua BLE");
+    lv_obj_set_style_text_color(title_ble, lv_color_hex(COLOR_TEXT_WHITE), 0);
+    lbl_ble_status = lv_label_create(card_ble);
+    if (!lbl_ble_status) { fail_ble_ui(); return; }
+    lv_obj_t *hint_ble = lv_label_create(card_ble);
+    if (!hint_ble) { fail_ble_ui(); return; }
+    lv_label_set_text(hint_ble, "WiFi giữ nguyên. Không phải loa Bluetooth.");
+    lv_obj_set_style_text_color(hint_ble, lv_color_hex(COLOR_TEXT_SECONDARY), 0);
+    btn_ble_toggle = lv_btn_create(card_ble);
+    if (!btn_ble_toggle) { fail_ble_ui(); return; }
+    ble_settings_ui::layout(card_ble, title_ble, lbl_ble_status, hint_ble,
+                            btn_ble_toggle, SCREEN_WIDTH - 16);
+    lv_obj_set_style_bg_color(btn_ble_toggle, lv_color_hex(COLOR_CARD_PRESSED), 0);
+    lv_obj_add_event_cb(btn_ble_toggle, ble_toggle_event, LV_EVENT_CLICKED, nullptr);
+    lbl_ble_toggle = lv_label_create(btn_ble_toggle);
+    if (!lbl_ble_toggle) { fail_ble_ui(); return; }
+    lv_obj_set_style_text_font(lbl_ble_toggle, UI_FONT_BUTTON, 0);
+    lv_obj_center(lbl_ble_toggle);
+    update_ble_settings();
 }
 
 /* =========================================================================
@@ -1189,8 +1077,17 @@ static void open_about_app(void)
  * ========================================================================= */
 static void open_map_app(void)
 {
-    prepare_app_window("Network Map", APP_MAP);
-    map_app_open(app_content_container);
+    NavigationSnapshot s;navigation_snapshot(s);
+    prepare_app_window(show_navigation?"Chỉ đường":"Bản đồ", APP_MAP);
+    if(show_navigation) {
+        navigation_ui::open(navigation_view,app_content_container,[](lv_event_t*) {show_navigation=false;open_map_app();});
+        navigation_ui::update(navigation_view,s);
+    } else {
+        map_app_open(app_content_container);
+        lv_obj_t *b=lv_btn_create(app_content_container);lv_obj_set_size(b,110,44);lv_obj_align(b,LV_ALIGN_TOP_RIGHT,-4,48);
+        lv_obj_add_event_cb(b,[](lv_event_t*) {show_navigation=true;open_map_app();},LV_EVENT_CLICKED,nullptr);
+        lv_obj_t *l=lv_label_create(b);lv_label_set_text(l,"Chỉ đường");lv_obj_center(l);
+    }
 }
 
 static void open_audio_app(void)
@@ -1280,6 +1177,20 @@ bool ui_open_camera_app(void)
 
 static void process_app_open_requests(void)
 {
+    if(lvgl_port_take_home_gesture()) close_current_app();
+    static uint32_t last_poll=0,last_revision=UINT32_MAX;
+    static bool last_fresh=false;
+    if(millis()-last_poll>=100) {
+        last_poll=millis();NavigationSnapshot nav;
+        if(navigation_snapshot(nav)) {
+            if(nav.active && nav.fresh && nav.session!=navigation_opened_session) {
+                navigation_capture_music();
+                navigation_opened_session=nav.session;show_navigation=true;open_map_app();
+            }
+            if(navigation_view.root && (nav.revision!=last_revision || nav.fresh!=last_fresh)) navigation_ui::update(navigation_view,nav);
+            last_revision=nav.revision;last_fresh=nav.fresh;
+        }
+    }
     AppOpenRequest request = {};
     while (app_open_queue && xQueueReceive(app_open_queue, &request, 0) == pdTRUE)
     {
@@ -1329,6 +1240,7 @@ void ui_init(void)
 void ui_update_periodic(const SystemStats &stats)
 {
     if (!lvgl_port_lock(200)) return;
+    update_ble_settings();
 
     const uint32_t settings_revision = settings_service_get_completion_revision();
     if (settings_revision_needs_reconcile(settings_revision, applied_settings_revision))

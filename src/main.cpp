@@ -30,6 +30,7 @@
 #include "firmware_regression.h"
 #include "service_state_logic.h"
 #include "core/tls_memory.h"
+#include "connectivity/ble_remote_service.h"
 
 #ifndef FW_GIT_SHA
 #define FW_GIT_SHA "unknown"
@@ -296,6 +297,10 @@ void setup()
     // 9. Khởi tạo Desktop sau khi các service nền đã có trạng thái thật.
     Serial.println("[GUI] Khởi tạo giao diện Desktop Mini OS...");
     ui_init();
+    Serial.println("[GUI] UI: ios-icons-v2 | icon-only Home + navigation BLE | header=44 home-edge=16 | font=Be Vietnam Pro");
+
+    Serial.printf("[BLE] SD remote worker: %s (radio OFF until Settings enables it)\n",
+                  ble_remote_init() ? "Ready" : "DEGRADED");
 
     Serial.println("[SYSTEM] Mini OS Pro Max đã sẵn sàng hoạt động!");
 #ifdef MINI_OS_MUSIC_STRESS_TEST

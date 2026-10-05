@@ -43,6 +43,9 @@ jobs:
       - name: Run behavioral regression tests
         run: node simulator/regression_test.js
 
+      - name: Run BLE phone client tests
+        run: node --test tests/ble_remote_web_test.mjs
+
       - name: Run backend tests
         run: |
           npm ci --prefix backend

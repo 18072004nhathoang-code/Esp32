@@ -6,6 +6,7 @@
 #include "power_manager.h"
 #include "../display/lvgl_port.h"
 #include "firmware_contracts.h"
+#include "../connectivity/navigation_service.h"
 
 // Biến trạng thái nội bộ
 // All state below is serialized by power_mux.
@@ -142,6 +143,12 @@ void power_manager_sleep(void)
 
 void power_manager_update(void)
 {
+    NavigationSnapshot nav;
+    if(navigation_snapshot(nav) && nav.awake) {
+        if(power_manager_get_state()!=POWER_STATE_ACTIVE) power_manager_wake();
+        power_manager_feed_activity();
+        return;
+    }
     uint32_t last_act = 0;
     uint32_t rev_snapshot = 0;
     PowerState state_snapshot = POWER_STATE_ACTIVE;

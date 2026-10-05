@@ -69,6 +69,25 @@ export function createServer(config = {}, streamHandler = streamYouTubeAudio) {
     let parsedUrl;
     try { parsedUrl=new URL(req.url||"/","http://localhost"); }
     catch { return sendJson(res,400,{error:{code:"INVALID_URL",message:"URL yêu cầu không hợp lệ."}}); }
+    // A fixed public asset allowlist, not a user-supplied filesystem path. BLE
+    // controls are local to the selected phone/device; this page holds no token.
+    const indexAsset={file:"../tools/ble-remote/index.html",type:"text/html"};
+    const bleAssets={"/ble/":indexAsset,"/ble/index.html":indexAsset,
+      "/ble/remote.mjs":{file:"../tools/ble-remote/remote.mjs",type:"text/javascript"},
+      "/ble/guide.txt":{file:"../docs/ble-remote.md",type:"text/plain"}};
+    const asset=Object.hasOwn(bleAssets,parsedUrl.pathname)?bleAssets[parsedUrl.pathname]:null;
+    if(asset&&(req.method==="GET"||req.method==="HEAD")){
+      fs.readFile(new URL(asset.file,import.meta.url),(error,body)=>{
+        if(res.destroyed||res.writableEnded)return;
+        if(error)return sendJson(res,503,{error:{code:"BLE_PAGE_UNAVAILABLE",message:"Thiếu trang điều khiển BLE trên backend."}});
+        res.writeHead(200,{"content-type":asset.type+"; charset=utf-8",
+          "content-length":body.length,"cache-control":"no-store","x-content-type-options":"nosniff",
+          "content-security-policy":"default-src 'self'; connect-src 'none'; img-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+          "permissions-policy":"bluetooth=(self)","referrer-policy":"no-referrer"});
+        res.end(req.method==="HEAD"?undefined:body);
+      });
+      return;
+    }
     if((req.method==="GET"||req.method==="HEAD") && parsedUrl.pathname==="/youtube/stream"){
       if(!authorized(req,config)){
         res.setHeader("www-authenticate",'Basic realm="esp32-youtube"');

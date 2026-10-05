@@ -17,9 +17,9 @@ void encode(const State &s, uint16_t id, Result result, uint8_t out[kStatusBytes
     out[1] = (s.playing ? 1 : 0) | (s.paused ? 2 : 0) | (s.wifi ? 4 : 0) |
              (s.sd ? 8 : 0) | (s.busy ? 16 : 0) | (!s.available ? 32 : 0);
     put16(out + 2, id); out[4] = static_cast<uint8_t>(result); out[5] = s.volume;
-    put16(out + 6, static_cast<uint16_t>(s.track)); put16(out + 8, s.tracks);
-    put32(out + 10, s.position); put32(out + 14, s.duration);
-    out[18] = s.ai; out[19] = static_cast<uint8_t>(s.rssi);
+    out[6] = static_cast<uint8_t>(s.track); out[7] = static_cast<uint8_t>(s.tracks);
+    put32(out + 8, s.position); put32(out + 12, s.duration);
+    put32(out + 16, s.session);
 }
 Result execute(const Command &c, Ports &ports, State &after) {
     after = ports.snapshot();

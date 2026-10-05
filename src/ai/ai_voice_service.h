@@ -89,6 +89,10 @@ void ai_voice_cancel(AiVoiceStopReason reason = AiVoiceStopReason::CANCEL);
 
 /** @brief Lấy generation hiện tại của phiên ghi âm/xử lý. */
 uint32_t ai_voice_get_active_generation(void);
+struct MusicVoiceHandoff;
+/** Read-only, revision-checked resume bookmark. Never starts music or I2S. */
+bool ai_voice_copy_paused_music(MusicVoiceHandoff *out);
+bool ai_voice_copy_navigation_music(MusicVoiceHandoff *out);
 
 /**
  * @brief Lấy trạng thái hiện tại của AI Voice Assistant

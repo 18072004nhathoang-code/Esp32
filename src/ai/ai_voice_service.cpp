@@ -11,6 +11,9 @@
 
 #include "../audio/audio_manager.h"
 #include "../audio/music_player.h"
+
+bool ai_voice_copy_paused_music(MusicVoiceHandoff *) { return false; }
+bool ai_voice_copy_navigation_music(MusicVoiceHandoff *) { return false; }
 #include "../os/wifi_manager.h"
 #include "ai_voice_protocol.h"
 #include "firmware_contracts.h"
@@ -983,6 +986,8 @@ bool ai_voice_copy_last_error(char *out, size_t out_size)
 
 bool ai_voice_start_recording(void)
 {
+    extern bool navigation_audio_busy();
+    if(navigation_audio_busy()) return false;
     if (!ai_voice_is_available()) { set_error("AI Voice is not configured"); return false; }
     if (!wifi_manager_is_connected()) { set_error("WiFi is not connected"); return false; }
     const uint32_t base_generation = audio_get_recording_generation();

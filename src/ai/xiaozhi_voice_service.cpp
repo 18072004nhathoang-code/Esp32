@@ -8,6 +8,7 @@
 #if AI_VOICE_PROVIDER_XIAOZHI
 
 #include "ai_voice_service.h"
+#include "../connectivity/navigation_service.h"
 #include "xiaozhi_activation.h"
 #include "xiaozhi_audio_codec.h"
 #include "xiaozhi_mcp.h"
@@ -1962,6 +1963,9 @@ void worker(void *)
         runtime_health_heartbeat(RUNTIME_TASK_XIAOZHI);
         run_provisioning(next_poll_ms, backoff_ms);
         service_cleanup();
+        // Share this existing 40KiB Opus-capable stack after AI cleanup ACK.
+        // Navigation never allocates a second large internal task stack.
+        navigation_audio_owner_pump();
 
         McpAsyncResult mcp_res = {};
         while (s_mcp_results && xQueueReceive(s_mcp_results, &mcp_res, 0) == pdTRUE)
@@ -2290,6 +2294,8 @@ bool ai_voice_copy_last_error(char *out, size_t out_size)
 
 bool ai_voice_start_recording(void)
 {
+    extern bool navigation_audio_busy();
+    if(navigation_audio_busy()) return false;
     const CodecHealth codec_health = s_codec_health.load(std::memory_order_acquire);
     if (!s_task || codec_health != CodecHealth::READY ||
         !s_configured || !wifi_manager_is_connected())
@@ -2402,6 +2408,25 @@ void ai_voice_cancel(AiVoiceStopReason reason)
 uint32_t ai_voice_get_active_generation(void)
 {
     return active_generation_snapshot();
+}
+
+bool ai_voice_copy_paused_music(MusicVoiceHandoff *out)
+{
+    if (!out || !s_mutex || xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE)
+        return false;
+    const MusicVoiceHandoff empty = {};
+    const bool ok = s_active_generation == 0 &&
+        s_paused_music.for_resume(empty, music_player_get_control_revision(), *out);
+    xSemaphoreGive(s_mutex);
+    return ok;
+}
+
+bool ai_voice_copy_navigation_music(MusicVoiceHandoff *out)
+{
+    if(!out || !s_mutex || xSemaphoreTake(s_mutex,pdMS_TO_TICKS(10))!=pdTRUE)return false;
+    const bool ok=s_suspended_music.valid && s_suspended_music.resume_after_voice && !s_music_resume_suppressed;
+    if(ok)*out=s_suspended_music;
+    xSemaphoreGive(s_mutex);return ok;
 }
 
 AIVoiceState ai_voice_get_state(void)

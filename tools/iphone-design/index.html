@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>MiniOS — Thiết kế iPhone</title>
+  <link rel="stylesheet" href="design.css">
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <h1 class="sr-only">MiniOS — bản thiết kế giao diện iPhone</h1>
+  <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></symbol>
+      <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="17" cy="16" rx="3" ry="3"/></symbol>
+      <symbol id="i-device" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="4"/><path d="M10 5h4M11 19h2"/></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8Z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+      <symbol id="i-next" viewBox="0 0 24 24"><path d="m5 5 10 7-10 7ZM19 5v14"/></symbol>
+      <symbol id="i-prev" viewBox="0 0 24 24"><path d="m19 5-10 7 10 7ZM5 5v14"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+      <symbol id="i-volume" viewBox="0 0 24 24"><path d="M10 5 5 9H2v6h3l5 4ZM14 8a6 6 0 0 1 0 8M17 5a10 10 0 0 1 0 14"/></symbol>
+      <symbol id="i-bluetooth" viewBox="0 0 24 24"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M9 16a5 5 0 0 1 6 0"/><circle cx="12" cy="20" r=".8"/></symbol>
+      <symbol id="i-sd" viewBox="0 0 24 24"><path d="M8 3h11a2 2 0 0 1 2 2v15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8ZM9 6v4M13 6v4M17 6v4"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v.1"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1 1M18 18l1 1M5 19l1-1M18 6l1-1"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11Z"/></symbol>
+      <linearGradient id="sky" x2=".25" y2="1"><stop stop-color="#d5def7"/><stop offset=".48" stop-color="#b8b8e5"/><stop offset="1" stop-color="#7a79b7"/></linearGradient>
+      <linearGradient id="hill" x2="1" y2="1"><stop stop-color="#5c628d"/><stop offset="1" stop-color="#333e65"/></linearGradient>
+      <symbol id="art-cover" viewBox="0 0 400 400">
+        <path fill="url(#sky)" d="M0 0h400v400H0z"/>
+        <circle cx="283" cy="112" r="49" fill="#fff0d9"/>
+        <path d="M0 214q90-65 180 13t220-26v199H0Z" fill="#9093c5"/>
+        <path d="M0 284q128-120 237-37t163 17v136H0Z" fill="url(#hill)"/>
+        <path d="M0 337q92-64 168-5t232-32v100H0Z" fill="#253453"/>
+        <path d="M49 294q88-18 157 28t144 1" fill="none" stroke="#ded5e4" stroke-width="1.5" opacity=".5"/>
+        <path d="M109 363q68-10 136 3" fill="none" stroke="#ded5e4" stroke-width="1.5" opacity=".35"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <header class="studio-header">
+    <a class="wordmark" href="#overview"><span class="brand-mark">m.</span> MiniOS <span class="studio-label">/ iPhone</span></a>
+    <span class="prototype-badge">Bản thiết kế tương tác · 01</span>
+  </header>
+
+  <div class="workspace">
+    <aside class="studio-panel" aria-label="Tùy chọn bản xem trước">
+      <p class="eyebrow">THIẾT KẾ CHO IPHONE</p>
+      <h1>MiniOS.<br>Ngay trong<br><span>tầm tay.</span></h1>
+      <p class="studio-description">Một không gian gọn gàng để điều khiển nhạc và thiết bị của bạn.</p>
+      <fieldset><legend>Giao diện</legend><div class="segmented">
+        <button data-theme="light" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg>Sáng</button>
+        <button data-theme="dark" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg>Tối</button>
+      </div></fieldset>
+      <fieldset><legend>Trạng thái minh họa</legend><div class="state-options">
+        <button data-state="connected" aria-pressed="true">Đã kết nối</button>
+        <button data-state="disconnected" aria-pressed="false">Chưa kết nối</button>
+        <button data-state="connecting" aria-pressed="false">Đang kết nối</button>
+        <button data-state="lost" aria-pressed="false">Mất kết nối</button>
+      </div></fieldset>
+      <button class="text-size-control" id="text-size" aria-pressed="false">Aa <span>Xem với chữ lớn</span></button>
+      <p class="studio-footnote">Chỉ là bản thiết kế. Không quét Bluetooth, gửi lệnh, phát âm thanh hay thay đổi ESP32.</p>
+    </aside>
+
+    <div class="phone" data-theme="light" aria-label="Bản thiết kế MiniOS trên iPhone">
+      <div class="phone-status" aria-hidden="true"><span>9:41</span><span class="island"></span><span class="status-symbols"><svg class="icon"><use href="#i-wifi"/></svg><span class="battery"></span></span></div>
+      <header class="app-topbar"><span class="app-brand">MiniOS<span class="brand-dot"></span></span><button class="avatar" data-action="about" aria-label="Thông tin bản thiết kế">M</button></header>
+      <div class="design-notice"><span class="notice-dot"></span>Bản xem trước · dữ liệu minh họa</div>
+
+      <main class="app-content" id="app-content">
+        <section id="overview" class="screen" aria-labelledby="overview-title">
+          <div class="page-heading"><p class="greeting">Xin chào bạn,</p><h2 id="overview-title">Không gian<br>của bạn.</h2><p>Mọi thứ cần thiết, ở một nơi.</p></div>
+          <button class="device-card" data-view="device"><span class="device-illustration"><svg class="icon" aria-hidden="true"><use href="#i-device"/></svg></span><span class="device-summary"><strong>MiniOS của bạn</strong><span class="connection-label">Đã kết nối · minh họa</span></span><svg class="icon chevron" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+
+          <div class="section-heading"><h3>Đang nghe</h3><button class="text-link" data-view="music">Xem thêm <svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+          <article class="now-card">
+            <svg class="home-art" role="img" aria-label="Bìa minh họa đồi núi dưới ánh trăng"><use href="#art-cover"/></svg>
+            <div class="now-details"><span class="small-label">THẺ SD · MẪU</span><h3 class="track-title">Một chút bình yên</h3><p class="playback-label">Đang phát · minh họa</p></div>
+            <div class="mini-controls"><span>Âm thanh từ MiniOS</span><button class="play-button compact" data-action="play" aria-label="Tạm dừng bản minh họa"><svg class="icon" aria-hidden="true"><use href="#i-pause"/></svg></button></div>
+          </article>
+          <div class="section-heading"><h3>Truy cập nhanh</h3></div>
+          <div class="quick-grid">
+            <button class="quick-card" data-view="music"><span class="icon-tile lilac"><svg class="icon" aria-hidden="true"><use href="#i-sd"/></svg></span><strong>Thư viện SD</strong><span>Chọn bản nhạc</span></button>
+            <button class="quick-card" data-action="pair"><span class="icon-tile blue"><svg class="icon" aria-hidden="true"><use href="#i-bluetooth"/></svg></span><strong>Kết nối</strong><span>Xem luồng ghép đôi</span></button>
+          </div>
+          <p class="quiet-note">Nhẹ trên điện thoại.<br>Âm nhạc ở lại trên thiết bị.</p>
+        </section>
+
+        <section id="music" class="screen" aria-labelledby="music-title" hidden>
+          <div class="page-heading compact-heading"><p class="greeting">DÀNH CHO BẠN</p><h2 id="music-title">Âm nhạc</h2></div>
+          <svg class="player-art" role="img" aria-label="Bìa minh họa đồi núi dưới ánh trăng"><use href="#art-cover"/></svg>
+          <div class="song-heading"><h3 class="track-title">Một chút bình yên</h3><p>Thư viện minh họa · thẻ SD</p></div>
+          <div class="track-timeline" aria-label="Thời gian chưa có dữ liệu thiết bị"><div class="timeline-line"></div><div class="timestamps"><span>—:—</span><span>—:—</span></div></div>
+          <div class="transport"><button class="icon-button" data-action="previous" aria-label="Bài trước trong bản minh họa"><svg class="icon" aria-hidden="true"><use href="#i-prev"/></svg></button><button class="play-button" data-action="play" aria-label="Tạm dừng bản minh họa"><svg class="icon" aria-hidden="true"><use href="#i-pause"/></svg></button><button class="icon-button" data-action="next" aria-label="Bài tiếp trong bản minh họa"><svg class="icon" aria-hidden="true"><use href="#i-next"/></svg></button><button class="icon-button stop-button" data-action="stop" aria-label="Dừng bản minh họa"><svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg></button></div>
+          <p class="player-state playback-label">Đang phát · minh họa</p>
+          <div class="volume-control"><svg class="icon" aria-hidden="true"><use href="#i-volume"/></svg><label class="sr-only" for="volume-preview">Âm lượng minh họa</label><input id="volume-preview" type="range" min="0" max="100" value="60"><output id="volume-label" for="volume-preview">60%</output></div>
+          <div class="section-heading"><h3>Tiếp theo</h3><span class="small-label">DANH SÁCH MẪU</span></div>
+          <div class="song-list" aria-label="Các bài minh họa">
+            <button data-track="0" class="song-row" aria-pressed="true"><span class="song-number">01</span><span><strong>Một chút bình yên</strong><small>Bản nhạc minh họa</small></span><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg></button>
+            <button data-track="1" class="song-row" aria-pressed="false"><span class="song-number">02</span><span><strong>Đi qua mùa nắng</strong><small>Bản nhạc minh họa</small></span><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg></button>
+            <button data-track="2" class="song-row" aria-pressed="false"><span class="song-number">03</span><span><strong>Thành phố sau mưa</strong><small>Bản nhạc minh họa</small></span><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg></button>
+          </div>
+        </section>
+
+        <section id="device" class="screen" aria-labelledby="device-title" hidden>
+          <div class="page-heading compact-heading"><p class="greeting">KHÔNG GIAN CỦA BẠN</p><h2 id="device-title">Thiết bị</h2></div>
+          <div class="device-hero"><div class="large-device"><div class="mini-display"><svg aria-hidden="true" viewBox="0 0 400 400"><use href="#art-cover"/></svg></div><span></span></div><h3>MiniOS của bạn</h3><p class="connection-label">Đã kết nối · minh họa</p><button class="primary-button" data-action="pair">Xem luồng kết nối</button></div>
+          <div class="section-heading"><h3>Thông tin &amp; điều khiển</h3></div>
+          <div class="settings-group">
+            <button class="settings-row" data-action="pair"><span class="icon-tile blue"><svg class="icon" aria-hidden="true"><use href="#i-bluetooth"/></svg></span><span><strong>Bluetooth</strong><small class="connection-label">Đã kết nối · minh họa</small></span><svg class="icon chevron" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+            <div class="settings-row"><span class="icon-tile green"><svg class="icon" aria-hidden="true"><use href="#i-wifi"/></svg></span><span><strong>Wi-Fi trên MiniOS</strong><small>Giữ nguyên mạng của thiết bị</small></span></div>
+            <button class="settings-row" data-view="music"><span class="icon-tile lilac"><svg class="icon" aria-hidden="true"><use href="#i-sd"/></svg></span><span><strong>Nhạc trên thẻ SD</strong><small>Điều khiển phát trên MiniOS</small></span><svg class="icon chevron" aria-hidden="true"><use href="#i-arrow"/></svg></button>
+          </div>
+          <div class="info-card"><svg class="icon" aria-hidden="true"><use href="#i-info"/></svg><p>Đây là điều khiển từ xa, không phải loa Bluetooth phát âm thanh từ iPhone.</p></div>
+          <button class="secondary-button" data-action="appearance">Giao diện &amp; cỡ chữ</button>
+        </section>
+      </main>
+
+      <div class="connection-banner" id="connection-banner" role="status" aria-live="polite" hidden></div>
+      <nav class="tabbar" aria-label="Điều hướng MiniOS">
+        <button data-view="overview" aria-current="page"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg><span>Tổng quan</span></button>
+        <button data-view="music"><svg class="icon" aria-hidden="true"><use href="#i-music"/></svg><span>Âm nhạc</span></button>
+        <button data-view="device"><svg class="icon" aria-hidden="true"><use href="#i-device"/></svg><span>Thiết bị</span></button>
+      </nav>
+      <div class="home-indicator" aria-hidden="true"><span></span></div>
+    </div>
+    <aside class="design-caption"><span class="caption-line"></span><strong>Ít hơn, nhưng tốt hơn.</strong><p>Ba điểm đến.<br>Một thao tác chính.<br>Không cần tìm trong menu.</p><span class="caption-small">Tiếng Việt · Sáng / Tối<br>Thiết kế co giãn · Không kết nối</span></aside>
+  </div>
+
+  <dialog id="design-sheet" aria-labelledby="sheet-title">
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <header class="sheet-header"><h2 id="sheet-title">Kết nối MiniOS</h2><button class="icon-button" id="close-sheet" aria-label="Đóng bảng"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg></button></header>
+    <div id="sheet-body"></div>
+  </dialog>
+  <div class="sr-only" id="announcement" role="status" aria-live="polite"></div>
+</body>
+</html>

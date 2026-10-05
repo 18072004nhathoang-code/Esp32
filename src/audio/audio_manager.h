@@ -62,7 +62,8 @@ enum AudioOwner
     AUDIO_OWNER_RECORDER,   // Mic input, AI voice input
     AUDIO_OWNER_MUSIC,      // ESP32-audioI2S playback
     AUDIO_OWNER_AI_VOICE,   // AI voice speech synthesis playback
-    AUDIO_OWNER_DIAGNOSTIC  // Speaker self-test; never overlaps app audio
+    AUDIO_OWNER_DIAGNOSTIC, // Speaker self-test; never overlaps app audio
+    AUDIO_OWNER_NAVIGATION
 };
 
 enum AudioRecordingFileState
